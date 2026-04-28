@@ -21,9 +21,27 @@ from evolution.skills.budget_aware_proposer import (
 
 
 class TestProposerConstruction:
-    def test_target_chars_is_baseline_times_one_plus_growth(self):
+    def test_target_chars_subtracts_safety_margin_from_growth(self):
+        # Default safety_margin=0.10. With max_growth=0.20 the LM is told
+        # the target is baseline * 1.10, not baseline * 1.20 — leaves
+        # headroom for the observed ~8-9% overshoot.
         proposer = BudgetAwareProposer(baseline_chars=1000, max_growth=0.2)
+        assert proposer.target_chars == 1100
+
+    def test_safety_margin_can_be_disabled(self):
+        # Passing safety_margin=0 reproduces the pre-PR behavior.
+        proposer = BudgetAwareProposer(
+            baseline_chars=1000, max_growth=0.2, safety_margin=0.0
+        )
         assert proposer.target_chars == 1200
+
+    def test_safety_margin_clamped_at_zero_growth(self):
+        # If safety_margin >= max_growth the prompt should ask for zero
+        # growth, not a negative target.
+        proposer = BudgetAwareProposer(
+            baseline_chars=1000, max_growth=0.1, safety_margin=0.5
+        )
+        assert proposer.target_chars == 1000
 
     def test_target_chars_floored_at_one_for_zero_baseline(self):
         # Defensive: a 0 baseline shouldn't yield target_chars=0.
@@ -31,11 +49,12 @@ class TestProposerConstruction:
         assert proposer.target_chars == 1
 
     def test_signature_instructions_have_baked_in_numbers(self):
+        # 1264 baseline, max_growth=0.20, default safety_margin=0.10
+        # → effective prompt growth 0.10 → target 1264 * 1.10 = 1390.4 → 1390.
         proposer = BudgetAwareProposer(baseline_chars=1264, max_growth=0.2)
-        # 1264 * 1.2 = 1516.8 → 1516 after int().
         instructions = proposer.propose.signature.instructions
         assert "1264" in instructions
-        assert "1516" in instructions
+        assert "1390" in instructions
         # No leaked format placeholders.
         assert "{baseline_chars}" not in instructions
         assert "{target_chars}" not in instructions
@@ -100,7 +119,8 @@ class TestProposerCallable:
         proposer.propose.assert_not_called()
 
     def test_warns_on_oversized_proposal(self, caplog):
-        # target = 100 * 1.2 = 120 chars; proposal is 200 chars.
+        # baseline=100, max_growth=0.2, default safety_margin=0.10
+        # → effective 0.10 → target 100 * 1.10 = 110 chars.
         proposer = self._patched_proposer("x" * 200)
         with caplog.at_level(logging.WARNING, logger="evolution.skills.budget_aware_proposer"):
             result = proposer(
@@ -114,7 +134,7 @@ class TestProposerCallable:
         # can see whether the LM is honoring the budget across runs.
         assert result == {"predict": "x" * 200}
         assert any("came back at 200 chars" in rec.message for rec in caplog.records)
-        assert any("target 120" in rec.message for rec in caplog.records)
+        assert any("target 110" in rec.message for rec in caplog.records)
 
 
 class TestExampleFormatting:

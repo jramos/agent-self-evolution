@@ -71,13 +71,29 @@ class BudgetAwareProposer:
     across skills. GEPA calls __call__ once per iteration with the current
     candidate text and a reflective dataset summarizing the latest
     failures.
+
+    Why `safety_margin`: in observed runs the reflection LM overshoots
+    the requested target by ~8-9% — asking for +20% growth lands at
+    +30%, busting the validator. We tell the LM a *tighter* target than
+    the validator's bar so the observed overshoot still lands inside it.
+    Default 0.10 means: if max_growth=0.20 (validator bar at +20%), the
+    prompt requests +10%, expected actual ~+18-20%, passes.
     """
 
-    def __init__(self, baseline_chars: int, max_growth: float = 0.2):
+    def __init__(
+        self,
+        baseline_chars: int,
+        max_growth: float = 0.2,
+        safety_margin: float = 0.10,
+    ):
         self.baseline_chars = baseline_chars
+        # Effective fraction we ask the LM for (clamped at 0 — if the
+        # validator's max_growth is itself <= safety_margin, we ask for
+        # zero growth, not negative).
+        prompt_growth = max(0.0, max_growth - safety_margin)
         # Floor the target at 1 to avoid handing the LM a literal 0; if the
         # caller passes baseline_chars=0 they're disabling the budget anyway.
-        self.target_chars = max(1, int(baseline_chars * (1 + max_growth)))
+        self.target_chars = max(1, int(baseline_chars * (1 + prompt_growth)))
         signature = _BudgetAwareInstructionProposal.with_instructions(
             _BUDGET_AWARE_INSTRUCTIONS.format(
                 baseline_chars=baseline_chars,
