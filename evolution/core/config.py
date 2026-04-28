@@ -43,6 +43,9 @@ class EvolutionConfig:
     output_dir: Path = field(default_factory=lambda: Path("./output"))
     create_pr: bool = True
 
+    # Reproducibility — seeds dataset shuffles and DSPy optimizer RNG.
+    seed: int = 42
+
 
 def get_hermes_agent_path() -> Path:
     """Discover the hermes-agent repo path.

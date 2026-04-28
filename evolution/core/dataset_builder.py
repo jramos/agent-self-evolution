@@ -157,7 +157,7 @@ class SyntheticDatasetBuilder:
         ]
 
         # Shuffle and split
-        random.shuffle(examples)
+        random.Random(self.config.seed).shuffle(examples)
         n_total = len(examples)
         n_train = max(1, int(n_total * self.config.train_ratio))
         n_val = max(1, int(n_total * self.config.val_ratio))
@@ -173,7 +173,7 @@ class GoldenDatasetLoader:
     """Load hand-curated evaluation datasets from JSONL files."""
 
     @staticmethod
-    def load(path: Path) -> EvalDataset:
+    def load(path: Path, seed: int = 42) -> EvalDataset:
         """Load a golden dataset. If no splits exist, auto-split the single file."""
         if (path / "train.jsonl").exists():
             return EvalDataset.load(path)
@@ -189,7 +189,7 @@ class GoldenDatasetLoader:
                 if line.strip():
                     examples.append(EvalExample.from_dict(json.loads(line)))
 
-        random.shuffle(examples)
+        random.Random(seed).shuffle(examples)
         n = len(examples)
         n_train = max(1, int(n * 0.5))
         n_val = max(1, int(n * 0.25))
