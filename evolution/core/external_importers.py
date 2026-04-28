@@ -442,6 +442,8 @@ class RelevanceFilter:
         assistant_response: str = dspy.InputField(desc="The assistant's actual response (may be empty)")
         scoring: str = dspy.OutputField(desc="JSON object with: relevant, expected_behavior, difficulty, category")
 
+    # Class-level default load-bearing for tests that bypass __init__ via
+    # __new__; runtime instances overwrite this in __init__.
     seed: int = 42
 
     def __init__(self, model: str, seed: int = 42):

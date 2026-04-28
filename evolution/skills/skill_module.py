@@ -90,16 +90,17 @@ class SkillModule(dspy.Module):
     """
 
     class TaskWithSkill(dspy.Signature):
-        """Placeholder — replaced per-instance with the skill body."""
+        """Placeholder. SkillModule.__init__ overwrites the inner Predict's
+        signature.instructions per-instance via with_instructions(skill_text);
+        do not rely on this docstring at the class level."""
         task_input: str = dspy.InputField(desc="The task to complete")
         output: str = dspy.OutputField(desc="Your response following the skill instructions")
 
     def __init__(self, skill_text: str):
         super().__init__()
         self.predictor = dspy.ChainOfThought(self.TaskWithSkill)
-        # ChainOfThought wraps a Predict named `predict`. The signature
-        # GEPA mutates lives there; install the skill body in the same place
-        # so forward() and GEPA's read/write target are identical.
+        # GEPA mutates Predict.signature.instructions via named_predictors();
+        # install the skill body there so forward() reads exactly what GEPA writes.
         self.predictor.predict.signature = self.predictor.predict.signature.with_instructions(skill_text)
 
     def forward(self, task_input: str) -> dspy.Prediction:

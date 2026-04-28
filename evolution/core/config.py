@@ -43,7 +43,7 @@ class EvolutionConfig:
     output_dir: Path = field(default_factory=lambda: Path("./output"))
     create_pr: bool = True
 
-    # Reproducibility — seeds dataset shuffles and DSPy optimizer RNG.
+    # Seeds dataset shuffles and is forwarded as GEPA/MIPROv2 seed=.
     seed: int = 42
 
 

@@ -37,6 +37,131 @@ console = Console()
 _BUDGET_BY_ITERATIONS = {1: "light", 2: "medium", 3: "heavy"}
 
 
+def _resolve_budget(iterations: int, budget: Optional[str]) -> str:
+    """Pick the GEPA budget. Explicit `budget` always wins.
+
+    `iterations` is the legacy CLI knob: only the values 1/2/3 carry a
+    meaningful mapping; anything else collapses to "light". Callers
+    should prefer `--budget` and treat `--iterations` as deprecated.
+    """
+    if budget is not None:
+        return budget
+    return _BUDGET_BY_ITERATIONS.get(iterations, "light")
+
+
+def _default_gepa_runner(
+    *,
+    baseline_module: SkillModule,
+    trainset: list,
+    valset: list,
+    metric,
+    gepa_budget: str,
+    optimizer_model: str,
+    seed: int,
+):
+    optimizer = dspy.GEPA(
+        metric=metric,
+        auto=gepa_budget,
+        # cache=False on the reflection LM: at temperature=1.0 the disk
+        # cache would replay stale mutations across runs and shrink the
+        # diversity of proposed candidates.
+        reflection_lm=dspy.LM(
+            optimizer_model,
+            temperature=1.0,
+            max_tokens=4000,
+            cache=False,
+        ),
+        seed=seed,
+    )
+    return optimizer.compile(baseline_module, trainset=trainset, valset=valset)
+
+
+def _default_mipro_runner(
+    *,
+    baseline_module: SkillModule,
+    trainset: list,
+    metric,
+    seed: int,
+):
+    optimizer = dspy.MIPROv2(
+        metric=metric,
+        auto="light",
+        init_temperature=0.5,
+        seed=seed,
+    )
+    return optimizer.compile(baseline_module, trainset=trainset)
+
+
+def _print_fallback_banner(exc: Exception, failure_log_path: Optional[Path]) -> None:
+    tb = traceback.format_exc()
+    if failure_log_path is not None:
+        failure_log_path.parent.mkdir(parents=True, exist_ok=True)
+        failure_log_path.write_text(f"{type(exc).__name__}: {exc}\n\n{tb}")
+        location_line = f"Full traceback: {failure_log_path}"
+    else:
+        location_line = "Re-run with --no-fallback to surface GEPA's traceback."
+
+    console.print(Panel(
+        f"[bold]GEPA failed:[/bold] {type(exc).__name__}: {exc}\n\n"
+        f"Falling back to MIPROv2.\n"
+        f"{location_line}",
+        title="[bold yellow]GEPA fallback[/bold yellow]",
+        border_style="red",
+    ))
+
+
+def _build_optimizer_and_compile(
+    *,
+    baseline_module: SkillModule,
+    trainset: list,
+    valset: list,
+    metric,
+    gepa_budget: str,
+    optimizer_model: str,
+    seed: int,
+    no_fallback: bool,
+    failure_log_path: Optional[Path] = None,
+    _gepa_runner=_default_gepa_runner,
+    _mipro_runner=_default_mipro_runner,
+):
+    """Run GEPA; fall back to MIPROv2 on failure unless `no_fallback`.
+
+    Returns `(optimized_module, optimizer_name)`. ImportError from the
+    MIPROv2 path (raised lazily inside MIPROv2.compile when optuna is
+    missing) is re-raised with the GEPA failure preserved as `__cause__`
+    so the user keeps both diagnostics.
+    """
+    try:
+        optimized = _gepa_runner(
+            baseline_module=baseline_module,
+            trainset=trainset,
+            valset=valset,
+            metric=metric,
+            gepa_budget=gepa_budget,
+            optimizer_model=optimizer_model,
+            seed=seed,
+        )
+        return optimized, "GEPA"
+    except Exception as gepa_exc:
+        if no_fallback:
+            raise
+        _print_fallback_banner(gepa_exc, failure_log_path)
+        try:
+            optimized = _mipro_runner(
+                baseline_module=baseline_module,
+                trainset=trainset,
+                metric=metric,
+                seed=seed,
+            )
+            return optimized, "MIPROv2"
+        except ImportError as ie:
+            console.print(
+                "[red]✗ MIPROv2 fallback requires the [miprov2] extra. "
+                "Install with: pip install hermes-agent-self-evolution[miprov2][/red]"
+            )
+            raise ie from gepa_exc
+
+
 def evolve(
     skill_name: str,
     iterations: int = 10,
@@ -79,9 +204,10 @@ def evolve(
     console.print(f"  Description: {skill['description'][:80]}...")
 
     if dry_run:
+        resolved_budget = _resolve_budget(iterations, budget)
         console.print(f"\n[bold green]DRY RUN — setup validated successfully.[/bold green]")
         console.print(f"  Would generate eval dataset (source: {eval_source})")
-        console.print(f"  Would run GEPA optimization ({iterations} iterations)")
+        console.print(f"  Would run GEPA optimization (budget={resolved_budget})")
         console.print(f"  Would validate constraints and create PR")
         return
 
@@ -141,7 +267,7 @@ def evolve(
         console.print("[yellow]⚠ Baseline skill has constraint violations — proceeding anyway[/yellow]")
 
     # ── 4. Set up DSPy + GEPA optimizer ─────────────────────────────────
-    gepa_budget = budget or _BUDGET_BY_ITERATIONS.get(iterations, "light")
+    gepa_budget = _resolve_budget(iterations, budget)
     console.print(f"\n[bold]Configuring optimizer[/bold]")
     console.print(f"  Optimizer: GEPA (budget={gepa_budget})")
     console.print(f"  Optimizer model: {optimizer_model}")
@@ -149,8 +275,11 @@ def evolve(
 
     # Configure DSPy
     lm = dspy.LM(eval_model)
-    # Suppress typeguard warnings on float OutputFields whose values arrive
-    # as strings and are coerced via _parse_score (intentional pattern).
+    # warn_on_type_mismatch gates DSPy's typeguard validation of
+    # InputField values against their declared annotations. Several
+    # signatures in this codebase pass empty/None into `str` inputs
+    # (e.g. assistant_response in RelevanceFilter when an event has no
+    # response yet), which is fine but spams a warning per call.
     dspy.configure(lm=lm, warn_on_type_mismatch=False)
 
     # Create the baseline skill module
@@ -164,52 +293,22 @@ def evolve(
     console.print(f"\n[bold cyan]Running GEPA optimization (budget={gepa_budget})...[/bold cyan]\n")
 
     start_time = time.time()
+    failure_log_path = Path("output") / skill_name / "gepa_failure.log"
 
-    try:
-        optimizer = dspy.GEPA(
-            metric=skill_fitness_metric,
-            auto=gepa_budget,
-            reflection_lm=dspy.LM(
-                optimizer_model,
-                temperature=1.0,
-                max_tokens=4000,
-                cache=False,
-            ),
-            seed=config.seed,
-        )
-
-        optimized_module = optimizer.compile(
-            baseline_module,
-            trainset=trainset,
-            valset=valset,
-        )
-    except Exception as e:
-        if no_fallback:
-            raise
-        console.print(
-            f"[yellow]GEPA failed ({type(e).__name__}: {e}); falling back to MIPROv2[/yellow]"
-        )
-        console.print(f"[dim]{traceback.format_exc()}[/dim]")
-        try:
-            optimizer = dspy.MIPROv2(
-                metric=skill_fitness_metric,
-                auto="light",
-                init_temperature=0.5,
-                seed=config.seed,
-            )
-        except ImportError:
-            console.print(
-                "[red]✗ MIPROv2 fallback requires the [miprov2] extra. "
-                "Install with: pip install hermes-agent-self-evolution[miprov2][/red]"
-            )
-            raise
-        optimized_module = optimizer.compile(
-            baseline_module,
-            trainset=trainset,
-        )
+    optimized_module, optimizer_name = _build_optimizer_and_compile(
+        baseline_module=baseline_module,
+        trainset=trainset,
+        valset=valset,
+        metric=skill_fitness_metric,
+        gepa_budget=gepa_budget,
+        optimizer_model=optimizer_model,
+        seed=config.seed,
+        no_fallback=no_fallback,
+        failure_log_path=failure_log_path,
+    )
 
     elapsed = time.time() - start_time
-    console.print(f"\n  Optimization completed in {elapsed:.1f}s")
+    console.print(f"\n  {optimizer_name} optimization completed in {elapsed:.1f}s")
 
     # ── 6. Extract evolved skill text ───────────────────────────────────
     # The optimized module's instructions contain the evolved skill text
@@ -327,7 +426,11 @@ def evolve(
 
 @click.command()
 @click.option("--skill", required=True, help="Name of the skill to evolve")
-@click.option("--iterations", default=10, help="Number of GEPA iterations")
+@click.option(
+    "--iterations",
+    default=10,
+    help="DEPRECATED. Maps 1→light, 2→medium, 3→heavy GEPA budget; any other value falls through to light. Prefer --budget.",
+)
 @click.option("--eval-source", default="synthetic", type=click.Choice(["synthetic", "golden", "sessiondb"]),
               help="Source for evaluation dataset")
 @click.option("--dataset-path", default=None, help="Path to existing eval dataset (JSONL)")
