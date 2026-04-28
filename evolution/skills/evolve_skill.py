@@ -298,8 +298,15 @@ def evolve(
     # Build the LLM-as-judge metric. The judge is shared by GEPA's
     # per-iteration scoring and the holdout eval below; constructing it
     # once means DSPy's LM cache lines up across both surfaces.
+    # Pass baseline + growth budget so the metric can append a [BUDGET]
+    # line to feedback when GEPA hands us pred_trace, teaching the
+    # reflection LM to prefer concise instructions.
     judge = LLMJudge(config)
-    metric = make_skill_fitness_metric(judge)
+    metric = make_skill_fitness_metric(
+        judge,
+        baseline_skill_text=skill["body"],
+        max_growth=config.max_prompt_growth,
+    )
 
     # Prepare DSPy examples
     trainset = dataset.to_dspy_examples("train")

@@ -105,6 +105,127 @@ class TestJudgeSignatureFieldTypes:
         assert "skill_text" not in sig.input_fields
 
 
+class TestPredTraceFeedback:
+    """Lock the contract that the metric uses pred_trace to enrich feedback
+    for GEPA's reflective loop, while keeping `score` byte-identical across
+    the two GEPA call sites (predictor-level vs Evaluate-over-valset).
+    """
+
+    def _stub_pred_trace(self, instructions: str, reasoning: str = "step 1; step 2"):
+        signature = SimpleNamespace(instructions=instructions)
+        predictor = SimpleNamespace(signature=signature)
+        output = SimpleNamespace(reasoning=reasoning, output="agent answer")
+        return [(predictor, {"task_input": "t"}, output)]
+
+    def test_budget_line_appears_when_pred_trace_set(self):
+        judge = _stub_judge(score=0.6, feedback="judge says X")
+        # Baseline 100 chars; +20% budget → target 120; current 250 → +150%.
+        metric = make_skill_fitness_metric(
+            judge, baseline_skill_text="x" * 100, max_growth=0.2
+        )
+
+        example = SimpleNamespace(task_input="t", expected_behavior="b")
+        prediction = SimpleNamespace(output="agent answer")
+        pred_trace = self._stub_pred_trace(instructions="y" * 250)
+
+        result = metric(example, prediction, pred_trace=pred_trace)
+
+        assert "[BUDGET]" in result.feedback
+        assert "250 chars" in result.feedback
+        assert "100 chars" in result.feedback
+        assert "+150.0%" in result.feedback
+        assert "120 chars" in result.feedback  # target
+        # Original judge feedback preserved.
+        assert "judge says X" in result.feedback
+
+    def test_reasoning_line_appears_when_pred_trace_set(self):
+        judge = _stub_judge(feedback="judge says X")
+        metric = make_skill_fitness_metric(
+            judge, baseline_skill_text="x" * 100, max_growth=0.2
+        )
+
+        prediction = SimpleNamespace(output="agent answer")
+        pred_trace = self._stub_pred_trace(
+            instructions="y" * 110,
+            reasoning="thought process: I considered A, then B, then C.",
+        )
+
+        result = metric(
+            SimpleNamespace(task_input="t", expected_behavior="b"),
+            prediction,
+            pred_trace=pred_trace,
+        )
+
+        assert "[REASONING]" in result.feedback
+        assert "I considered A, then B, then C." in result.feedback
+
+    def test_reasoning_truncated_at_500_chars(self):
+        judge = _stub_judge()
+        metric = make_skill_fitness_metric(judge, baseline_skill_text="x")
+        long_reasoning = "Z" * 1000
+        pred_trace = self._stub_pred_trace(instructions="y", reasoning=long_reasoning)
+
+        result = metric(
+            SimpleNamespace(task_input="t", expected_behavior="b"),
+            SimpleNamespace(output="answer"),
+            pred_trace=pred_trace,
+        )
+
+        assert "Z" * 500 in result.feedback
+        assert "Z" * 501 not in result.feedback
+        assert "…" in result.feedback
+
+    def test_no_pred_trace_means_plain_judge_feedback(self):
+        judge = _stub_judge(feedback="plain feedback")
+        metric = make_skill_fitness_metric(judge, baseline_skill_text="x" * 100)
+
+        result = metric(
+            SimpleNamespace(task_input="t", expected_behavior="b"),
+            SimpleNamespace(output="answer"),
+            # pred_trace omitted → defaults to None (Evaluate-over-valset path).
+        )
+
+        assert result.feedback == "plain feedback"
+        assert "[BUDGET]" not in result.feedback
+        assert "[REASONING]" not in result.feedback
+
+    def test_score_identical_across_pred_trace_call_sites(self):
+        """GEPA warns and overrides if score differs between the predictor-level
+        call (pred_trace set) and Evaluate-over-valset call (pred_trace None).
+        Lock the contract."""
+        judge = _stub_judge(score=0.42, feedback="judge")
+        metric = make_skill_fitness_metric(judge, baseline_skill_text="x" * 100)
+
+        example = SimpleNamespace(task_input="t", expected_behavior="b")
+        prediction = SimpleNamespace(output="answer")
+
+        # Module-level call (no pred_trace).
+        score_no_trace = metric(example, prediction).score
+        # Predictor-level call (pred_trace set).
+        score_with_trace = metric(
+            example,
+            prediction,
+            pred_trace=self._stub_pred_trace(instructions="y" * 200),
+        ).score
+
+        assert score_no_trace == score_with_trace
+
+    def test_empty_baseline_skips_budget_line(self):
+        # If the caller didn't pass a baseline, we can't compute growth %;
+        # skip the BUDGET line rather than emit nonsense.
+        judge = _stub_judge(feedback="judge")
+        metric = make_skill_fitness_metric(judge, baseline_skill_text="")
+        pred_trace = self._stub_pred_trace(instructions="y" * 200, reasoning="")
+
+        result = metric(
+            SimpleNamespace(task_input="t", expected_behavior="b"),
+            SimpleNamespace(output="answer"),
+            pred_trace=pred_trace,
+        )
+
+        assert "[BUDGET]" not in result.feedback
+
+
 class TestClampToUnit:
     def test_parses_valid_floats(self):
         assert _clamp_to_unit("0.7") == 0.7
