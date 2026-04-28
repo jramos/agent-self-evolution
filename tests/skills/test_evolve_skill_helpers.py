@@ -5,10 +5,12 @@ These two helpers were extracted from `evolve` so the branching logic
 ImportError install-hint chaining) can be unit-tested without an LM.
 """
 
+import dspy
 import pytest
 
 from evolution.skills.evolve_skill import (
     _build_optimizer_and_compile,
+    _default_mipro_runner,
     _resolve_budget,
 )
 
@@ -119,3 +121,48 @@ class TestBuildOptimizerAndCompile:
         contents = log_path.read_text()
         assert "RuntimeError" in contents
         assert "simulated GEPA failure" in contents
+
+    def test_fallback_unwraps_prediction_returning_metric(self):
+        """When GEPA fails and we fall back to MIPROv2, the metric the
+        caller passed is GEPA-shaped (returns dspy.Prediction(score, ...)),
+        but MIPROv2 expects a float. _default_mipro_runner must adapt the
+        metric so the fallback path doesn't crash on score aggregation."""
+
+        prediction_metric_calls = []
+
+        def prediction_returning_metric(*args, **kwargs):
+            prediction_metric_calls.append(args)
+            return dspy.Prediction(score=0.7, feedback="test feedback")
+
+        captured_metric = {}
+
+        class _FakeMIPRO:
+            def __init__(self, *, metric, **kwargs):
+                captured_metric["fn"] = metric
+
+            def compile(self, baseline_module, *, trainset):
+                # MIPROv2 calls the metric with a (gold, pred, ...) tuple
+                # and expects a float; verify the wrapper produces one.
+                fake_pred = type("P", (), {"output": "x"})()
+                fake_ex = type("E", (), {})()
+                value = captured_metric["fn"](fake_ex, fake_pred)
+                assert isinstance(value, float)
+                assert value == 0.7
+                return _FakeOptimized()
+
+        # Exercise the runner directly so we exercise the wrapping logic,
+        # not the broader fallback control flow.
+        original_mipro = dspy.MIPROv2
+        dspy.MIPROv2 = _FakeMIPRO
+        try:
+            result = _default_mipro_runner(
+                baseline_module=object(),
+                trainset=[],
+                metric=prediction_returning_metric,
+                seed=42,
+            )
+        finally:
+            dspy.MIPROv2 = original_mipro
+
+        assert isinstance(result, _FakeOptimized)
+        assert prediction_metric_calls, "metric should have been invoked"
