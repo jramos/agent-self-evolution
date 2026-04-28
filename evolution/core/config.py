@@ -43,6 +43,9 @@ class EvolutionConfig:
     output_dir: Path = field(default_factory=lambda: Path("./output"))
     create_pr: bool = True
 
+    # Seeds dataset shuffles and is forwarded as GEPA/MIPROv2 seed=.
+    seed: int = 42
+
 
 def get_hermes_agent_path() -> Path:
     """Discover the hermes-agent repo path.

@@ -2,7 +2,7 @@
 
 import pytest
 from pathlib import Path
-from evolution.skills.skill_module import load_skill, reassemble_skill
+from evolution.skills.skill_module import SkillModule, load_skill, reassemble_skill
 
 
 SAMPLE_SKILL = """---
@@ -90,3 +90,42 @@ class TestReassembleSkill:
 
         assert "EVOLVED" in result
         assert "New and improved" in result
+
+
+class TestSkillModuleGEPAContract:
+    """Lock the contract that GEPA mutates the same place forward() reads.
+
+    GEPA mutates Predict.signature.instructions, not arbitrary module attributes.
+    If skill_text and signature.instructions diverge, GEPA's mutations are silently
+    discarded and holdout deltas are meaningless.
+    """
+
+    def test_skill_text_is_signature_instructions(self):
+        module = SkillModule("HELLO SKILL BODY")
+
+        assert module.skill_text == "HELLO SKILL BODY"
+        # ChainOfThought wraps a Predict named `predict`; that's the signature
+        # GEPA mutates via named_predictors(). skill_text must point at the
+        # same surface or mutations are silently lost.
+        assert module.predictor.predict.signature.instructions == "HELLO SKILL BODY"
+
+    def test_skill_text_mutation_round_trip(self):
+        module = SkillModule("INITIAL")
+
+        module.predictor.predict.signature = (
+            module.predictor.predict.signature.with_instructions("MUTATED")
+        )
+
+        assert module.skill_text == "MUTATED"
+
+    def test_named_predictors_exposes_skill_signature(self):
+        # GEPA discovers what to mutate via named_predictors(); confirm our
+        # skill body is reachable through that traversal.
+        module = SkillModule("REACHABLE")
+
+        names_and_instructions = [
+            (name, p.signature.instructions) for name, p in module.named_predictors()
+        ]
+        assert any(
+            instructions == "REACHABLE" for _, instructions in names_and_instructions
+        ), names_and_instructions

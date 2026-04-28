@@ -15,6 +15,9 @@ datasets/**/*.jsonl
 datasets/**/*.json
 !datasets/.gitkeep
 
+# Output files from run
+output/**/*.md
+
 # Evolution snapshots
 snapshots/
 *.pkl

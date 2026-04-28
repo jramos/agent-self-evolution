@@ -442,9 +442,14 @@ class RelevanceFilter:
         assistant_response: str = dspy.InputField(desc="The assistant's actual response (may be empty)")
         scoring: str = dspy.OutputField(desc="JSON object with: relevant, expected_behavior, difficulty, category")
 
-    def __init__(self, model: str):
+    # Class-level default load-bearing for tests that bypass __init__ via
+    # __new__; runtime instances overwrite this in __init__.
+    seed: int = 42
+
+    def __init__(self, model: str, seed: int = 42):
         self.scorer = dspy.ChainOfThought(self.ScoreRelevance)
         self.model = model
+        self.seed = seed
 
     def filter_and_score(
         self,
@@ -479,7 +484,7 @@ class RelevanceFilter:
         if len(candidates) < max_examples:
             candidate_ids = {id(m) for m in candidates}
             remaining = [m for m in messages if id(m) not in candidate_ids]
-            random.shuffle(remaining)
+            random.Random(self.seed).shuffle(remaining)
             candidates.extend(remaining[:max_examples * 2])
 
         # Cap candidates to control LLM costs
@@ -490,7 +495,7 @@ class RelevanceFilter:
         # Stage 2: LLM relevance scoring
         examples = []
         errors = 0
-        lm = dspy.LM(self.model)
+        lm = dspy.LM(self.model, temperature=0.0, max_tokens=2000)
 
         with Progress() as progress:
             task = progress.add_task("Scoring relevance...", total=len(candidates))
@@ -610,6 +615,7 @@ def build_dataset_from_external(
     output_path: Path,
     model: str,
     max_examples: int = 50,
+    seed: int = 42,
 ) -> EvalDataset:
     """Extract messages from external tools, filter for relevance, and save.
 
@@ -651,7 +657,7 @@ def build_dataset_from_external(
     console.print(f"\n[bold]Total messages: {len(all_messages)}[/bold]")
     console.print(f"[bold]Filtering for relevance to skill: {skill_name}[/bold]")
 
-    relevance_filter = RelevanceFilter(model=model)
+    relevance_filter = RelevanceFilter(model=model, seed=seed)
     examples = relevance_filter.filter_and_score(
         all_messages, skill_name, skill_text, max_examples=max_examples,
     )
@@ -669,7 +675,7 @@ def build_dataset_from_external(
         )
 
     # Split into train/val/holdout (50/25/25)
-    random.shuffle(examples)
+    random.Random(seed).shuffle(examples)
     n = len(examples)
     n_train = max(1, int(n * 0.5))
     n_val = max(1, int(n * 0.25))

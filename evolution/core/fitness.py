@@ -4,11 +4,15 @@ Uses LLM-as-judge with rubrics to score agent outputs.
 Supports length penalties and multi-dimensional scoring.
 """
 
-import dspy
+import logging
 from dataclasses import dataclass
 from typing import Optional
 
+import dspy
+
 from evolution.core.config import EvolutionConfig
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -72,7 +76,7 @@ class LLMJudge:
     ) -> FitnessScore:
         """Score an agent output using LLM-as-judge."""
 
-        lm = dspy.LM(self.config.eval_model)
+        lm = dspy.LM(self.config.eval_model, temperature=0.0, max_tokens=4000)
 
         with dspy.context(lm=lm):
             result = self.judge(
@@ -104,11 +108,22 @@ class LLMJudge:
         )
 
 
-def skill_fitness_metric(example: dspy.Example, prediction: dspy.Prediction, trace=None) -> float:
+def skill_fitness_metric(
+    example: dspy.Example,
+    prediction: dspy.Prediction,
+    trace=None,
+    pred_name=None,
+    pred_trace=None,
+) -> float:
     """DSPy-compatible metric function for skill optimization.
 
     This is what gets passed to dspy.GEPA(metric=...).
     Returns a float 0-1 score.
+
+    GEPA binds the metric with five positional args:
+    (gold, pred, trace, pred_name, pred_trace). pred_name and pred_trace
+    are accepted to satisfy GEPA's runtime arity check; the metric is
+    keyword-stable across DSPy 3.2.x.
     """
     # The prediction should have an 'output' field with the agent's response
     agent_output = getattr(prediction, "output", "") or ""
@@ -116,6 +131,13 @@ def skill_fitness_metric(example: dspy.Example, prediction: dspy.Prediction, tra
     task = getattr(example, "task_input", "") or ""
 
     if not agent_output.strip():
+        # Empty output is a real failure signal (timeout, content filter,
+        # malformed prompt) that GEPA's reflective loop can't distinguish
+        # from a wrong answer. Logging it lets us diagnose plateaus at 0.
+        logger.warning(
+            "skill_fitness_metric: empty agent output for task=%r",
+            task[:80],
+        )
         return 0.0
 
     # Quick heuristic scoring (for speed during optimization)
