@@ -24,6 +24,7 @@ from evolution.core.dataset_builder import SyntheticDatasetBuilder, EvalDataset,
 from evolution.core.external_importers import build_dataset_from_external
 from evolution.core.fitness import LLMJudge, make_skill_fitness_metric
 from evolution.core.constraints import ConstraintValidator
+from evolution.skills.budget_aware_proposer import BudgetAwareProposer
 from evolution.skills.skill_module import (
     SkillModule,
     load_skill,
@@ -35,43 +36,6 @@ console = Console()
 
 
 _BUDGET_BY_ITERATIONS = {1: "light", 2: "medium", 3: "heavy"}
-
-
-# Copy of gepa's default reflection prompt
-# (gepa/strategies/instruction_proposal.py:12-28) with an explicit length
-# budget paragraph appended before the final instruction. The
-# `<curr_instructions>` and `<inputs_outputs_feedback>` placeholders are
-# required by gepa.api's validate_prompt_template; the {baseline_chars}
-# and {target_chars} fields are .format()-substituted at construction time
-# so the reflection LM sees concrete numbers, not template syntax.
-_BUDGET_AWARE_REFLECTION_TEMPLATE = """I provided an assistant with the following instructions to perform a task for me:
-```
-<curr_instructions>
-```
-
-The following are examples of different task inputs provided to the assistant along with the assistant's response for each of them, and some feedback on how the assistant's response could be better:
-```
-<inputs_outputs_feedback>
-```
-
-Your task is to write a new instruction for the assistant.
-
-Read the inputs carefully and identify the input format and infer detailed task description about the task I wish to solve with the assistant.
-
-Read all the assistant responses and the corresponding feedback. Identify all niche and domain specific factual information about the task and include it in the instruction, as a lot of it may not be available to the assistant in the future. The assistant may have utilized a generalizable strategy to solve the task, if so, include that in the instruction as well.
-
-**Length budget (hard requirement, not a preference):** The original instruction is roughly {baseline_chars} characters. The new instruction must be at most {target_chars} characters. If you need to add a detail, find redundant phrasing elsewhere to remove. Verbosity that does not directly fix the failures shown above will be rejected. Prefer terse, direct prose over headings, lists, and ceremony.
-
-Provide the new instructions within ``` blocks."""
-
-
-def _build_reflection_template(baseline_chars: int, max_growth: float) -> str:
-    """Render the budget-aware template with concrete byte numbers baked in."""
-    target_chars = max(1, int(baseline_chars * (1 + max_growth)))
-    return _BUDGET_AWARE_REFLECTION_TEMPLATE.format(
-        baseline_chars=baseline_chars,
-        target_chars=target_chars,
-    )
 
 
 def _resolve_budget(iterations: int, budget: Optional[str]) -> str:
@@ -95,15 +59,8 @@ def _default_gepa_runner(
     gepa_budget: str,
     optimizer_model: str,
     seed: int,
-    reflection_prompt_template: Optional[str] = None,
+    instruction_proposer=None,
 ):
-    gepa_kwargs: dict = {}
-    if reflection_prompt_template is not None:
-        # Splatted into gepa.optimize() at dspy/teleprompt/gepa/gepa.py:595.
-        # Teaches the reflection LM the size budget rather than fighting it
-        # post-mutation.
-        gepa_kwargs["reflection_prompt_template"] = reflection_prompt_template
-
     optimizer = dspy.GEPA(
         metric=metric,
         auto=gepa_budget,
@@ -117,7 +74,11 @@ def _default_gepa_runner(
             cache=False,
         ),
         seed=seed,
-        gepa_kwargs=gepa_kwargs or None,
+        # When set, GEPA calls our proposer instead of its default
+        # InstructionProposalSignature path (dspy/teleprompt/gepa/
+        # gepa_utils.py:112-118). The proposer runs inside the
+        # reflection_lm context — the reflection_lm above still drives it.
+        instruction_proposer=instruction_proposer,
     )
     return optimizer.compile(baseline_module, trainset=trainset, valset=valset)
 
@@ -174,7 +135,7 @@ def _build_optimizer_and_compile(
     seed: int,
     no_fallback: bool,
     failure_log_path: Optional[Path] = None,
-    reflection_prompt_template: Optional[str] = None,
+    instruction_proposer=None,
     _gepa_runner=_default_gepa_runner,
     _mipro_runner=_default_mipro_runner,
 ):
@@ -194,7 +155,7 @@ def _build_optimizer_and_compile(
             gepa_budget=gepa_budget,
             optimizer_model=optimizer_model,
             seed=seed,
-            reflection_prompt_template=reflection_prompt_template,
+            instruction_proposer=instruction_proposer,
         )
         return optimized, "GEPA"
     except Exception as gepa_exc:
@@ -366,10 +327,13 @@ def evolve(
     start_time = time.time()
     failure_log_path = Path("output") / skill_name / "gepa_failure.log"
 
-    # Render a budget-aware reflection template so the GEPA reflection LM
-    # is told the size budget alongside the failure feedback. Pairs with
-    # the [BUDGET] line the metric appends per-example via pred_trace.
-    reflection_prompt_template = _build_reflection_template(
+    # Inject a custom instruction proposer that bakes the size budget into
+    # the reflection prompt the LM sees on every iteration. DSPy's
+    # gepa_kwargs={"reflection_prompt_template": ...} would be the simpler
+    # path, but gepa.api rejects it whenever the adapter (DspyAdapter
+    # always) provides its own propose_new_texts (gepa/api.py:317-321).
+    # This is the documented DSPy-side extension point instead.
+    proposer = BudgetAwareProposer(
         baseline_chars=len(skill["body"]),
         max_growth=config.max_prompt_growth,
     )
@@ -384,7 +348,7 @@ def evolve(
         seed=config.seed,
         no_fallback=no_fallback,
         failure_log_path=failure_log_path,
-        reflection_prompt_template=reflection_prompt_template,
+        instruction_proposer=proposer,
     )
 
     elapsed = time.time() - start_time

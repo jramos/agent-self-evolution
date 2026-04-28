@@ -8,49 +8,13 @@ ImportError install-hint chaining) can be unit-tested without an LM.
 import dspy
 import pytest
 
+from evolution.skills.budget_aware_proposer import BudgetAwareProposer
 from evolution.skills.evolve_skill import (
-    _BUDGET_AWARE_REFLECTION_TEMPLATE,
     _build_optimizer_and_compile,
-    _build_reflection_template,
     _default_gepa_runner,
     _default_mipro_runner,
     _resolve_budget,
 )
-
-
-class TestBuildReflectionTemplate:
-    """The custom reflection template must satisfy gepa.api's placeholder
-    validation (validate_prompt_template requires <curr_instructions> and
-    <inputs_outputs_feedback>) and bake in concrete byte numbers so the
-    reflection LM sees real targets, not template syntax."""
-
-    def test_contains_required_gepa_placeholders(self):
-        # gepa/api.py validate_prompt_template will raise ValueError if
-        # either placeholder is missing.
-        template = _build_reflection_template(baseline_chars=1000, max_growth=0.2)
-        assert "<curr_instructions>" in template
-        assert "<inputs_outputs_feedback>" in template
-
-    def test_baked_in_numbers_match_inputs(self):
-        template = _build_reflection_template(baseline_chars=1264, max_growth=0.2)
-        # 1264 * 1.2 = 1516.8 → 1516 after int().
-        assert "1264 characters" in template
-        assert "1516 characters" in template
-        assert "Length budget" in template
-
-    def test_has_no_unfilled_format_placeholders(self):
-        # If we forgot a .format() arg the curly braces would leak.
-        template = _build_reflection_template(baseline_chars=500, max_growth=0.5)
-        assert "{baseline_chars}" not in template
-        assert "{target_chars}" not in template
-
-    def test_zero_baseline_doesnt_crash(self):
-        # Defensive: if a caller passes 0 (no baseline), target_chars
-        # must remain a sensible positive integer rather than 0.
-        template = _build_reflection_template(baseline_chars=0, max_growth=0.2)
-        assert "0 characters" in template
-        # max(1, int(0 * 1.2)) → 1.
-        assert "1 characters" in template
 
 
 class TestResolveBudget:
@@ -160,12 +124,10 @@ class TestBuildOptimizerAndCompile:
         assert "RuntimeError" in contents
         assert "simulated GEPA failure" in contents
 
-    def test_gepa_runner_passes_reflection_template_via_gepa_kwargs(self):
-        """The budget-aware reflection prompt template must reach
-        gepa.optimize via dspy.GEPA's gepa_kwargs splat (gepa.py:595).
-        Patch dspy.GEPA to capture the constructor kwargs and confirm
-        the template arrived intact.
-        """
+    def test_gepa_runner_passes_instruction_proposer(self):
+        """The custom proposer must reach dspy.GEPA's instruction_proposer
+        kwarg. gepa.api rejects reflection_prompt_template when DSPy is
+        the adapter; instruction_proposer is the documented alternative."""
         captured = {}
 
         class _FakeGEPA:
@@ -175,10 +137,11 @@ class TestBuildOptimizerAndCompile:
             def compile(self, baseline_module, *, trainset, valset):
                 return _FakeOptimized()
 
+        proposer = BudgetAwareProposer(baseline_chars=1000, max_growth=0.2)
+
         original = dspy.GEPA
         dspy.GEPA = _FakeGEPA
         try:
-            template = _build_reflection_template(baseline_chars=1000, max_growth=0.2)
             result = _default_gepa_runner(
                 baseline_module=object(),
                 trainset=[],
@@ -187,18 +150,15 @@ class TestBuildOptimizerAndCompile:
                 gepa_budget="light",
                 optimizer_model="openai/gpt-4o-mini",
                 seed=42,
-                reflection_prompt_template=template,
+                instruction_proposer=proposer,
             )
         finally:
             dspy.GEPA = original
 
         assert isinstance(result, _FakeOptimized)
-        assert "gepa_kwargs" in captured
-        assert captured["gepa_kwargs"]["reflection_prompt_template"] is template
+        assert captured["instruction_proposer"] is proposer
 
-    def test_gepa_runner_omits_gepa_kwargs_when_no_template(self):
-        """No template → pass gepa_kwargs=None so we don't override gepa's
-        defaults with an empty dict."""
+    def test_gepa_runner_passes_none_proposer_by_default(self):
         captured = {}
 
         class _FakeGEPA:
@@ -223,7 +183,7 @@ class TestBuildOptimizerAndCompile:
         finally:
             dspy.GEPA = original
 
-        assert captured["gepa_kwargs"] is None
+        assert captured["instruction_proposer"] is None
 
     def test_fallback_unwraps_prediction_returning_metric(self):
         """When GEPA fails and we fall back to MIPROv2, the metric the
