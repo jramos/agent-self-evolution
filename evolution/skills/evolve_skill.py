@@ -22,7 +22,7 @@ from rich.table import Table
 from evolution.core.config import EvolutionConfig, get_hermes_agent_path
 from evolution.core.dataset_builder import SyntheticDatasetBuilder, EvalDataset, GoldenDatasetLoader
 from evolution.core.external_importers import build_dataset_from_external
-from evolution.core.fitness import skill_fitness_metric, LLMJudge, FitnessScore
+from evolution.core.fitness import LLMJudge, make_skill_fitness_metric
 from evolution.core.constraints import ConstraintValidator
 from evolution.skills.skill_module import (
     SkillModule,
@@ -83,8 +83,15 @@ def _default_mipro_runner(
     metric,
     seed: int,
 ):
+    # MIPROv2 expects a metric returning a float; our GEPA-shaped metric
+    # returns dspy.Prediction(score, feedback). Unwrap .score for MIPROv2's
+    # score aggregation; pass-through if the metric already returns float.
+    def float_metric(*args, **kwargs):
+        result = metric(*args, **kwargs)
+        return float(getattr(result, "score", result))
+
     optimizer = dspy.MIPROv2(
-        metric=metric,
+        metric=float_metric,
         auto="light",
         init_temperature=0.5,
         seed=seed,
@@ -252,9 +259,12 @@ def evolve(
     console.print(f"  Split: {len(dataset.train)} train / {len(dataset.val)} val / {len(dataset.holdout)} holdout")
 
     # ── 3. Validate constraints on baseline ─────────────────────────────
+    # Validate the full file (frontmatter + body) so the structure check
+    # has the markers it needs and the growth comparison stays symmetric
+    # with the evolved-side validation below.
     console.print(f"\n[bold]Validating baseline constraints[/bold]")
     validator = ConstraintValidator(config)
-    baseline_constraints = validator.validate_all(skill["body"], "skill")
+    baseline_constraints = validator.validate_all(skill["raw"], "skill")
     all_pass = True
     for c in baseline_constraints:
         icon = "✓" if c.passed else "✗"
@@ -279,11 +289,17 @@ def evolve(
     # InputField values against their declared annotations. Several
     # signatures in this codebase pass empty/None into `str` inputs
     # (e.g. assistant_response in RelevanceFilter when an event has no
-    # response yet), which is fine but spams a warning per call.
+    # response yet) — fine, but spams a warning per call.
     dspy.configure(lm=lm, warn_on_type_mismatch=False)
 
     # Create the baseline skill module
     baseline_module = SkillModule(skill["body"])
+
+    # Build the LLM-as-judge metric. The judge is shared by GEPA's
+    # per-iteration scoring and the holdout eval below; constructing it
+    # once means DSPy's LM cache lines up across both surfaces.
+    judge = LLMJudge(config)
+    metric = make_skill_fitness_metric(judge)
 
     # Prepare DSPy examples
     trainset = dataset.to_dspy_examples("train")
@@ -299,7 +315,7 @@ def evolve(
         baseline_module=baseline_module,
         trainset=trainset,
         valset=valset,
-        metric=skill_fitness_metric,
+        metric=metric,
         gepa_budget=gepa_budget,
         optimizer_model=optimizer_model,
         seed=config.seed,
@@ -317,7 +333,7 @@ def evolve(
 
     # ── 7. Validate evolved skill ───────────────────────────────────────
     console.print(f"\n[bold]Validating evolved skill[/bold]")
-    evolved_constraints = validator.validate_all(evolved_body, "skill", baseline_text=skill["body"])
+    evolved_constraints = validator.validate_all(evolved_full, "skill", baseline_text=skill["raw"])
     all_pass = True
     for c in evolved_constraints:
         icon = "✓" if c.passed else "✗"
@@ -336,22 +352,26 @@ def evolve(
         return
 
     # ── 8. Evaluate on holdout set ──────────────────────────────────────
-    console.print(f"\n[bold]Evaluating on holdout set ({len(dataset.holdout)} examples)[/bold]")
+    console.print(
+        f"\n[bold]Evaluating on holdout set ({len(dataset.holdout)} examples)[/bold]"
+    )
+    console.print(
+        "  [dim]Holdout uses the same LLM-as-judge metric as GEPA — expect ~"
+        f"{2 * len(dataset.holdout)} judge calls.[/dim]"
+    )
 
     holdout_examples = dataset.to_dspy_examples("holdout")
 
     baseline_scores = []
     evolved_scores = []
     for ex in holdout_examples:
-        # Score baseline
+        # Metric returns dspy.Prediction(score, feedback); aggregate on .score.
         with dspy.context(lm=lm):
             baseline_pred = baseline_module(task_input=ex.task_input)
-            baseline_score = skill_fitness_metric(ex, baseline_pred)
-            baseline_scores.append(baseline_score)
+            baseline_scores.append(float(metric(ex, baseline_pred).score))
 
             evolved_pred = optimized_module(task_input=ex.task_input)
-            evolved_score = skill_fitness_metric(ex, evolved_pred)
-            evolved_scores.append(evolved_score)
+            evolved_scores.append(float(metric(ex, evolved_pred).score))
 
     avg_baseline = sum(baseline_scores) / max(1, len(baseline_scores))
     avg_evolved = sum(evolved_scores) / max(1, len(evolved_scores))

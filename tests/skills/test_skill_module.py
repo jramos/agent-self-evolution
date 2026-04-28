@@ -91,6 +91,35 @@ class TestReassembleSkill:
         assert "EVOLVED" in result
         assert "New and improved" in result
 
+    def test_strips_accidental_frontmatter_block_from_body(self, caplog):
+        # GEPA's reflection LM occasionally mimics YAML structure. If the
+        # mutated body itself starts with a `---...---` block, naive
+        # reassembly would produce a file with double frontmatter that
+        # downstream YAML parsers will choke on.
+        frontmatter = "name: my-skill\ndescription: real description"
+        evolved_body_with_yaml = (
+            "---\n"
+            "name: gepa-imagined-skill\n"
+            "description: hallucinated\n"
+            "---\n\n"
+            "# Real Body\nThe actual evolved content."
+        )
+
+        with caplog.at_level("WARNING", logger="evolution.skills.skill_module"):
+            result = reassemble_skill(frontmatter, evolved_body_with_yaml)
+
+        assert result.startswith("---\nname: my-skill\n")
+        # Real frontmatter appears exactly once; the GEPA-imagined one is gone.
+        assert result.count("---\n") == 2  # opening + closing of the real block
+        assert "gepa-imagined-skill" not in result
+        assert "hallucinated" not in result
+        assert "# Real Body" in result
+        # And we observed it.
+        assert any(
+            "stripped a leading frontmatter-like block" in rec.message
+            for rec in caplog.records
+        )
+
 
 class TestSkillModuleGEPAContract:
     """Lock the contract that GEPA mutates the same place forward() reads.
