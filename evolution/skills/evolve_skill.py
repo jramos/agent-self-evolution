@@ -149,7 +149,9 @@ def evolve(
 
     # Configure DSPy
     lm = dspy.LM(eval_model)
-    dspy.configure(lm=lm)
+    # Suppress typeguard warnings on float OutputFields whose values arrive
+    # as strings and are coerced via _parse_score (intentional pattern).
+    dspy.configure(lm=lm, warn_on_type_mismatch=False)
 
     # Create the baseline skill module
     baseline_module = SkillModule(skill["body"])
