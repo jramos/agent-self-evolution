@@ -104,12 +104,28 @@ class TestSkillModuleGEPAContract:
         module = SkillModule("HELLO SKILL BODY")
 
         assert module.skill_text == "HELLO SKILL BODY"
-        assert module.predictor.signature.instructions == "HELLO SKILL BODY"
-        assert module.skill_text == module.predictor.signature.instructions
+        # ChainOfThought wraps a Predict named `predict`; that's the signature
+        # GEPA mutates via named_predictors(). skill_text must point at the
+        # same surface or mutations are silently lost.
+        assert module.predictor.predict.signature.instructions == "HELLO SKILL BODY"
 
     def test_skill_text_mutation_round_trip(self):
         module = SkillModule("INITIAL")
 
-        module.predictor.signature = module.predictor.signature.with_instructions("MUTATED")
+        module.predictor.predict.signature = (
+            module.predictor.predict.signature.with_instructions("MUTATED")
+        )
 
         assert module.skill_text == "MUTATED"
+
+    def test_named_predictors_exposes_skill_signature(self):
+        # GEPA discovers what to mutate via named_predictors(); confirm our
+        # skill body is reachable through that traversal.
+        module = SkillModule("REACHABLE")
+
+        names_and_instructions = [
+            (name, p.signature.instructions) for name, p in module.named_predictors()
+        ]
+        assert any(
+            instructions == "REACHABLE" for _, instructions in names_and_instructions
+        ), names_and_instructions
