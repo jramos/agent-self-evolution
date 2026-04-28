@@ -5,11 +5,14 @@ where the skill text is the optimizable parameter. GEPA can then
 mutate the skill text and evaluate the results.
 """
 
+import logging
 import re
 from pathlib import Path
 from typing import Optional
 
 import dspy
+
+logger = logging.getLogger(__name__)
 
 
 def load_skill(skill_path: Path) -> dict:
@@ -117,5 +120,20 @@ def reassemble_skill(frontmatter: str, evolved_body: str) -> str:
 
     Preserves the original YAML frontmatter (name, description, metadata)
     and replaces only the body with the evolved version.
+
+    Defensive: if GEPA's reflection LM produces a body that itself
+    starts with a frontmatter-looking block (mimicking YAML structure),
+    strip it so we don't end up with double frontmatter. The strip is
+    logged so we can spot whether the reflection prompt needs adjustment
+    rather than fixing it silently.
     """
-    return f"---\n{frontmatter}\n---\n\n{evolved_body}\n"
+    body = evolved_body.lstrip()
+    if body.startswith("---"):
+        parts = body.split("---", 2)
+        if len(parts) >= 3:
+            logger.warning(
+                "reassemble_skill: stripped a leading frontmatter-like block from "
+                "GEPA-mutated body; the reflection LM may be mimicking YAML."
+            )
+            body = parts[2].lstrip()
+    return f"---\n{frontmatter}\n---\n\n{body}\n"
