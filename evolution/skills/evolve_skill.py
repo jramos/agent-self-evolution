@@ -8,6 +8,7 @@ Usage:
 import json
 import sys
 import time
+import traceback
 from pathlib import Path
 from datetime import datetime
 from typing import Optional
@@ -33,6 +34,9 @@ from evolution.skills.skill_module import (
 console = Console()
 
 
+_BUDGET_BY_ITERATIONS = {1: "light", 2: "medium", 3: "heavy"}
+
+
 def evolve(
     skill_name: str,
     iterations: int = 10,
@@ -44,6 +48,8 @@ def evolve(
     run_tests: bool = False,
     dry_run: bool = False,
     seed: int = 42,
+    budget: Optional[str] = None,
+    no_fallback: bool = False,
 ):
     """Main evolution function — orchestrates the full optimization loop."""
 
@@ -135,8 +141,9 @@ def evolve(
         console.print("[yellow]⚠ Baseline skill has constraint violations — proceeding anyway[/yellow]")
 
     # ── 4. Set up DSPy + GEPA optimizer ─────────────────────────────────
+    gepa_budget = budget or _BUDGET_BY_ITERATIONS.get(iterations, "light")
     console.print(f"\n[bold]Configuring optimizer[/bold]")
-    console.print(f"  Optimizer: GEPA ({iterations} iterations)")
+    console.print(f"  Optimizer: GEPA (budget={gepa_budget})")
     console.print(f"  Optimizer model: {optimizer_model}")
     console.print(f"  Eval model: {eval_model}")
 
@@ -152,14 +159,21 @@ def evolve(
     valset = dataset.to_dspy_examples("val")
 
     # ── 5. Run GEPA optimization ────────────────────────────────────────
-    console.print(f"\n[bold cyan]Running GEPA optimization ({iterations} iterations)...[/bold cyan]\n")
+    console.print(f"\n[bold cyan]Running GEPA optimization (budget={gepa_budget})...[/bold cyan]\n")
 
     start_time = time.time()
 
     try:
         optimizer = dspy.GEPA(
             metric=skill_fitness_metric,
-            max_steps=iterations,
+            auto=gepa_budget,
+            reflection_lm=dspy.LM(
+                optimizer_model,
+                temperature=1.0,
+                max_tokens=4000,
+                cache=False,
+            ),
+            seed=config.seed,
         )
 
         optimized_module = optimizer.compile(
@@ -168,12 +182,25 @@ def evolve(
             valset=valset,
         )
     except Exception as e:
-        # Fall back to MIPROv2 if GEPA isn't available in this DSPy version
-        console.print(f"[yellow]GEPA not available ({e}), falling back to MIPROv2[/yellow]")
-        optimizer = dspy.MIPROv2(
-            metric=skill_fitness_metric,
-            auto="light",
+        if no_fallback:
+            raise
+        console.print(
+            f"[yellow]GEPA failed ({type(e).__name__}: {e}); falling back to MIPROv2[/yellow]"
         )
+        console.print(f"[dim]{traceback.format_exc()}[/dim]")
+        try:
+            optimizer = dspy.MIPROv2(
+                metric=skill_fitness_metric,
+                auto="light",
+                init_temperature=0.5,
+                seed=config.seed,
+            )
+        except ImportError:
+            console.print(
+                "[red]✗ MIPROv2 fallback requires the [miprov2] extra. "
+                "Install with: pip install hermes-agent-self-evolution[miprov2][/red]"
+            )
+            raise
         optimized_module = optimizer.compile(
             baseline_module,
             trainset=trainset,
@@ -308,7 +335,19 @@ def evolve(
 @click.option("--run-tests", is_flag=True, help="Run full pytest suite as constraint gate")
 @click.option("--dry-run", is_flag=True, help="Validate setup without running optimization")
 @click.option("--seed", default=42, type=int, help="RNG seed for dataset shuffles and DSPy optimizer")
-def main(skill, iterations, eval_source, dataset_path, optimizer_model, eval_model, hermes_repo, run_tests, dry_run, seed):
+@click.option(
+    "--budget",
+    default=None,
+    type=click.Choice(["light", "medium", "heavy"]),
+    help="GEPA optimization budget. Overrides --iterations mapping.",
+)
+@click.option(
+    "--no-fallback",
+    is_flag=True,
+    help="Re-raise GEPA failures instead of falling back to MIPROv2 (for debugging)",
+)
+def main(skill, iterations, eval_source, dataset_path, optimizer_model, eval_model,
+         hermes_repo, run_tests, dry_run, seed, budget, no_fallback):
     """Evolve a Hermes Agent skill using DSPy + GEPA optimization."""
     evolve(
         skill_name=skill,
@@ -321,6 +360,8 @@ def main(skill, iterations, eval_source, dataset_path, optimizer_model, eval_mod
         run_tests=run_tests,
         dry_run=dry_run,
         seed=seed,
+        budget=budget,
+        no_fallback=no_fallback,
     )
 
 
