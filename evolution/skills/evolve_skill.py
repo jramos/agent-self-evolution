@@ -282,7 +282,7 @@ def evolve(
     # InputField values against their declared annotations. Several
     # signatures in this codebase pass empty/None into `str` inputs
     # (e.g. assistant_response in RelevanceFilter when an event has no
-    # response yet), which is fine but spams a warning per call.
+    # response yet) — fine, but spams a warning per call.
     dspy.configure(lm=lm, warn_on_type_mismatch=False)
 
     # Create the baseline skill module

@@ -56,9 +56,12 @@ class LLMJudge:
         expected_behavior: str = dspy.InputField(desc="Rubric describing what a good response looks like")
         agent_output: str = dspy.InputField(desc="The agent's actual response")
         skill_text: str = dspy.InputField(desc="The skill/instructions the agent was following")
-        correctness: float = dspy.OutputField(desc="Score 0.0-1.0: Did the response correctly address the task?")
-        procedure_following: float = dspy.OutputField(desc="Score 0.0-1.0: Did it follow the expected procedure?")
-        conciseness: float = dspy.OutputField(desc="Score 0.0-1.0: Appropriately concise?")
+        # Scores arrive as strings from the LLM and are clamped to [0,1] in
+        # score(); declaring them as `str` keeps the typeguard quiet without
+        # the ceremony of float-coercion fields.
+        correctness: str = dspy.OutputField(desc="Score 0.0-1.0: Did the response correctly address the task?")
+        procedure_following: str = dspy.OutputField(desc="Score 0.0-1.0: Did it follow the expected procedure?")
+        conciseness: str = dspy.OutputField(desc="Score 0.0-1.0: Appropriately concise?")
         feedback: str = dspy.OutputField(desc="Specific, actionable feedback on what could be improved")
 
     def __init__(self, config: EvolutionConfig):
@@ -86,10 +89,9 @@ class LLMJudge:
                 skill_text=skill_text,
             )
 
-        # Parse scores (clamp to 0-1)
-        correctness = _parse_score(result.correctness)
-        procedure_following = _parse_score(result.procedure_following)
-        conciseness = _parse_score(result.conciseness)
+        correctness = _clamp_to_unit(result.correctness)
+        procedure_following = _clamp_to_unit(result.procedure_following)
+        conciseness = _clamp_to_unit(result.conciseness)
 
         # Length penalty
         length_penalty = 0.0
@@ -158,11 +160,15 @@ def skill_fitness_metric(
     return min(1.0, max(0.0, score))
 
 
-def _parse_score(value) -> float:
-    """Parse a score value, handling various LLM output formats."""
-    if isinstance(value, (int, float)):
-        return min(1.0, max(0.0, float(value)))
+def _clamp_to_unit(value: str) -> float:
+    """Parse an LLM-emitted score string and clamp it to [0, 1].
+
+    Falls back to 0.5 (neutral) on malformed output rather than raising —
+    LLMs occasionally emit explanatory text or confidence ranges instead
+    of a clean float. Loud failure here would crash an optimization run
+    over a single noisy judge call.
+    """
     try:
         return min(1.0, max(0.0, float(str(value).strip())))
     except (ValueError, TypeError):
-        return 0.5  # Default to neutral on parse failure
+        return 0.5
