@@ -44,29 +44,6 @@ class TestSizeConstraints:
         assert not result.passed
 
 
-class TestLegacyGrowthConstraint:
-    """The single-ratio cliff is kept for back-compat in validate_all when
-    no holdout improvement signal is available. Primary deploy gate is
-    the continuous quality-gated curve below.
-    """
-
-    def test_acceptable_growth(self, validator):
-        baseline = "x" * 1000
-        evolved = "x" * 1100  # +10%, under default 30%
-        result = validator._check_growth_legacy(evolved, baseline)
-        assert result.passed
-
-    def test_excessive_growth(self, validator):
-        baseline = "x" * 1000
-        evolved = "x" * 1500  # +50%, over default 30%
-        result = validator._check_growth_legacy(evolved, baseline)
-        assert not result.passed
-
-    def test_shrinkage_is_ok(self, validator):
-        baseline = "x" * 1000
-        evolved = "x" * 800  # -20%
-        result = validator._check_growth_legacy(evolved, baseline)
-        assert result.passed
 
 
 class TestNonEmpty:
@@ -105,20 +82,6 @@ class TestSkillStructure:
         assert not result.passed
 
 
-class TestValidateAll:
-    """Back-compat path: static + legacy growth (no quality signal)."""
-
-    def test_valid_skill_passes_all(self, validator):
-        skill = "---\nname: test\ndescription: Test skill\n---\n\n# Procedure\n1. Do thing"
-        results = validator.validate_all(skill, "skill")
-        assert all(r.passed for r in results), [r.message for r in results if not r.passed]
-
-    def test_empty_skill_fails(self, validator):
-        results = validator.validate_all("", "skill")
-        failed = [r for r in results if not r.passed]
-        assert len(failed) > 0
-
-
 class TestValidateStatic:
     """Static checks only — no growth check, no quality gate."""
 
@@ -147,51 +110,95 @@ class TestGrowthQualityGate:
     Defaults: growth_free=0.20, slope=0.30.
     """
 
-    def test_passes_below_free_threshold_with_zero_improvement(self, validator):
-        # Growth +15% (under 20% free threshold) — required = 0; pass.
+    @staticmethod
+    def _bootstrap(mean: float, lower: float, upper: float = None, n: int = 12) -> dict:
+        """Build a stub bootstrap_result dict matching paired_bootstrap's shape."""
+        return {
+            "mean": mean,
+            "lower_bound": lower,
+            "upper_bound": upper if upper is not None else max(mean, lower),
+            "n_examples": n,
+            "n_resamples": 2000,
+            "confidence": 0.90,
+        }
+
+    def test_no_regression_branch_passes_at_zero_improvement(self, validator):
+        # Growth +15% (under 20% free threshold) → required = 0;
+        # no_regression_only branch passes on mean ≥ 0.
         baseline = "x" * 1000
         evolved = "x" * 1150
-        result = validator._check_growth_with_quality_gate(evolved, baseline, 0.0)
+        result = validator._check_growth_with_quality_gate(
+            evolved, baseline, self._bootstrap(mean=0.0, lower=-0.05),
+        )
         assert result.passed
-        assert "+15.0%" in result.message
+        assert "no improvement required" in result.message
 
-    def test_negative_growth_always_passes(self, validator):
+    def test_no_regression_branch_fails_on_negative_mean(self, validator):
         baseline = "x" * 1000
-        evolved = "x" * 800  # -20% growth
-        result = validator._check_growth_with_quality_gate(evolved, baseline, 0.0)
+        evolved = "x" * 1150  # +15%, no required improvement
+        result = validator._check_growth_with_quality_gate(
+            evolved, baseline, self._bootstrap(mean=-0.05, lower=-0.10),
+        )
+        assert not result.passed
+        assert "regression" in result.message
+
+    def test_negative_growth_falls_into_no_regression_branch(self, validator):
+        baseline = "x" * 1000
+        evolved = "x" * 800  # -20%
+        result = validator._check_growth_with_quality_gate(
+            evolved, baseline, self._bootstrap(mean=0.0, lower=-0.10),
+        )
         assert result.passed
 
     def test_zero_baseline_treated_as_zero_growth(self, validator):
-        # Defensive: division-by-zero guard. growth=0, no improvement
-        # required, passes regardless of artifact length.
-        result = validator._check_growth_with_quality_gate("anything", "", 0.0)
+        result = validator._check_growth_with_quality_gate(
+            "anything", "", self._bootstrap(mean=0.0, lower=0.0),
+        )
         assert result.passed
 
-    def test_above_free_threshold_requires_improvement(self, validator):
+    def test_dual_check_passes(self, validator):
         # Growth +40% → required = 0.30 * (0.40 - 0.20) = 0.06.
+        # mean +0.07 ≥ required 0.06 AND lower +0.005 > 0 → pass.
         baseline = "x" * 1000
         evolved = "x" * 1400
-        # Improvement +0.05 < required 0.06 → fail.
-        result = validator._check_growth_with_quality_gate(evolved, baseline, 0.05)
-        assert not result.passed
-        assert "+0.060" in result.message
-        # Improvement +0.07 >= required 0.06 → pass.
-        result = validator._check_growth_with_quality_gate(evolved, baseline, 0.07)
+        result = validator._check_growth_with_quality_gate(
+            evolved, baseline, self._bootstrap(mean=0.07, lower=0.005),
+        )
         assert result.passed
+        assert "lower-bound +0.005 > 0" in result.message
 
-    def test_pr5_obsidian_data_point_with_default_curve(self, validator):
-        # PR #5 obsidian: 1264 → 1570 chars (+24.2% growth).
-        # Required improvement = 0.30 * (0.242 - 0.20) = 0.0126.
-        # We don't know the actual holdout improvement (PR #5's holdout
-        # never ran), but if it's anywhere near the typical +0.05-0.10
-        # range we'd expect from a 1.0-valset run, it deploys.
+    def test_dual_check_fails_on_mean_below_required(self, validator):
+        baseline = "x" * 1000
+        evolved = "x" * 1400  # +40%, required +0.06
+        result = validator._check_growth_with_quality_gate(
+            evolved, baseline, self._bootstrap(mean=0.04, lower=0.01),
+        )
+        assert not result.passed
+        assert "mean +0.040 < required +0.060" in result.message
+
+    def test_dual_check_fails_on_lower_bound_at_zero(self, validator):
+        # Even a fat mean fails when the bootstrap lower bound is at the
+        # noise floor — this is the regression-risk failure mode.
+        baseline = "x" * 1000
+        evolved = "x" * 1400  # +40%, required +0.06
+        result = validator._check_growth_with_quality_gate(
+            evolved, baseline, self._bootstrap(mean=0.10, lower=-0.02),
+        )
+        assert not result.passed
+        assert "regression risk" in result.message
+
+    def test_pr6_obsidian_data_under_principled_gate(self, validator):
+        # PR #6 deployed obsidian at +24.2% growth, mean +0.015,
+        # lower_bound ≈ -0.060 (per the actual paired_bootstrap on its
+        # per-example scores). Under the principled gate this should
+        # REJECT — that's the entire point of this PR.
         baseline = "x" * 1264
         evolved = "x" * 1570
-        result = validator._check_growth_with_quality_gate(evolved, baseline, 0.05)
-        assert result.passed
-        # Conversely, an essentially-flat improvement fails.
-        result = validator._check_growth_with_quality_gate(evolved, baseline, 0.005)
+        result = validator._check_growth_with_quality_gate(
+            evolved, baseline, self._bootstrap(mean=0.015, lower=-0.060),
+        )
         assert not result.passed
+        assert "regression risk" in result.message
 
 
 class TestAbsoluteCharCeiling:
@@ -210,8 +217,9 @@ class TestAbsoluteCharCeiling:
         # still fails the absolute ceiling — escape hatch wouldn't apply.
         baseline = "x" * 5800
         evolved = "x" * 6000  # +3.4%, would pass quality gate even at 0 improvement
-        # Quality gate: passes.
-        gate = validator._check_growth_with_quality_gate(evolved, baseline, 0.0)
+        # Quality gate: passes (no_regression branch, mean ≥ 0).
+        bootstrap = TestGrowthQualityGate._bootstrap(mean=0.0, lower=-0.05)
+        gate = validator._check_growth_with_quality_gate(evolved, baseline, bootstrap)
         assert gate.passed
         # Absolute ceiling: fails.
         ceiling = validator._check_absolute_chars(evolved)
@@ -224,7 +232,8 @@ class TestValidateGrowthWithQuality:
     def test_runs_both_checks(self, validator):
         baseline = "x" * 1000
         evolved = "x" * 1100  # safe growth, safe absolute
-        results = validator.validate_growth_with_quality(evolved, baseline, 0.0)
+        bootstrap = TestGrowthQualityGate._bootstrap(mean=0.0, lower=-0.02)
+        results = validator.validate_growth_with_quality(evolved, baseline, bootstrap)
         names = {r.constraint_name for r in results}
         assert "growth_quality_gate" in names
         assert "absolute_char_ceiling" in names
@@ -234,6 +243,7 @@ class TestValidateGrowthWithQuality:
         # significant improvement, but absolute size is what kills it.
         baseline = "x" * 100
         evolved = "x" * 6000  # +5900%; absolute ceiling 5000 fails.
-        results = validator.validate_growth_with_quality(evolved, baseline, 0.0)
+        bootstrap = TestGrowthQualityGate._bootstrap(mean=0.0, lower=-0.05)
+        results = validator.validate_growth_with_quality(evolved, baseline, bootstrap)
         # Both fail in this case (huge growth + huge size).
         assert any(not r.passed for r in results)

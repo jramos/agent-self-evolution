@@ -156,11 +156,17 @@ class SyntheticDatasetBuilder:
             if c.get("task_input") and c.get("expected_behavior")
         ]
 
-        # Shuffle and split
+        # Shuffle and split. Normalize the three ratios so they actually
+        # sum to 1; the holdout split is no longer just "whatever's left".
         random.Random(self.config.seed).shuffle(examples)
         n_total = len(examples)
-        n_train = max(1, int(n_total * self.config.train_ratio))
-        n_val = max(1, int(n_total * self.config.val_ratio))
+        ratio_sum = (
+            self.config.train_ratio
+            + self.config.val_ratio
+            + self.config.holdout_ratio
+        )
+        n_train = max(1, int(n_total * self.config.train_ratio / ratio_sum))
+        n_val = max(1, int(n_total * self.config.val_ratio / ratio_sum))
 
         return EvalDataset(
             train=examples[:n_train],
