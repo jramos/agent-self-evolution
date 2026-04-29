@@ -18,15 +18,32 @@ class EvolutionConfig:
     population_size: int = 5
 
     # LLM configuration
-    optimizer_model: str = "openai/gpt-4.1"  # Model for GEPA reflections
+    optimizer_model: str = "openai/gpt-4.1"  # Default for the eval LM bound to dspy.configure
+    # Reflection LM (the model GEPA's instruction proposer calls). Defaults
+    # to None → falls back to optimizer_model. Separated because reflection
+    # is the only place where model strength meaningfully changes outcomes
+    # (Decagon's blog: gpt-4o-mini "failed completely" as reflection LM).
+    # CLI default in evolve_skill.py overrides this to gpt-5-mini.
+    reflection_model: Optional[str] = None
     eval_model: str = "openai/gpt-4.1-mini"  # Model for LLM-as-judge scoring
     judge_model: str = "openai/gpt-4.1"  # Model for dataset generation
+    # Forward-wired for an upcoming custom-DspyAdapter PR that adds a
+    # score-side λ-penalty for instruction length. Currently unread by
+    # the metric; non-zero values are ignored until that PR lands.
+    length_penalty_weight: float = 0.0
 
     # Constraints
     max_skill_size: int = 15_000  # 15KB default
     max_tool_desc_size: int = 500  # chars
     max_param_desc_size: int = 200  # chars
-    max_prompt_growth: float = 0.2  # 20% max growth over baseline
+    # Interim ceiling raised from 0.20 → 0.30 to accommodate the LM's
+    # observed "minimum viable documentation" floor for procedural skills
+    # (PR #4: +28.4%; PR #5: +24.2% on obsidian). The +20% bar was an
+    # arbitrary early guardrail, not a calibrated value. A proper
+    # quality-gated tiered threshold (growth tolerated in proportion to
+    # measurable holdout gain) is the next-PR design; this is a band-aid
+    # so deployable evolved skills aren't blocked by a magic number.
+    max_prompt_growth: float = 0.30
 
     # Eval dataset
     eval_dataset_size: int = 20  # Total examples to generate

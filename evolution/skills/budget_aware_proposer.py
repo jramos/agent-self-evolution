@@ -41,26 +41,47 @@ class _BudgetAwareInstructionProposal(dspy.Signature):
     )
 
 
+# Phrasing patterns are deliberate, drawn from the prompt-engineering
+# literature on length-constrained generation:
+#   - Countdown framing ("at most N characters") raised exact-length
+#     compliance from <30% to >95% on GPT-4.1 in arXiv:2508.13805.
+#   - "At most" beats "must be"/"should not exceed" across multiple
+#     A/B-tested sources.
+#   - Loss-frame ("each character above N is wasted") leverages a known
+#     compliance lever; brevity becomes a directly costed resource.
+#   - One-shot example anchors the LM to a concrete pattern at the
+#     target length rather than just a number.
+# Curated tight example below is in the same domain as our typical
+# inputs (terminal/CLI procedural skills) so the LM has a recognizable
+# stylistic reference, not a domain mismatch.
+_TIGHT_INSTRUCTION_EXAMPLE = """\
+Read, list, and search markdown notes in $VAULT_PATH (default ~/notes).
+
+Read: cat "$VAULT_PATH/<name>.md"
+List: find "$VAULT_PATH" -name '*.md'
+Search by name: find "$VAULT_PATH" -iname '*<term>*.md'
+Search by content: grep -rli "<term>" "$VAULT_PATH" --include='*.md'
+Always quote paths to handle spaces."""
+
+
 _BUDGET_AWARE_INSTRUCTIONS = """\
-You are improving an assistant's task instructions based on feedback from real
-runs. Read the current instruction and the examples-with-feedback below, then
-write a new instruction that fixes the issues identified in the feedback.
+Length budget: at most {target_chars} characters. Each character above {target_chars} is wasted.
+The current baseline instruction is {baseline_chars} characters; you are revising it.
+
+Example of an instruction at the target length:
+\"\"\"
+{tight_example}
+\"\"\"
+
+Your task: rewrite the current instruction to fix the failures shown below, staying at most {target_chars} characters.
 
 Steps:
-1. Identify the failure modes shown in the feedback.
-2. Identify the niche / domain-specific facts the assistant needs to keep
-   getting right; preserve them.
-3. Compose a new instruction that targets the failures concisely.
+1. Read the failure modes in the feedback below.
+2. Keep the niche / domain-specific facts the assistant needs.
+3. Cut redundant phrasing, headings, ceremony, and explanatory prose. Imperative mood. No preamble.
+4. If a fix needs new content, delete equal-or-greater redundant content elsewhere first.
 
-Length budget (HARD REQUIREMENT, not a preference):
-- The original baseline instruction was roughly {baseline_chars} characters.
-- The new instruction MUST be at most {target_chars} characters.
-- If you need to add a sentence, find redundant phrasing elsewhere to remove.
-- Verbosity that does not directly fix the failures shown above will be rejected.
-- Prefer terse, direct prose over headings, bullet lists, and ceremony.
-
-Output the new instruction text only — no preamble, no markdown fences,
-no explanation."""
+Output the new instruction text only — no preamble, no markdown fences, no explanation."""
 
 
 class BudgetAwareProposer:
@@ -98,6 +119,7 @@ class BudgetAwareProposer:
             _BUDGET_AWARE_INSTRUCTIONS.format(
                 baseline_chars=baseline_chars,
                 target_chars=self.target_chars,
+                tight_example=_TIGHT_INSTRUCTION_EXAMPLE,
             )
         )
         self.propose = dspy.Predict(signature)
@@ -118,14 +140,23 @@ class BudgetAwareProposer:
                 examples_with_feedback=examples_text,
             )
             new_text = result.improved_instruction
-            if len(new_text) > self.target_chars:
-                # Soft enforcement: the prompt asks for ≤target_chars, but
-                # LMs occasionally overshoot. Log so we can see whether the
-                # signal is actually being respected before deciding to add
-                # hard truncation.
+            new_len = len(new_text)
+            pct_of_target = (new_len / self.target_chars * 100) if self.target_chars else 0
+            # Always log per-call observation. Without this the only way to
+            # confirm the budget signal is reaching the LM is to grep GEPA's
+            # internal logs (which print proposer outputs but not its inputs).
+            logger.info(
+                "BudgetAwareProposer iter: target=%d, proposed[%s]=%d chars (%.1f%% of target)",
+                self.target_chars, name, new_len, pct_of_target,
+            )
+            if new_len > self.target_chars:
+                # Soft enforcement: hard truncation would corrupt mid-sentence
+                # and lose the very change that might have helped. Log louder
+                # for tracking; future PRs may add a multi-objective Pareto
+                # term or a custom-adapter score-side penalty.
                 logger.warning(
                     "BudgetAwareProposer: %s came back at %d chars (target %d)",
-                    name, len(new_text), self.target_chars,
+                    name, new_len, self.target_chars,
                 )
             updated[name] = new_text
         return updated

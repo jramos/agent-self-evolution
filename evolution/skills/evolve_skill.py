@@ -6,6 +6,7 @@ Usage:
 """
 
 import json
+import logging
 import sys
 import time
 import traceback
@@ -20,6 +21,16 @@ from rich.panel import Panel
 from rich.table import Table
 
 from evolution.core.config import EvolutionConfig, get_hermes_agent_path
+
+# Surface our own package's logs alongside DSPy's. Without this the
+# BudgetAwareProposer per-call observability log (commit 1 of PR #5)
+# stays invisible because Python's `logging` module defaults to WARNING
+# on un-configured root and our package logger never gets reached.
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s %(levelname)s %(name)s: %(message)s",
+    datefmt="%Y/%m/%d %H:%M:%S",
+)
 from evolution.core.dataset_builder import SyntheticDatasetBuilder, EvalDataset, GoldenDatasetLoader
 from evolution.core.external_importers import build_dataset_from_external
 from evolution.core.fitness import LLMJudge, make_skill_fitness_metric
@@ -60,7 +71,13 @@ def _default_gepa_runner(
     optimizer_model: str,
     seed: int,
     instruction_proposer=None,
+    reflection_model: Optional[str] = None,
 ):
+    # Resolve reflection LM: explicit reflection_model wins; otherwise
+    # fall back to the eval optimizer_model. DSPy's GEPA docstring
+    # recommends gpt-5 with max_tokens=32000; reasoning models also
+    # require max_tokens >= 16000 (DSPy raises ValueError otherwise).
+    reflection_lm_model = reflection_model or optimizer_model
     optimizer = dspy.GEPA(
         metric=metric,
         auto=gepa_budget,
@@ -68,9 +85,9 @@ def _default_gepa_runner(
         # cache would replay stale mutations across runs and shrink the
         # diversity of proposed candidates.
         reflection_lm=dspy.LM(
-            optimizer_model,
+            reflection_lm_model,
             temperature=1.0,
-            max_tokens=4000,
+            max_tokens=32000,
             cache=False,
         ),
         seed=seed,
@@ -136,6 +153,7 @@ def _build_optimizer_and_compile(
     no_fallback: bool,
     failure_log_path: Optional[Path] = None,
     instruction_proposer=None,
+    reflection_model: Optional[str] = None,
     _gepa_runner=_default_gepa_runner,
     _mipro_runner=_default_mipro_runner,
 ):
@@ -156,6 +174,7 @@ def _build_optimizer_and_compile(
             optimizer_model=optimizer_model,
             seed=seed,
             instruction_proposer=instruction_proposer,
+            reflection_model=reflection_model,
         )
         return optimized, "GEPA"
     except Exception as gepa_exc:
@@ -191,16 +210,20 @@ def evolve(
     seed: int = 42,
     budget: Optional[str] = None,
     no_fallback: bool = False,
+    reflection_model: Optional[str] = None,
+    length_penalty_weight: float = 0.0,
 ):
     """Main evolution function — orchestrates the full optimization loop."""
 
     config = EvolutionConfig(
         iterations=iterations,
         optimizer_model=optimizer_model,
+        reflection_model=reflection_model,
         eval_model=eval_model,
         judge_model=eval_model,  # Use same model for dataset generation
         run_pytest=run_tests,
         seed=seed,
+        length_penalty_weight=length_penalty_weight,
     )
     if hermes_repo:
         config.hermes_agent_path = Path(hermes_repo)
@@ -349,6 +372,7 @@ def evolve(
         no_fallback=no_fallback,
         failure_log_path=failure_log_path,
         instruction_proposer=proposer,
+        reflection_model=config.reflection_model,
     )
 
     elapsed = time.time() - start_time
@@ -482,7 +506,20 @@ def evolve(
 @click.option("--eval-source", default="synthetic", type=click.Choice(["synthetic", "golden", "sessiondb"]),
               help="Source for evaluation dataset")
 @click.option("--dataset-path", default=None, help="Path to existing eval dataset (JSONL)")
-@click.option("--optimizer-model", default="openai/gpt-4.1", help="Model for GEPA reflections")
+@click.option(
+    "--optimizer-model",
+    default="openai/gpt-4.1",
+    help="Default LM bound to dspy.configure (eval LM). Reflection LM is "
+    "controlled separately by --reflection-model.",
+)
+@click.option(
+    "--reflection-model",
+    default="openai/gpt-5-mini",
+    help="Model for the GEPA reflection LM (the LM the instruction proposer "
+    "calls). DSPy's GEPA docstring recommends gpt-5-class reasoning models; "
+    "Decagon's production blog reports gpt-4o-mini failed completely here. "
+    "Reasoning models require max_tokens >= 16000 (we set 32000).",
+)
 @click.option("--eval-model", default="openai/gpt-4.1-mini", help="Model for evaluations")
 @click.option("--hermes-repo", default=None, help="Path to hermes-agent repo")
 @click.option("--run-tests", is_flag=True, help="Run full pytest suite as constraint gate")
@@ -499,8 +536,16 @@ def evolve(
     is_flag=True,
     help="Re-raise GEPA failures instead of falling back to MIPROv2 (for debugging)",
 )
-def main(skill, iterations, eval_source, dataset_path, optimizer_model, eval_model,
-         hermes_repo, run_tests, dry_run, seed, budget, no_fallback):
+@click.option(
+    "--length-penalty-weight",
+    default=0.0,
+    type=float,
+    help="Forward-wired for an upcoming custom-DspyAdapter PR that adds a "
+    "score-side λ-penalty for instruction length. Currently a no-op.",
+)
+def main(skill, iterations, eval_source, dataset_path, optimizer_model, reflection_model,
+         eval_model, hermes_repo, run_tests, dry_run, seed, budget, no_fallback,
+         length_penalty_weight):
     """Evolve a Hermes Agent skill using DSPy + GEPA optimization."""
     evolve(
         skill_name=skill,
@@ -508,6 +553,7 @@ def main(skill, iterations, eval_source, dataset_path, optimizer_model, eval_mod
         eval_source=eval_source,
         dataset_path=dataset_path,
         optimizer_model=optimizer_model,
+        reflection_model=reflection_model,
         eval_model=eval_model,
         hermes_repo=hermes_repo,
         run_tests=run_tests,
@@ -515,6 +561,7 @@ def main(skill, iterations, eval_source, dataset_path, optimizer_model, eval_mod
         seed=seed,
         budget=budget,
         no_fallback=no_fallback,
+        length_penalty_weight=length_penalty_weight,
     )
 
 

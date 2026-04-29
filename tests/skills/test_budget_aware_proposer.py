@@ -16,6 +16,7 @@ import pytest
 
 from evolution.skills.budget_aware_proposer import (
     _BUDGET_AWARE_INSTRUCTIONS,
+    _TIGHT_INSTRUCTION_EXAMPLE,
     BudgetAwareProposer,
 )
 
@@ -61,19 +62,59 @@ class TestProposerConstruction:
 
 
 class TestProposerInstructions:
-    """The static instruction template should hard-code the budget framing."""
+    """The static instruction template should hard-code the budget framing.
+
+    The phrasing patterns here are load-bearing — they're drawn from the
+    prompt-engineering literature on length-constrained generation
+    (countdown framing, "at most N", loss frame, one-shot example). Lock
+    the patterns so a future template-tweak doesn't silently regress to
+    soft phrasing.
+    """
 
     def test_template_has_required_format_keys(self):
         # If we rename a key in the f-string the .format() call below would
         # raise — surface it as a test rather than at GEPA call time.
-        formatted = _BUDGET_AWARE_INSTRUCTIONS.format(baseline_chars=100, target_chars=120)
+        formatted = _BUDGET_AWARE_INSTRUCTIONS.format(
+            baseline_chars=100, target_chars=120, tight_example="example",
+        )
         assert "100" in formatted
         assert "120" in formatted
+        assert "example" in formatted
 
-    def test_template_calls_budget_a_hard_requirement(self):
-        # The wording matters — "preference" gets ignored, "HARD REQUIREMENT"
-        # is what the literature suggests survives instruction-following.
-        assert "HARD REQUIREMENT" in _BUDGET_AWARE_INSTRUCTIONS
+    def test_template_uses_at_most_phrasing(self):
+        # arXiv:2508.13805 + multi-source A/B: "at most N" beats "must be"
+        # and "should not exceed". The phrasing is load-bearing.
+        assert "at most" in _BUDGET_AWARE_INSTRUCTIONS
+
+    def test_template_uses_countdown_framing_at_top(self):
+        # Lead with the budget. The literature shows this raises compliance
+        # vs. burying the budget mid-prompt.
+        first_line = _BUDGET_AWARE_INSTRUCTIONS.splitlines()[0]
+        assert "Length budget" in first_line
+        assert "at most" in first_line
+
+    def test_template_uses_loss_frame(self):
+        # "Each character above N is wasted" turns brevity into a
+        # directly-costed resource. Known compliance lever.
+        assert "wasted" in _BUDGET_AWARE_INSTRUCTIONS
+
+    def test_template_includes_one_shot_example_block(self):
+        # The tight example is rendered into the prompt via a triple-quoted
+        # block; the LM sees what good looks like at the target size.
+        formatted = _BUDGET_AWARE_INSTRUCTIONS.format(
+            baseline_chars=100, target_chars=200,
+            tight_example=_TIGHT_INSTRUCTION_EXAMPLE,
+        )
+        assert '"""' in formatted
+        # The curated example mentions VAULT_PATH; if the example is ever
+        # swapped this assertion needs updating, but at least the test
+        # forces a deliberate change.
+        assert "VAULT_PATH" in formatted
+
+    def test_tight_example_is_short_enough_to_be_a_pattern(self):
+        # The example is meant to demonstrate brevity. If it ever drifts
+        # past ~400 chars it stops being a useful one-shot.
+        assert len(_TIGHT_INSTRUCTION_EXAMPLE) < 400, len(_TIGHT_INSTRUCTION_EXAMPLE)
 
 
 class TestProposerCallable:
@@ -135,6 +176,51 @@ class TestProposerCallable:
         assert result == {"predict": "x" * 200}
         assert any("came back at 200 chars" in rec.message for rec in caplog.records)
         assert any("target 110" in rec.message for rec in caplog.records)
+
+    def test_logs_observation_on_every_call(self, caplog):
+        """Per-call info log fires regardless of overshoot, so e2e runs
+        show whether the budget signal is reaching the proposer at all
+        without grepping GEPA's internal logs."""
+        # 80 chars proposal, target 110 → under budget, no warning.
+        proposer = self._patched_proposer("x" * 80)
+        with caplog.at_level(logging.INFO, logger="evolution.skills.budget_aware_proposer"):
+            proposer(
+                candidate={"predict": "old"},
+                reflective_dataset={"predict": [{"Inputs": "i", "Generated Outputs": "o", "Feedback": "f"}]},
+                components_to_update=["predict"],
+            )
+
+        info_records = [r for r in caplog.records if r.levelname == "INFO"]
+        assert any(
+            "BudgetAwareProposer iter" in r.message and "proposed[predict]=80" in r.message
+            for r in info_records
+        ), info_records
+
+
+class TestFeedbackBudgetReachesPrompt:
+    """Lock the contract that a [BUDGET] line in a reflective example's
+    Feedback value survives _format_examples rendering and ends up in the
+    string the reflection LM consumes. Without this test the feedback
+    signal we ship from fitness.py could be silently dropped by a future
+    rendering refactor.
+    """
+
+    def test_budget_line_in_feedback_appears_in_rendered_prompt(self):
+        proposer = BudgetAwareProposer(baseline_chars=1264, max_growth=0.2)
+        feedback_with_budget = (
+            "judge says X.\n\n"
+            "[BUDGET] Your current instruction is 1647 chars vs baseline 1264 chars "
+            "(+30.3%); target ≤1390 chars."
+        )
+        rendered = proposer._format_examples([
+            {"Inputs": "task input", "Generated Outputs": "agent output",
+             "Feedback": feedback_with_budget},
+        ])
+
+        assert "[BUDGET]" in rendered
+        assert "1647 chars" in rendered
+        assert "+30.3%" in rendered
+        assert "judge says X" in rendered  # original judge feedback preserved
 
 
 class TestExampleFormatting:
