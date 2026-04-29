@@ -6,6 +6,7 @@ Usage:
 """
 
 import json
+import logging
 import sys
 import time
 import traceback
@@ -20,6 +21,16 @@ from rich.panel import Panel
 from rich.table import Table
 
 from evolution.core.config import EvolutionConfig, get_hermes_agent_path
+
+# Surface our own package's logs alongside DSPy's. Without this the
+# BudgetAwareProposer per-call observability log (commit 1 of PR #5)
+# stays invisible because Python's `logging` module defaults to WARNING
+# on un-configured root and our package logger never gets reached.
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s %(levelname)s %(name)s: %(message)s",
+    datefmt="%Y/%m/%d %H:%M:%S",
+)
 from evolution.core.dataset_builder import SyntheticDatasetBuilder, EvalDataset, GoldenDatasetLoader
 from evolution.core.external_importers import build_dataset_from_external
 from evolution.core.fitness import LLMJudge, make_skill_fitness_metric
