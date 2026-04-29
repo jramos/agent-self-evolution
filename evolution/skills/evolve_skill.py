@@ -12,7 +12,7 @@ import time
 import traceback
 from pathlib import Path
 from datetime import datetime
-from typing import Optional
+from typing import Any, Optional
 
 import click
 import dspy
@@ -47,6 +47,89 @@ console = Console()
 
 
 _BUDGET_BY_ITERATIONS = {1: "light", 2: "medium", 3: "heavy"}
+
+
+# Quality-gate presets bundle the three curve parameters into named
+# operating modes so users don't need to set each independently. Tuned
+# from PR data points; "default" is calibrated against PR #5 obsidian
+# (+24.2% growth, ~+0.07 expected improvement).
+_QUALITY_GATE_PRESETS: dict[str, dict[str, float]] = {
+    "strict": {
+        # Tighter free threshold + steeper curve + lower abs ceiling.
+        # Use when shipping cost is dominated by inference per-token.
+        "growth_free_threshold": 0.10,
+        "growth_quality_slope": 0.50,
+        "max_absolute_chars": 3000,
+    },
+    "default": {
+        "growth_free_threshold": 0.20,
+        "growth_quality_slope": 0.30,
+        "max_absolute_chars": 5000,
+    },
+    "lenient": {
+        # Looser everywhere — useful early in evolution iteration when
+        # the LM judge metric or holdout dataset is noisy and we want
+        # to surface genuinely-improved candidates that strict would reject.
+        "growth_free_threshold": 0.30,
+        "growth_quality_slope": 0.20,
+        "max_absolute_chars": 8000,
+    },
+    "off": {
+        # Effectively disable the gate by setting the free threshold
+        # higher than any realistic growth. Static checks (size,
+        # non_empty, structure) still apply.
+        "growth_free_threshold": 100.0,
+        "growth_quality_slope": 0.0,
+        "max_absolute_chars": 100_000,
+    },
+}
+
+
+def _write_gate_decision(output_dir: Path, decision: dict[str, Any]) -> Path:
+    """Persist the deploy-gate's structured decision for future calibration.
+
+    Each run writes one of these regardless of outcome (deploy or reject).
+    Recalibrating the curve is then `jq -s '...' output/*/*/gate_decision.json`
+    rather than parsing free-form failure notes.
+    """
+    output_dir.mkdir(parents=True, exist_ok=True)
+    path = output_dir / "gate_decision.json"
+    path.write_text(json.dumps(decision, indent=2))
+    return path
+
+
+def _holdout_evaluate_with_metric(module, holdout_examples, metric, lm) -> tuple[float, list[float]]:
+    """Score `module` on the holdout via dspy.Evaluate.
+
+    The GEPA-shaped metric takes 5 positional args; dspy.Evaluate calls
+    metric(example, prediction). Wrap it.
+
+    Returns (mean_score, per_example_scores). Per-example scores get
+    persisted to gate_decision.json so future calibration runs have the
+    raw signal, not just the mean.
+    """
+    def two_arg_metric(example, prediction, *_args, **_kwargs):
+        result = metric(example, prediction)
+        return float(getattr(result, "score", result))
+
+    evaluator = dspy.Evaluate(
+        devset=holdout_examples,
+        metric=two_arg_metric,
+        num_threads=4,
+        return_all_scores=True,
+        provide_traceback=True,
+        max_errors=len(holdout_examples) * 100,
+    )
+    with dspy.context(lm=lm):
+        result = evaluator(module)
+    # Evaluate.return_all_scores=True returns a tuple (mean*100, per_example_list).
+    if isinstance(result, tuple) and len(result) == 2:
+        mean100, per_example = result
+        return float(mean100) / 100.0, [float(s) for s in per_example]
+    # Fallback for older dspy: result.score is mean*100, result.results carries (ex, pred, score).
+    mean = float(getattr(result, "score", 0.0)) / 100.0
+    per_example = [float(s) for _, _, s in getattr(result, "results", [])]
+    return mean, per_example
 
 
 def _resolve_budget(iterations: int, budget: Optional[str]) -> str:
@@ -91,6 +174,13 @@ def _default_gepa_runner(
             cache=False,
         ),
         seed=seed,
+        # track_stats=True attaches DspyGEPAResult to optimized_module's
+        # .detailed_results, exposing all candidates (not just the best),
+        # the Pareto front mapping, and per-example val_subscores. Doesn't
+        # affect this PR's deploy decision but unlocks future work
+        # (knee-point selection, champion-challenger registry) without
+        # re-architecture.
+        track_stats=True,
         # When set, GEPA calls our proposer instead of its default
         # InstructionProposalSignature path (dspy/teleprompt/gepa/
         # gepa_utils.py:112-118). The proposer runs inside the
@@ -212,8 +302,18 @@ def evolve(
     no_fallback: bool = False,
     reflection_model: Optional[str] = None,
     length_penalty_weight: float = 0.0,
+    quality_gate: str = "default",
+    growth_free_threshold: Optional[float] = None,
+    growth_quality_slope: Optional[float] = None,
+    max_absolute_chars: Optional[int] = None,
 ):
     """Main evolution function — orchestrates the full optimization loop."""
+
+    # Resolve quality-gate preset; explicit overrides win.
+    preset = _QUALITY_GATE_PRESETS[quality_gate]
+    resolved_free = growth_free_threshold if growth_free_threshold is not None else preset["growth_free_threshold"]
+    resolved_slope = growth_quality_slope if growth_quality_slope is not None else preset["growth_quality_slope"]
+    resolved_abs = max_absolute_chars if max_absolute_chars is not None else preset["max_absolute_chars"]
 
     config = EvolutionConfig(
         iterations=iterations,
@@ -224,6 +324,9 @@ def evolve(
         run_pytest=run_tests,
         seed=seed,
         length_penalty_weight=length_penalty_weight,
+        growth_free_threshold=resolved_free,
+        growth_quality_slope=resolved_slope,
+        max_absolute_chars=int(resolved_abs),
     )
     if hermes_repo:
         config.hermes_agent_path = Path(hermes_repo)
@@ -289,6 +392,18 @@ def evolve(
         sys.exit(1)
 
     console.print(f"  Split: {len(dataset.train)} train / {len(dataset.val)} val / {len(dataset.holdout)} holdout")
+
+    # Refuse to run if the holdout would be too small to gate on. The
+    # quality-gated growth check consumes the holdout improvement delta;
+    # a 1-2 example holdout has stdev ~0.2 and would make the gate's
+    # decisions essentially noise. Raise eval_dataset_size or
+    # holdout_ratio rather than override min_holdout_size.
+    if len(dataset.holdout) < config.min_holdout_size:
+        console.print(
+            f"[red]✗ Holdout has only {len(dataset.holdout)} examples; need ≥{config.min_holdout_size} "
+            f"to gate on improvement signal. Increase eval_dataset_size or holdout_ratio.[/red]"
+        )
+        sys.exit(1)
 
     # ── 3. Validate constraints on baseline ─────────────────────────────
     # Validate the full file (frontmatter + body) so the structure check
@@ -383,24 +498,36 @@ def evolve(
     evolved_body = optimized_module.skill_text
     evolved_full = reassemble_skill(skill["frontmatter"], evolved_body)
 
-    # ── 7. Validate evolved skill ───────────────────────────────────────
-    console.print(f"\n[bold]Validating evolved skill[/bold]")
-    evolved_constraints = validator.validate_all(evolved_full, "skill", baseline_text=skill["raw"])
-    all_pass = True
-    for c in evolved_constraints:
+    # Per-run output dir (created here so failure paths can also write
+    # to a timestamped subdir rather than clobbering evolved_FAILED.md).
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    output_dir = Path("output") / skill_name / timestamp
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+    # ── 7. Static constraints (size, structure, non-empty) ──────────────
+    # Fail-fast on broken artifacts before spending judge-call budget on
+    # the holdout. Growth-with-quality is checked after the holdout in §9.
+    console.print(f"\n[bold]Validating evolved skill (static checks)[/bold]")
+    static_constraints = validator.validate_static(evolved_full, "skill")
+    static_pass = True
+    for c in static_constraints:
         icon = "✓" if c.passed else "✗"
         color = "green" if c.passed else "red"
         console.print(f"  [{color}]{icon} {c.constraint_name}[/{color}]: {c.message}")
         if not c.passed:
-            all_pass = False
+            static_pass = False
 
-    if not all_pass:
-        console.print("[red]✗ Evolved skill FAILED constraints — not deploying[/red]")
-        # Still save for inspection
-        output_path = Path("output") / skill_name / "evolved_FAILED.md"
-        output_path.parent.mkdir(parents=True, exist_ok=True)
-        output_path.write_text(evolved_full)
-        console.print(f"  Saved failed variant to {output_path}")
+    if not static_pass:
+        console.print("[red]✗ Evolved skill FAILED static constraints — not deploying[/red]")
+        failed_path = output_dir / "evolved_FAILED.md"
+        failed_path.write_text(evolved_full)
+        _write_gate_decision(output_dir, {
+            "decision": "reject",
+            "reason": "static_constraint_failure",
+            "failed_constraints": [c.constraint_name for c in static_constraints if not c.passed],
+            "messages": [c.message for c in static_constraints if not c.passed],
+        })
+        console.print(f"  Saved failed variant to {failed_path}")
         return
 
     # ── 8. Evaluate on holdout set ──────────────────────────────────────
@@ -413,21 +540,59 @@ def evolve(
     )
 
     holdout_examples = dataset.to_dspy_examples("holdout")
-
-    baseline_scores = []
-    evolved_scores = []
-    for ex in holdout_examples:
-        # Metric returns dspy.Prediction(score, feedback); aggregate on .score.
-        with dspy.context(lm=lm):
-            baseline_pred = baseline_module(task_input=ex.task_input)
-            baseline_scores.append(float(metric(ex, baseline_pred).score))
-
-            evolved_pred = optimized_module(task_input=ex.task_input)
-            evolved_scores.append(float(metric(ex, evolved_pred).score))
-
-    avg_baseline = sum(baseline_scores) / max(1, len(baseline_scores))
-    avg_evolved = sum(evolved_scores) / max(1, len(evolved_scores))
+    avg_baseline, baseline_per_example = _holdout_evaluate_with_metric(
+        baseline_module, holdout_examples, metric, lm,
+    )
+    avg_evolved, evolved_per_example = _holdout_evaluate_with_metric(
+        optimized_module, holdout_examples, metric, lm,
+    )
     improvement = avg_evolved - avg_baseline
+
+    # ── 9. Growth-with-quality gate ─────────────────────────────────────
+    console.print(f"\n[bold]Validating growth against holdout improvement[/bold]")
+    growth_constraints = validator.validate_growth_with_quality(
+        evolved_full, skill["raw"], improvement,
+    )
+    growth_pass = True
+    for c in growth_constraints:
+        icon = "✓" if c.passed else "✗"
+        color = "green" if c.passed else "red"
+        console.print(f"  [{color}]{icon} {c.constraint_name}[/{color}]: {c.message}")
+        if not c.passed:
+            growth_pass = False
+
+    growth_pct = (len(evolved_full) - len(skill["raw"])) / max(1, len(skill["raw"]))
+    required_improvement = max(
+        0.0,
+        config.growth_quality_slope * (growth_pct - config.growth_free_threshold),
+    )
+    decision_payload = {
+        "decision": "deploy" if growth_pass else "reject",
+        "reason": "growth_quality_gate" if not growth_pass else "passed",
+        "growth_pct": growth_pct,
+        "improvement": improvement,
+        "required_improvement": required_improvement,
+        "baseline_chars": len(skill["raw"]),
+        "evolved_chars": len(evolved_full),
+        "absolute_char_ceiling": config.max_absolute_chars,
+        "growth_free_threshold": config.growth_free_threshold,
+        "growth_quality_slope": config.growth_quality_slope,
+        "baseline_per_example": baseline_per_example,
+        "evolved_per_example": evolved_per_example,
+        "avg_baseline": avg_baseline,
+        "avg_evolved": avg_evolved,
+        "failed_constraints": [c.constraint_name for c in growth_constraints if not c.passed],
+        "messages": [c.message for c in growth_constraints if not c.passed],
+    }
+    gate_path = _write_gate_decision(output_dir, decision_payload)
+    console.print(f"  [dim]Gate decision logged to {gate_path}[/dim]")
+
+    if not growth_pass:
+        console.print("[red]✗ Evolved skill REJECTED by quality gate — not deploying[/red]")
+        failed_path = output_dir / "evolved_FAILED.md"
+        failed_path.write_text(evolved_full)
+        console.print(f"  Saved failed variant to {failed_path}")
+        return
 
     # ── 9. Report results ───────────────────────────────────────────────
     table = Table(title="Evolution Results")
@@ -456,9 +621,9 @@ def evolve(
     console.print(table)
 
     # ── 10. Save output ─────────────────────────────────────────────────
-    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    output_dir = Path("output") / skill_name / timestamp
-    output_dir.mkdir(parents=True, exist_ok=True)
+    # output_dir + timestamp were created earlier (before §7) so failure
+    # paths can also write evolved_FAILED.md + gate_decision.json into
+    # the same per-run subdir. Reuse them here.
 
     # Save evolved skill
     (output_dir / "evolved_skill.md").write_text(evolved_full)
@@ -543,9 +708,40 @@ def evolve(
     help="Forward-wired for an upcoming custom-DspyAdapter PR that adds a "
     "score-side λ-penalty for instruction length. Currently a no-op.",
 )
+@click.option(
+    "--quality-gate",
+    default="default",
+    type=click.Choice(["strict", "default", "lenient", "off"]),
+    help="Preset for the deploy gate's growth-vs-improvement curve. "
+    "strict=(0.10/0.50/3000), default=(0.20/0.30/5000), "
+    "lenient=(0.30/0.20/8000), off=disabled (static checks only).",
+)
+@click.option(
+    "--growth-free-threshold",
+    default=None,
+    type=float,
+    help="Advanced: override the preset's growth_free_threshold (growth "
+    "below which no improvement justification is required).",
+)
+@click.option(
+    "--growth-quality-slope",
+    default=None,
+    type=float,
+    help="Advanced: override the preset's growth_quality_slope (linear "
+    "rate at which required holdout improvement scales with growth above "
+    "the free threshold).",
+)
+@click.option(
+    "--max-absolute-chars",
+    default=None,
+    type=int,
+    help="Advanced: override the preset's max_absolute_chars (hard char "
+    "ceiling on the evolved artifact, independent of growth %).",
+)
 def main(skill, iterations, eval_source, dataset_path, optimizer_model, reflection_model,
          eval_model, hermes_repo, run_tests, dry_run, seed, budget, no_fallback,
-         length_penalty_weight):
+         length_penalty_weight, quality_gate, growth_free_threshold,
+         growth_quality_slope, max_absolute_chars):
     """Evolve a Hermes Agent skill using DSPy + GEPA optimization."""
     evolve(
         skill_name=skill,
@@ -562,6 +758,10 @@ def main(skill, iterations, eval_source, dataset_path, optimizer_model, reflecti
         budget=budget,
         no_fallback=no_fallback,
         length_penalty_weight=length_penalty_weight,
+        quality_gate=quality_gate,
+        growth_free_threshold=growth_free_threshold,
+        growth_quality_slope=growth_quality_slope,
+        max_absolute_chars=max_absolute_chars,
     )
 
 

@@ -33,24 +33,58 @@ class ConstraintValidator:
         artifact_type: str,
         baseline_text: Optional[str] = None,
     ) -> list[ConstraintResult]:
-        """Run all applicable constraints. Returns list of results."""
-        results = []
+        """Back-compat shim. New code should call validate_static() and
+        validate_growth_with_quality() explicitly so the deploy decision
+        sees the holdout improvement signal. Without that signal the
+        legacy growth check (a single-ratio cliff) is the only thing
+        available — kept here so external callers don't break.
+        """
+        results = self.validate_static(artifact_text, artifact_type)
 
-        # 1. Size limits
-        results.append(self._check_size(artifact_text, artifact_type))
-
-        # 2. Growth limit (if baseline provided)
-        if baseline_text:
-            results.append(self._check_growth(artifact_text, baseline_text, artifact_type))
-
-        # 3. Non-empty
-        results.append(self._check_non_empty(artifact_text))
-
-        # 4. Structural integrity
-        if artifact_type == "skill":
-            results.append(self._check_skill_structure(artifact_text))
+        if baseline_text is not None:
+            # Fall back to the legacy ratio-only check when no quality
+            # signal is available. Continuous quality gate requires
+            # holdout_improvement; use validate_growth_with_quality() for
+            # that path.
+            results.append(self._check_growth_legacy(artifact_text, baseline_text))
 
         return results
+
+    def validate_static(
+        self,
+        artifact_text: str,
+        artifact_type: str,
+    ) -> list[ConstraintResult]:
+        """Static checks that don't need a baseline or holdout signal:
+        size, non-empty, structural integrity. Run these first in the
+        evolve flow so a broken artifact short-circuits before we spend
+        judge-call budget on the holdout pass.
+        """
+        results = [self._check_size(artifact_text, artifact_type)]
+        results.append(self._check_non_empty(artifact_text))
+        if artifact_type == "skill":
+            results.append(self._check_skill_structure(artifact_text))
+        return results
+
+    def validate_growth_with_quality(
+        self,
+        artifact_text: str,
+        baseline_text: str,
+        holdout_improvement: float,
+    ) -> list[ConstraintResult]:
+        """Quality-gated growth check + absolute-char ceiling.
+
+        The growth check uses a continuous curve where required holdout
+        improvement scales linearly with growth above the free threshold.
+        The absolute-char ceiling is independent of growth — applies even
+        when the curve would pass — to backstop runaway absolute size.
+        """
+        return [
+            self._check_growth_with_quality_gate(
+                artifact_text, baseline_text, holdout_improvement
+            ),
+            self._check_absolute_chars(artifact_text),
+        ]
 
     def run_test_suite(self, hermes_repo: Path) -> ConstraintResult:
         """Run the full hermes-agent test suite. Must pass 100%."""
@@ -116,7 +150,12 @@ class ConstraintValidator:
                 message=f"Size exceeded: {size}/{limit} chars ({size - limit} over)",
             )
 
-    def _check_growth(self, text: str, baseline: str, artifact_type: str) -> ConstraintResult:
+    def _check_growth_legacy(self, text: str, baseline: str) -> ConstraintResult:
+        """Single-ratio cliff for the back-compat validate_all path.
+
+        Used only when no holdout improvement signal is available. The
+        primary deploy gate is _check_growth_with_quality_gate.
+        """
         growth = (len(text) - len(baseline)) / max(1, len(baseline))
         max_growth = self.config.max_prompt_growth
 
@@ -124,14 +163,76 @@ class ConstraintValidator:
             return ConstraintResult(
                 passed=True,
                 constraint_name="growth_limit",
-                message=f"Growth OK: {growth:+.1%} (max {max_growth:+.1%})",
+                message=f"Growth OK: {growth:+.1%} (max {max_growth:+.1%}, no quality signal available)",
             )
+        return ConstraintResult(
+            passed=False,
+            constraint_name="growth_limit",
+            message=f"Growth exceeded: {growth:+.1%} (max {max_growth:+.1%}, no quality signal available)",
+        )
+
+    def _check_growth_with_quality_gate(
+        self,
+        text: str,
+        baseline: str,
+        holdout_improvement: float,
+    ) -> ConstraintResult:
+        """Continuous quality-gated growth check.
+
+        required_improvement(growth) = max(0, slope * (growth - growth_free))
+        Pass when actual holdout improvement >= required.
+
+        Negative growth (the LM produced a shorter artifact) always
+        passes because shrinkage doesn't need quality justification.
+        """
+        baseline_len = len(baseline)
+        if baseline_len == 0:
+            growth = 0.0
         else:
+            growth = (len(text) - baseline_len) / baseline_len
+
+        free = self.config.growth_free_threshold
+        slope = self.config.growth_quality_slope
+        required = max(0.0, slope * (growth - free))
+
+        if holdout_improvement >= required:
             return ConstraintResult(
-                passed=False,
-                constraint_name="growth_limit",
-                message=f"Growth exceeded: {growth:+.1%} (max {max_growth:+.1%})",
+                passed=True,
+                constraint_name="growth_quality_gate",
+                message=(
+                    f"Growth {growth:+.1%} OK: holdout improvement "
+                    f"{holdout_improvement:+.3f} ≥ required {required:+.3f}"
+                ),
             )
+        return ConstraintResult(
+            passed=False,
+            constraint_name="growth_quality_gate",
+            message=(
+                f"Growth {growth:+.1%} requires improvement ≥{required:+.3f}; "
+                f"got {holdout_improvement:+.3f}"
+            ),
+        )
+
+    def _check_absolute_chars(self, text: str) -> ConstraintResult:
+        """Hard absolute-char ceiling on the evolved artifact.
+
+        Independent of growth. Backstops runaway absolute size that the
+        relative growth curve can't catch (e.g., a 200-char baseline
+        growing to 1500 chars is +650% but only 1500 chars absolute).
+        """
+        size = len(text)
+        ceiling = self.config.max_absolute_chars
+        if size <= ceiling:
+            return ConstraintResult(
+                passed=True,
+                constraint_name="absolute_char_ceiling",
+                message=f"Size {size} ≤ {ceiling} chars (absolute ceiling)",
+            )
+        return ConstraintResult(
+            passed=False,
+            constraint_name="absolute_char_ceiling",
+            message=f"Size {size} exceeds absolute ceiling {ceiling} chars ({size - ceiling} over)",
+        )
 
     def _check_non_empty(self, text: str) -> ConstraintResult:
         if text.strip():
