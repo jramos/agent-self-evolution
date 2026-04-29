@@ -107,7 +107,11 @@ class LLMJudge:
         )
 
 
-def make_skill_fitness_metric(judge: "LLMJudge"):
+def make_skill_fitness_metric(
+    judge: "LLMJudge",
+    baseline_skill_text: str = "",
+    max_growth: float = 0.2,
+):
     """Build a GEPA-compatible metric closed over an LLMJudge instance.
 
     The returned callable matches GEPA's metric protocol:
@@ -118,7 +122,26 @@ def make_skill_fitness_metric(judge: "LLMJudge"):
     consume the judge's natural-language critique directly instead of
     falling back to its canned "trajectory got a score of {x}" template
     (see dspy/teleprompt/gepa/gepa.py:537).
+
+    When `pred_trace` is populated (the predictor-level call site —
+    GEPA's Evaluate-over-valset path passes None), the metric also
+    appends:
+
+    - `[BUDGET]` line reporting current vs baseline instruction length,
+      so the reflection LM can see when it has bloated past the
+      configured `max_growth` ratio. Computed from
+      `pred_trace[0][0].signature.instructions`.
+    - `[REASONING]` block quoting the predictor's chain-of-thought
+      reasoning (when present), giving the reflection LM a window into
+      *why* the agent produced the output, not just the final string.
+
+    Critical: GEPA warns and overrides the score if predictor-level
+    scoring (pred_name set) diverges from module-level scoring
+    (pred_name None). Score must be byte-identical across both call
+    sites; only feedback varies.
     """
+    baseline_len = len(baseline_skill_text or "")
+    target_len = int(baseline_len * (1 + max_growth)) if baseline_len else 0
 
     def skill_fitness_metric(
         example: dspy.Example,
@@ -148,9 +171,66 @@ def make_skill_fitness_metric(judge: "LLMJudge"):
             expected_behavior=getattr(example, "expected_behavior", "") or "",
             agent_output=agent_output,
         )
-        return dspy.Prediction(score=score.composite, feedback=score.feedback)
+        feedback = _augment_feedback_with_pred_trace(
+            score.feedback,
+            pred_trace,
+            baseline_len=baseline_len,
+            target_len=target_len,
+        )
+        return dspy.Prediction(score=score.composite, feedback=feedback)
 
     return skill_fitness_metric
+
+
+def _augment_feedback_with_pred_trace(
+    base_feedback: str,
+    pred_trace,
+    baseline_len: int,
+    target_len: int,
+) -> str:
+    """Append BUDGET + REASONING context to feedback when pred_trace is set.
+
+    GEPA passes `pred_trace=None` from its Evaluate-over-valset path and
+    a one-tuple list `[(predictor, inputs, output)]` from its reflective
+    feedback path. We only enrich the feedback in the latter case;
+    score is unchanged either way (GEPA enforces score equality across
+    both call sites).
+    """
+    if not pred_trace:
+        return base_feedback
+
+    try:
+        predictor, _inputs, output = pred_trace[0]
+    except (IndexError, TypeError, ValueError):
+        return base_feedback
+
+    extras: list[str] = []
+
+    if baseline_len > 0:
+        try:
+            current_text = predictor.signature.instructions or ""
+        except AttributeError:
+            current_text = ""
+        if current_text:
+            current_len = len(current_text)
+            growth_pct = (current_len - baseline_len) / baseline_len * 100
+            extras.append(
+                f"[BUDGET] Your current instruction is {current_len} chars vs "
+                f"baseline {baseline_len} chars ({growth_pct:+.1f}%); "
+                f"target ≤{target_len} chars. Prefer a tighter instruction "
+                f"that preserves the essential procedure."
+            )
+
+    reasoning = getattr(output, "reasoning", "") or getattr(output, "rationale", "")
+    if reasoning:
+        snippet = str(reasoning).strip()
+        if len(snippet) > 500:
+            snippet = snippet[:500] + "…"
+        extras.append(f"[REASONING] Agent's chain-of-thought: {snippet}")
+
+    if not extras:
+        return base_feedback
+    return base_feedback + "\n\n" + "\n\n".join(extras)
 
 
 def _clamp_to_unit(value: str) -> float:

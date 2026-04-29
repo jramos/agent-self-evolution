@@ -24,6 +24,7 @@ from evolution.core.dataset_builder import SyntheticDatasetBuilder, EvalDataset,
 from evolution.core.external_importers import build_dataset_from_external
 from evolution.core.fitness import LLMJudge, make_skill_fitness_metric
 from evolution.core.constraints import ConstraintValidator
+from evolution.skills.budget_aware_proposer import BudgetAwareProposer
 from evolution.skills.skill_module import (
     SkillModule,
     load_skill,
@@ -58,6 +59,7 @@ def _default_gepa_runner(
     gepa_budget: str,
     optimizer_model: str,
     seed: int,
+    instruction_proposer=None,
 ):
     optimizer = dspy.GEPA(
         metric=metric,
@@ -72,6 +74,11 @@ def _default_gepa_runner(
             cache=False,
         ),
         seed=seed,
+        # When set, GEPA calls our proposer instead of its default
+        # InstructionProposalSignature path (dspy/teleprompt/gepa/
+        # gepa_utils.py:112-118). The proposer runs inside the
+        # reflection_lm context — the reflection_lm above still drives it.
+        instruction_proposer=instruction_proposer,
     )
     return optimizer.compile(baseline_module, trainset=trainset, valset=valset)
 
@@ -128,6 +135,7 @@ def _build_optimizer_and_compile(
     seed: int,
     no_fallback: bool,
     failure_log_path: Optional[Path] = None,
+    instruction_proposer=None,
     _gepa_runner=_default_gepa_runner,
     _mipro_runner=_default_mipro_runner,
 ):
@@ -147,6 +155,7 @@ def _build_optimizer_and_compile(
             gepa_budget=gepa_budget,
             optimizer_model=optimizer_model,
             seed=seed,
+            instruction_proposer=instruction_proposer,
         )
         return optimized, "GEPA"
     except Exception as gepa_exc:
@@ -298,8 +307,15 @@ def evolve(
     # Build the LLM-as-judge metric. The judge is shared by GEPA's
     # per-iteration scoring and the holdout eval below; constructing it
     # once means DSPy's LM cache lines up across both surfaces.
+    # Pass baseline + growth budget so the metric can append a [BUDGET]
+    # line to feedback when GEPA hands us pred_trace, teaching the
+    # reflection LM to prefer concise instructions.
     judge = LLMJudge(config)
-    metric = make_skill_fitness_metric(judge)
+    metric = make_skill_fitness_metric(
+        judge,
+        baseline_skill_text=skill["body"],
+        max_growth=config.max_prompt_growth,
+    )
 
     # Prepare DSPy examples
     trainset = dataset.to_dspy_examples("train")
@@ -311,6 +327,17 @@ def evolve(
     start_time = time.time()
     failure_log_path = Path("output") / skill_name / "gepa_failure.log"
 
+    # Inject a custom instruction proposer that bakes the size budget into
+    # the reflection prompt the LM sees on every iteration. DSPy's
+    # gepa_kwargs={"reflection_prompt_template": ...} would be the simpler
+    # path, but gepa.api rejects it whenever the adapter (DspyAdapter
+    # always) provides its own propose_new_texts (gepa/api.py:317-321).
+    # This is the documented DSPy-side extension point instead.
+    proposer = BudgetAwareProposer(
+        baseline_chars=len(skill["body"]),
+        max_growth=config.max_prompt_growth,
+    )
+
     optimized_module, optimizer_name = _build_optimizer_and_compile(
         baseline_module=baseline_module,
         trainset=trainset,
@@ -321,6 +348,7 @@ def evolve(
         seed=config.seed,
         no_fallback=no_fallback,
         failure_log_path=failure_log_path,
+        instruction_proposer=proposer,
     )
 
     elapsed = time.time() - start_time

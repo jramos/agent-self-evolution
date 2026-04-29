@@ -8,8 +8,10 @@ ImportError install-hint chaining) can be unit-tested without an LM.
 import dspy
 import pytest
 
+from evolution.skills.budget_aware_proposer import BudgetAwareProposer
 from evolution.skills.evolve_skill import (
     _build_optimizer_and_compile,
+    _default_gepa_runner,
     _default_mipro_runner,
     _resolve_budget,
 )
@@ -121,6 +123,67 @@ class TestBuildOptimizerAndCompile:
         contents = log_path.read_text()
         assert "RuntimeError" in contents
         assert "simulated GEPA failure" in contents
+
+    def test_gepa_runner_passes_instruction_proposer(self):
+        """The custom proposer must reach dspy.GEPA's instruction_proposer
+        kwarg. gepa.api rejects reflection_prompt_template when DSPy is
+        the adapter; instruction_proposer is the documented alternative."""
+        captured = {}
+
+        class _FakeGEPA:
+            def __init__(self, **kwargs):
+                captured.update(kwargs)
+
+            def compile(self, baseline_module, *, trainset, valset):
+                return _FakeOptimized()
+
+        proposer = BudgetAwareProposer(baseline_chars=1000, max_growth=0.2)
+
+        original = dspy.GEPA
+        dspy.GEPA = _FakeGEPA
+        try:
+            result = _default_gepa_runner(
+                baseline_module=object(),
+                trainset=[],
+                valset=[],
+                metric=lambda *a, **kw: 0.0,
+                gepa_budget="light",
+                optimizer_model="openai/gpt-4o-mini",
+                seed=42,
+                instruction_proposer=proposer,
+            )
+        finally:
+            dspy.GEPA = original
+
+        assert isinstance(result, _FakeOptimized)
+        assert captured["instruction_proposer"] is proposer
+
+    def test_gepa_runner_passes_none_proposer_by_default(self):
+        captured = {}
+
+        class _FakeGEPA:
+            def __init__(self, **kwargs):
+                captured.update(kwargs)
+
+            def compile(self, baseline_module, *, trainset, valset):
+                return _FakeOptimized()
+
+        original = dspy.GEPA
+        dspy.GEPA = _FakeGEPA
+        try:
+            _default_gepa_runner(
+                baseline_module=object(),
+                trainset=[],
+                valset=[],
+                metric=lambda *a, **kw: 0.0,
+                gepa_budget="light",
+                optimizer_model="openai/gpt-4o-mini",
+                seed=42,
+            )
+        finally:
+            dspy.GEPA = original
+
+        assert captured["instruction_proposer"] is None
 
     def test_fallback_unwraps_prediction_returning_metric(self):
         """When GEPA fails and we fall back to MIPROv2, the metric the
