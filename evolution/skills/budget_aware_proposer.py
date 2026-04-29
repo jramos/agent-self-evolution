@@ -118,14 +118,23 @@ class BudgetAwareProposer:
                 examples_with_feedback=examples_text,
             )
             new_text = result.improved_instruction
-            if len(new_text) > self.target_chars:
-                # Soft enforcement: the prompt asks for ≤target_chars, but
-                # LMs occasionally overshoot. Log so we can see whether the
-                # signal is actually being respected before deciding to add
-                # hard truncation.
+            new_len = len(new_text)
+            pct_of_target = (new_len / self.target_chars * 100) if self.target_chars else 0
+            # Always log per-call observation. Without this the only way to
+            # confirm the budget signal is reaching the LM is to grep GEPA's
+            # internal logs (which print proposer outputs but not its inputs).
+            logger.info(
+                "BudgetAwareProposer iter: target=%d, proposed[%s]=%d chars (%.1f%% of target)",
+                self.target_chars, name, new_len, pct_of_target,
+            )
+            if new_len > self.target_chars:
+                # Soft enforcement: hard truncation would corrupt mid-sentence
+                # and lose the very change that might have helped. Log louder
+                # for tracking; future PRs may add a multi-objective Pareto
+                # term or a custom-adapter score-side penalty.
                 logger.warning(
                     "BudgetAwareProposer: %s came back at %d chars (target %d)",
-                    name, len(new_text), self.target_chars,
+                    name, new_len, self.target_chars,
                 )
             updated[name] = new_text
         return updated

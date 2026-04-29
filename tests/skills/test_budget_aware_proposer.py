@@ -136,6 +136,51 @@ class TestProposerCallable:
         assert any("came back at 200 chars" in rec.message for rec in caplog.records)
         assert any("target 110" in rec.message for rec in caplog.records)
 
+    def test_logs_observation_on_every_call(self, caplog):
+        """Per-call info log fires regardless of overshoot, so e2e runs
+        show whether the budget signal is reaching the proposer at all
+        without grepping GEPA's internal logs."""
+        # 80 chars proposal, target 110 → under budget, no warning.
+        proposer = self._patched_proposer("x" * 80)
+        with caplog.at_level(logging.INFO, logger="evolution.skills.budget_aware_proposer"):
+            proposer(
+                candidate={"predict": "old"},
+                reflective_dataset={"predict": [{"Inputs": "i", "Generated Outputs": "o", "Feedback": "f"}]},
+                components_to_update=["predict"],
+            )
+
+        info_records = [r for r in caplog.records if r.levelname == "INFO"]
+        assert any(
+            "BudgetAwareProposer iter" in r.message and "proposed[predict]=80" in r.message
+            for r in info_records
+        ), info_records
+
+
+class TestFeedbackBudgetReachesPrompt:
+    """Lock the contract that a [BUDGET] line in a reflective example's
+    Feedback value survives _format_examples rendering and ends up in the
+    string the reflection LM consumes. Without this test the feedback
+    signal we ship from fitness.py could be silently dropped by a future
+    rendering refactor.
+    """
+
+    def test_budget_line_in_feedback_appears_in_rendered_prompt(self):
+        proposer = BudgetAwareProposer(baseline_chars=1264, max_growth=0.2)
+        feedback_with_budget = (
+            "judge says X.\n\n"
+            "[BUDGET] Your current instruction is 1647 chars vs baseline 1264 chars "
+            "(+30.3%); target ≤1390 chars."
+        )
+        rendered = proposer._format_examples([
+            {"Inputs": "task input", "Generated Outputs": "agent output",
+             "Feedback": feedback_with_budget},
+        ])
+
+        assert "[BUDGET]" in rendered
+        assert "1647 chars" in rendered
+        assert "+30.3%" in rendered
+        assert "judge says X" in rendered  # original judge feedback preserved
+
 
 class TestExampleFormatting:
     def test_renders_example_dict_as_markdown(self):
