@@ -43,6 +43,7 @@ from evolution.skills.skill_module import (
     find_skill,
     reassemble_skill,
 )
+from evolution.skills.knee_point import select_knee_point, CandidatePick
 
 console = Console()
 
@@ -97,6 +98,30 @@ def _write_gate_decision(output_dir: Path, decision: dict[str, Any]) -> Path:
     path = output_dir / "gate_decision.json"
     path.write_text(json.dumps(decision, indent=2))
     return path
+
+
+def _knee_point_payload(knee_pick: Optional[CandidatePick]) -> dict[str, Any]:
+    """Serialize a CandidatePick (or its absence) for gate_decision.json.
+
+    `applied: false` lands when MIPROv2 fallback fired (no detailed_results)
+    so a calibration script can distinguish "knee-point ran" from "knee-point
+    skipped" without checking field presence.
+    """
+    if knee_pick is None:
+        return {"applied": False, "reason": "no_detailed_results"}
+    return {
+        "applied": True,
+        "fallback": knee_pick.fallback,
+        "epsilon": knee_pick.epsilon,
+        "band_size": knee_pick.band_size,
+        "picked_idx": knee_pick.picked_idx,
+        "picked_val_score": knee_pick.val_score,
+        "picked_val_rank_in_band": knee_pick.val_rank_in_band,
+        "picked_body_chars": knee_pick.body_chars,
+        "gepa_default_idx": knee_pick.gepa_default_idx,
+        "gepa_default_body_chars": knee_pick.gepa_default_body_chars,
+        "band_roster": knee_pick.band_roster,
+    }
 
 
 def _holdout_evaluate_with_metric(module, holdout_examples, metric, lm) -> tuple[float, list[float]]:
@@ -304,6 +329,7 @@ def evolve(
     max_absolute_chars: Optional[int] = None,
     bootstrap_confidence: Optional[float] = None,
     bootstrap_n_resamples: Optional[int] = None,
+    knee_point_epsilon: Optional[float] = None,
 ):
     """Main evolution function — orchestrates the full optimization loop."""
 
@@ -502,6 +528,38 @@ def evolve(
     elapsed = time.time() - start_time
     console.print(f"\n  {optimizer_name} optimization completed in {elapsed:.1f}s")
 
+    # ── 5b. Knee-point Pareto selection ─────────────────────────────────
+    # GEPA's default = "best by aggregate valset score." With small valsets
+    # (N≤10) that overfits aggressively. Scan candidates within ε=1/n_val of
+    # best valset and pick the most parsimonious one. Skip cleanly when
+    # MIPROv2 fallback fired (no detailed_results attribute).
+    knee_pick: Optional[CandidatePick] = None
+    if hasattr(optimized_module, "detailed_results"):
+        details = optimized_module.detailed_results
+        knee_pick = select_knee_point(
+            candidates=details.candidates,
+            val_aggregate_scores=details.val_aggregate_scores,
+            n_val=len(valset),
+            static_validator=lambda txt: validator.validate_static(
+                reassemble_skill(skill["frontmatter"], txt), "skill",
+            ),
+            gepa_default_idx=details.best_idx,
+            epsilon=knee_point_epsilon,
+        )
+        # Fresh SkillModule(knee_text) — never mutate the predictor in place.
+        # Avoids carrying ChainOfThought state (e.g. demos) from the
+        # GEPA-default module; the picked candidate's instruction text is
+        # the only thing we want.
+        optimized_module = SkillModule(knee_pick.skill_text)
+        console.print(
+            f"\n[bold]Knee-point selection[/bold]: picked candidate "
+            f"{knee_pick.picked_idx} (val={knee_pick.val_score:.3f}, "
+            f"rank {knee_pick.val_rank_in_band} of {knee_pick.band_size} "
+            f"in band, {knee_pick.body_chars} chars vs GEPA default "
+            f"{knee_pick.gepa_default_body_chars} chars; ε={knee_pick.epsilon:.3f}; "
+            f"fallback={knee_pick.fallback})"
+        )
+
     # ── 6. Extract evolved skill text ───────────────────────────────────
     # The optimized module's instructions contain the evolved skill text
     evolved_body = optimized_module.skill_text
@@ -531,11 +589,12 @@ def evolve(
         failed_path = output_dir / "evolved_FAILED.md"
         failed_path.write_text(evolved_full)
         _write_gate_decision(output_dir, {
-            "schema_version": "2",
+            "schema_version": "3",
             "decision": "reject",
             "reason": "static_constraint_failure",
             "failed_constraints": [c.constraint_name for c in static_constraints if not c.passed],
             "messages": [c.message for c in static_constraints if not c.passed],
+            "knee_point": _knee_point_payload(knee_pick),
         })
         console.print(f"  Saved failed variant to {failed_path}")
         return
@@ -584,7 +643,7 @@ def evolve(
         config.growth_quality_slope * (growth_pct - config.growth_free_threshold),
     )
     decision_payload = {
-        "schema_version": "2",
+        "schema_version": "3",
         "decision": "deploy" if growth_pass else "reject",
         "reason": "passed" if growth_pass else "growth_quality_gate",
         "decision_rule_used": "no_regression_only" if required_improvement == 0.0 else "dual_check",
@@ -602,6 +661,7 @@ def evolve(
         "bootstrap": bootstrap,
         "failed_constraints": [c.constraint_name for c in growth_constraints if not c.passed],
         "messages": [c.message for c in growth_constraints if not c.passed],
+        "knee_point": _knee_point_payload(knee_pick),
     }
     gate_path = _write_gate_decision(output_dir, decision_payload)
     console.print(f"  [dim]Gate decision logged to {gate_path}[/dim]")
