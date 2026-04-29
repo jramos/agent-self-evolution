@@ -58,12 +58,16 @@ class EvolutionConfig:
     bootstrap_n_resamples: int = 2000
 
     # Eval dataset
-    # 30 + 0.50 holdout_ratio (after the builder normalizes ratios summing
-    # to 1.25) yields ~12 holdout examples — bringing SE of the mean
-    # improvement down enough that the bootstrap lower bound is meaningful.
-    eval_dataset_size: int = 30
+    # Bumped 30→60 + val 0.25→0.40 after the bigger-valset spike on
+    # `obsidian` produced the framework's first deploy: bootstrap mean
+    # +0.018, knee-point band size 8 (was 2 at N=30). Below N_val≈18 the
+    # bootstrap CI swamps real lift and every evolution rejects regardless
+    # of the optimizer's actual quality. After builder normalizes ratios
+    # summing to 1.40: train ≈ 21, val ≈ 17, holdout ≈ 22. Knee-point ε
+    # automatically tightens to 1/17 ≈ 0.059.
+    eval_dataset_size: int = 60
     train_ratio: float = 0.5
-    val_ratio: float = 0.25
+    val_ratio: float = 0.40
     holdout_ratio: float = 0.50
     # Refuse to gate on a holdout smaller than this — the bootstrap lower
     # bound has very low resolution at tiny N. Raise eval_dataset_size or
