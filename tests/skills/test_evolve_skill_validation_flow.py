@@ -70,17 +70,25 @@ class TestHoldoutEvaluate:
             captured_metric = {}
 
             class _FakeEval:
-                def __init__(self, *, devset, metric, num_threads, return_all_scores,
+                def __init__(self, *, devset, metric, num_threads,
                              provide_traceback, max_errors):
                     captured_metric["fn"] = metric
                     self.devset = devset
 
                 def __call__(self, mod):
+                    # dspy.Evaluate returns EvaluationResult(score, results).
+                    # score is mean*100; results is list of (example, prediction, score).
                     scores = []
+                    results = []
                     for ex in self.devset:
                         pred = mod(task_input=getattr(ex, "task_input", ""))
-                        scores.append(captured_metric["fn"](ex, pred))
-                    return (sum(scores) / len(scores) * 100, scores)
+                        s = captured_metric["fn"](ex, pred)
+                        scores.append(s)
+                        results.append((ex, pred, s))
+                    return SimpleNamespace(
+                        score=sum(scores) / len(scores) * 100,
+                        results=results,
+                    )
 
             evaluate_cls.side_effect = _FakeEval
 
@@ -108,6 +116,7 @@ class TestStaticValidationShortCircuitsBeforeHoldout:
         # Manual reproduction of the static-failure branch's payload —
         # locks the schema so a future refactor can't silently drop fields.
         payload = {
+            "schema_version": "2",
             "decision": "reject",
             "reason": "static_constraint_failure",
             "failed_constraints": ["non_empty"],
@@ -115,6 +124,7 @@ class TestStaticValidationShortCircuitsBeforeHoldout:
         }
         path = _write_gate_decision(tmp_path, payload)
         loaded = json.loads(path.read_text())
+        assert loaded["schema_version"] == "2"
         assert loaded["reason"] == "static_constraint_failure"
         assert "non_empty" in loaded["failed_constraints"]
 
@@ -127,10 +137,11 @@ class TestGrowthGateDecisionSchema:
 
     def test_required_fields_present(self, tmp_path: Path):
         payload = {
+            "schema_version": "2",
             "decision": "reject",
             "reason": "growth_quality_gate",
+            "decision_rule_used": "dual_check",
             "growth_pct": 0.30,
-            "improvement": 0.005,
             "required_improvement": 0.030,
             "baseline_chars": 1000,
             "evolved_chars": 1300,
@@ -141,16 +152,34 @@ class TestGrowthGateDecisionSchema:
             "evolved_per_example": [0.51, 0.61, 0.71],
             "avg_baseline": 0.6,
             "avg_evolved": 0.605,
+            "bootstrap": {
+                "mean": 0.005,
+                "lower_bound": -0.020,
+                "upper_bound": 0.030,
+                "n_examples": 12,
+                "n_resamples": 2000,
+                "confidence": 0.90,
+            },
             "failed_constraints": ["growth_quality_gate"],
-            "messages": ["Growth +30.0% requires improvement ≥+0.030; got +0.005"],
+            "messages": ["..."],
         }
         path = _write_gate_decision(tmp_path, payload)
         loaded = json.loads(path.read_text())
 
         # Calibration script will rely on these keys.
         for required in (
-            "decision", "growth_pct", "improvement", "required_improvement",
+            "schema_version", "decision", "decision_rule_used",
+            "growth_pct", "required_improvement",
             "baseline_chars", "evolved_chars",
             "growth_free_threshold", "growth_quality_slope",
+            "bootstrap",
         ):
             assert required in loaded, f"missing {required}"
+        assert loaded["schema_version"] == "2"
+        for required_in_bootstrap in (
+            "mean", "lower_bound", "upper_bound", "n_examples",
+            "n_resamples", "confidence",
+        ):
+            assert required_in_bootstrap in loaded["bootstrap"], (
+                f"missing bootstrap.{required_in_bootstrap}"
+            )

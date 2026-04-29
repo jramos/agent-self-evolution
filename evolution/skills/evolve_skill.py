@@ -33,6 +33,7 @@ logging.basicConfig(
 )
 from evolution.core.dataset_builder import SyntheticDatasetBuilder, EvalDataset, GoldenDatasetLoader
 from evolution.core.external_importers import build_dataset_from_external
+from evolution.core.stats import paired_bootstrap
 from evolution.core.fitness import LLMJudge, make_skill_fitness_metric
 from evolution.core.constraints import ConstraintValidator
 from evolution.skills.budget_aware_proposer import BudgetAwareProposer
@@ -104,9 +105,8 @@ def _holdout_evaluate_with_metric(module, holdout_examples, metric, lm) -> tuple
     The GEPA-shaped metric takes 5 positional args; dspy.Evaluate calls
     metric(example, prediction). Wrap it.
 
-    Returns (mean_score, per_example_scores). Per-example scores get
-    persisted to gate_decision.json so future calibration runs have the
-    raw signal, not just the mean.
+    Returns (mean_score, per_example_scores). Per-example scores feed
+    the bootstrap CI in the deploy gate.
     """
     def two_arg_metric(example, prediction, *_args, **_kwargs):
         result = metric(example, prediction)
@@ -116,19 +116,15 @@ def _holdout_evaluate_with_metric(module, holdout_examples, metric, lm) -> tuple
         devset=holdout_examples,
         metric=two_arg_metric,
         num_threads=4,
-        return_all_scores=True,
         provide_traceback=True,
         max_errors=len(holdout_examples) * 100,
     )
     with dspy.context(lm=lm):
         result = evaluator(module)
-    # Evaluate.return_all_scores=True returns a tuple (mean*100, per_example_list).
-    if isinstance(result, tuple) and len(result) == 2:
-        mean100, per_example = result
-        return float(mean100) / 100.0, [float(s) for s in per_example]
-    # Fallback for older dspy: result.score is mean*100, result.results carries (ex, pred, score).
-    mean = float(getattr(result, "score", 0.0)) / 100.0
-    per_example = [float(s) for _, _, s in getattr(result, "results", [])]
+    # dspy.Evaluate returns EvaluationResult(score=mean*100, results=[(ex, pred, score), ...]).
+    # Per-example scores are in devset order (evaluate.py:179: zip(devset, results, strict=False)).
+    mean = float(result.score) / 100.0
+    per_example = [float(s) for _, _, s in result.results]
     return mean, per_example
 
 
@@ -406,12 +402,13 @@ def evolve(
         sys.exit(1)
 
     # ── 3. Validate constraints on baseline ─────────────────────────────
-    # Validate the full file (frontmatter + body) so the structure check
-    # has the markers it needs and the growth comparison stays symmetric
-    # with the evolved-side validation below.
+    # Static checks only — there's no quality signal for the baseline
+    # because there's nothing to compare it against. The growth-with-
+    # quality gate runs on the evolved skill once the holdout has
+    # produced an improvement signal (§9 below).
     console.print(f"\n[bold]Validating baseline constraints[/bold]")
     validator = ConstraintValidator(config)
-    baseline_constraints = validator.validate_all(skill["raw"], "skill")
+    baseline_constraints = validator.validate_static(skill["raw"], "skill")
     all_pass = True
     for c in baseline_constraints:
         icon = "✓" if c.passed else "✗"
@@ -448,11 +445,15 @@ def evolve(
     # Pass baseline + growth budget so the metric can append a [BUDGET]
     # line to feedback when GEPA hands us pred_trace, teaching the
     # reflection LM to prefer concise instructions.
+    # The metric's [BUDGET] feedback line targets growth_free_threshold —
+    # the zone where the deploy gate doesn't require quality justification.
+    # The optimizer learns to land there; growth above only deploys if
+    # the holdout improvement justifies it (validate_growth_with_quality).
     judge = LLMJudge(config)
     metric = make_skill_fitness_metric(
         judge,
         baseline_skill_text=skill["body"],
-        max_growth=config.max_prompt_growth,
+        max_growth=config.growth_free_threshold,
     )
 
     # Prepare DSPy examples
@@ -471,9 +472,10 @@ def evolve(
     # path, but gepa.api rejects it whenever the adapter (DspyAdapter
     # always) provides its own propose_new_texts (gepa/api.py:317-321).
     # This is the documented DSPy-side extension point instead.
+    # Same target as the metric: the no-quality-justification zone.
     proposer = BudgetAwareProposer(
         baseline_chars=len(skill["body"]),
-        max_growth=config.max_prompt_growth,
+        max_growth=config.growth_free_threshold,
     )
 
     optimized_module, optimizer_name = _build_optimizer_and_compile(
@@ -522,6 +524,7 @@ def evolve(
         failed_path = output_dir / "evolved_FAILED.md"
         failed_path.write_text(evolved_full)
         _write_gate_decision(output_dir, {
+            "schema_version": "2",
             "decision": "reject",
             "reason": "static_constraint_failure",
             "failed_constraints": [c.constraint_name for c in static_constraints if not c.passed],
@@ -548,10 +551,17 @@ def evolve(
     )
     improvement = avg_evolved - avg_baseline
 
-    # ── 9. Growth-with-quality gate ─────────────────────────────────────
+    # ── 9. Growth-with-quality gate (paired bootstrap on holdout) ──────
     console.print(f"\n[bold]Validating growth against holdout improvement[/bold]")
+    bootstrap = paired_bootstrap(
+        baseline_per_example,
+        evolved_per_example,
+        confidence=config.bootstrap_confidence,
+        n_resamples=config.bootstrap_n_resamples,
+        seed=config.seed,
+    )
     growth_constraints = validator.validate_growth_with_quality(
-        evolved_full, skill["raw"], improvement,
+        evolved_full, skill["raw"], bootstrap,
     )
     growth_pass = True
     for c in growth_constraints:
@@ -567,10 +577,11 @@ def evolve(
         config.growth_quality_slope * (growth_pct - config.growth_free_threshold),
     )
     decision_payload = {
+        "schema_version": "2",
         "decision": "deploy" if growth_pass else "reject",
-        "reason": "growth_quality_gate" if not growth_pass else "passed",
+        "reason": "passed" if growth_pass else "growth_quality_gate",
+        "decision_rule_used": "no_regression_only" if required_improvement == 0.0 else "dual_check",
         "growth_pct": growth_pct,
-        "improvement": improvement,
         "required_improvement": required_improvement,
         "baseline_chars": len(skill["raw"]),
         "evolved_chars": len(evolved_full),
@@ -581,6 +592,7 @@ def evolve(
         "evolved_per_example": evolved_per_example,
         "avg_baseline": avg_baseline,
         "avg_evolved": avg_evolved,
+        "bootstrap": bootstrap,
         "failed_constraints": [c.constraint_name for c in growth_constraints if not c.passed],
         "messages": [c.message for c in growth_constraints if not c.passed],
     }

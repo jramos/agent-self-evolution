@@ -27,38 +27,14 @@ class ConstraintValidator:
     def __init__(self, config: EvolutionConfig):
         self.config = config
 
-    def validate_all(
-        self,
-        artifact_text: str,
-        artifact_type: str,
-        baseline_text: Optional[str] = None,
-    ) -> list[ConstraintResult]:
-        """Back-compat shim. New code should call validate_static() and
-        validate_growth_with_quality() explicitly so the deploy decision
-        sees the holdout improvement signal. Without that signal the
-        legacy growth check (a single-ratio cliff) is the only thing
-        available — kept here so external callers don't break.
-        """
-        results = self.validate_static(artifact_text, artifact_type)
-
-        if baseline_text is not None:
-            # Fall back to the legacy ratio-only check when no quality
-            # signal is available. Continuous quality gate requires
-            # holdout_improvement; use validate_growth_with_quality() for
-            # that path.
-            results.append(self._check_growth_legacy(artifact_text, baseline_text))
-
-        return results
-
     def validate_static(
         self,
         artifact_text: str,
         artifact_type: str,
     ) -> list[ConstraintResult]:
         """Static checks that don't need a baseline or holdout signal:
-        size, non-empty, structural integrity. Run these first in the
-        evolve flow so a broken artifact short-circuits before we spend
-        judge-call budget on the holdout pass.
+        size, non-empty, structural integrity. Runs first in the evolve
+        flow so broken artifacts short-circuit before judge-call spend.
         """
         results = [self._check_size(artifact_text, artifact_type)]
         results.append(self._check_non_empty(artifact_text))
@@ -70,18 +46,23 @@ class ConstraintValidator:
         self,
         artifact_text: str,
         baseline_text: str,
-        holdout_improvement: float,
+        bootstrap_result: dict,
     ) -> list[ConstraintResult]:
-        """Quality-gated growth check + absolute-char ceiling.
+        """Bootstrap-gated growth check + absolute-char ceiling.
 
-        The growth check uses a continuous curve where required holdout
-        improvement scales linearly with growth above the free threshold.
-        The absolute-char ceiling is independent of growth — applies even
-        when the curve would pass — to backstop runaway absolute size.
+        bootstrap_result is the dict returned by
+        evolution.core.stats.paired_bootstrap on the per-example
+        holdout improvement scores. The growth check uses a continuous
+        curve where required holdout improvement scales linearly with
+        growth above the free threshold; the gate passes when both the
+        sample mean meets the requirement AND the bootstrap lower bound
+        is positive (no-regression). The absolute-char ceiling is
+        independent of growth — applies even when the curve passes — to
+        backstop runaway absolute size.
         """
         return [
             self._check_growth_with_quality_gate(
-                artifact_text, baseline_text, holdout_improvement
+                artifact_text, baseline_text, bootstrap_result
             ),
             self._check_absolute_chars(artifact_text),
         ]
@@ -150,66 +131,87 @@ class ConstraintValidator:
                 message=f"Size exceeded: {size}/{limit} chars ({size - limit} over)",
             )
 
-    def _check_growth_legacy(self, text: str, baseline: str) -> ConstraintResult:
-        """Single-ratio cliff for the back-compat validate_all path.
-
-        Used only when no holdout improvement signal is available. The
-        primary deploy gate is _check_growth_with_quality_gate.
-        """
-        growth = (len(text) - len(baseline)) / max(1, len(baseline))
-        max_growth = self.config.max_prompt_growth
-
-        if growth <= max_growth:
-            return ConstraintResult(
-                passed=True,
-                constraint_name="growth_limit",
-                message=f"Growth OK: {growth:+.1%} (max {max_growth:+.1%}, no quality signal available)",
-            )
-        return ConstraintResult(
-            passed=False,
-            constraint_name="growth_limit",
-            message=f"Growth exceeded: {growth:+.1%} (max {max_growth:+.1%}, no quality signal available)",
-        )
-
     def _check_growth_with_quality_gate(
         self,
         text: str,
         baseline: str,
-        holdout_improvement: float,
+        bootstrap_result: dict,
     ) -> ConstraintResult:
-        """Continuous quality-gated growth check.
+        """Bootstrap-gated quality check on the holdout improvement.
 
-        required_improvement(growth) = max(0, slope * (growth - growth_free))
-        Pass when actual holdout improvement >= required.
+        Required improvement scales linearly with growth above the free
+        threshold:
+            required_improvement(growth) = max(0, slope * (growth - growth_free))
+
+        Decision rule:
+          - When required > 0: pass when both the sample mean meets the
+            requirement AND the bootstrap lower bound is positive
+            (Statsig "guardrail" pattern: effect size + no-regression).
+          - When required == 0 (growth ≤ free threshold): pass on
+            mean ≥ 0 alone. The optimizer doesn't need to justify a
+            decrease in length, only that the candidate doesn't regress.
 
         Negative growth (the LM produced a shorter artifact) always
-        passes because shrinkage doesn't need quality justification.
+        falls into the required==0 branch.
         """
         baseline_len = len(baseline)
-        if baseline_len == 0:
-            growth = 0.0
-        else:
-            growth = (len(text) - baseline_len) / baseline_len
+        growth = (len(text) - baseline_len) / baseline_len if baseline_len else 0.0
 
         free = self.config.growth_free_threshold
         slope = self.config.growth_quality_slope
         required = max(0.0, slope * (growth - free))
 
-        if holdout_improvement >= required:
+        mean = bootstrap_result["mean"]
+        lower = bootstrap_result["lower_bound"]
+        n = bootstrap_result["n_examples"]
+        conf = bootstrap_result["confidence"]
+
+        if required == 0.0:
+            # No-regression branch: just confirm we didn't break things.
+            if mean >= 0.0:
+                return ConstraintResult(
+                    passed=True,
+                    constraint_name="growth_quality_gate",
+                    message=(
+                        f"Growth {growth:+.1%}: no improvement required; "
+                        f"mean {mean:+.3f} ≥ 0 (n={n})"
+                    ),
+                )
+            return ConstraintResult(
+                passed=False,
+                constraint_name="growth_quality_gate",
+                message=(
+                    f"Growth {growth:+.1%}: regression — mean {mean:+.3f} < 0 (n={n})"
+                ),
+            )
+
+        # Dual check: effect size AND no-regression CI.
+        mean_ok = mean >= required
+        lower_ok = lower > 0.0
+
+        if mean_ok and lower_ok:
             return ConstraintResult(
                 passed=True,
                 constraint_name="growth_quality_gate",
                 message=(
-                    f"Growth {growth:+.1%} OK: holdout improvement "
-                    f"{holdout_improvement:+.3f} ≥ required {required:+.3f}"
+                    f"Growth {growth:+.1%}: mean {mean:+.3f} ≥ required {required:+.3f}; "
+                    f"lower-bound {lower:+.3f} > 0 (n={n}, conf={conf:.2f})"
+                ),
+            )
+        if not mean_ok:
+            return ConstraintResult(
+                passed=False,
+                constraint_name="growth_quality_gate",
+                message=(
+                    f"Growth {growth:+.1%}: mean {mean:+.3f} < required {required:+.3f} (n={n})"
                 ),
             )
         return ConstraintResult(
             passed=False,
             constraint_name="growth_quality_gate",
             message=(
-                f"Growth {growth:+.1%} requires improvement ≥{required:+.3f}; "
-                f"got {holdout_improvement:+.3f}"
+                f"Growth {growth:+.1%}: lower-bound {lower:+.3f} ≤ 0 "
+                f"(regression risk; n={n}, conf={conf:.2f})"
             ),
         )
 
