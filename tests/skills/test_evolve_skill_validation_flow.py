@@ -16,10 +16,12 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from evolution.skills.evolve_skill import (
+    _dataset_payload,
     _holdout_evaluate_with_metric,
     _knee_point_payload,
     _write_gate_decision,
 )
+from evolution.core.dataset_builder import EvalDataset, EvalExample
 from evolution.skills.knee_point import CandidatePick
 
 
@@ -182,6 +184,13 @@ class TestGrowthGateDecisionSchema:
                     {"idx": 12, "val_score": 0.95, "body_chars": 412},
                 ],
             },
+            "dataset": {
+                "size_total": 60,
+                "size_train": 21,
+                "size_val": 17,
+                "size_holdout": 22,
+                "sources": {"synthetic": 60},
+            },
         }
         path = _write_gate_decision(tmp_path, payload)
         loaded = json.loads(path.read_text())
@@ -192,7 +201,7 @@ class TestGrowthGateDecisionSchema:
             "growth_pct", "required_improvement",
             "baseline_chars", "evolved_chars",
             "growth_free_threshold", "growth_quality_slope",
-            "bootstrap", "knee_point",
+            "bootstrap", "knee_point", "dataset",
         ):
             assert required in loaded, f"missing {required}"
         assert loaded["schema_version"] == "3"
@@ -211,6 +220,12 @@ class TestGrowthGateDecisionSchema:
         ):
             assert required_in_knee in loaded["knee_point"], (
                 f"missing knee_point.{required_in_knee}"
+            )
+        for required_in_dataset in (
+            "size_total", "size_train", "size_val", "size_holdout", "sources",
+        ):
+            assert required_in_dataset in loaded["dataset"], (
+                f"missing dataset.{required_in_dataset}"
             )
 
 
@@ -252,3 +267,58 @@ class TestKneePointPayloadHelper:
         assert payload["band_roster"][0]["idx"] == 5
         # Round-trips JSON cleanly (no non-serializable objects sneaked in).
         json.dumps(payload)
+
+
+class TestDatasetPayloadHelper:
+    """`_dataset_payload` is the single producer of the dataset block.
+
+    The per-source counter is the calibration substrate for "is mined-source
+    dominance correlated with deploy rate?" — keep it stable across PRs.
+    """
+
+    @staticmethod
+    def _ex(source: str) -> EvalExample:
+        return EvalExample(
+            task_input="t", expected_behavior="b", source=source,
+        )
+
+    def test_records_split_sizes(self):
+        ds = EvalDataset(
+            train=[self._ex("synthetic")] * 21,
+            val=[self._ex("synthetic")] * 17,
+            holdout=[self._ex("synthetic")] * 22,
+        )
+        payload = _dataset_payload(ds)
+        assert payload["size_total"] == 60
+        assert payload["size_train"] == 21
+        assert payload["size_val"] == 17
+        assert payload["size_holdout"] == 22
+
+    def test_buckets_per_source(self):
+        ds = EvalDataset(
+            train=[self._ex("synthetic")] * 10 + [self._ex("sessiondb_claude_code")] * 5,
+            val=[self._ex("synthetic")] * 5,
+            holdout=[self._ex("golden")] * 3,
+        )
+        payload = _dataset_payload(ds)
+        assert payload["sources"] == {
+            "synthetic": 15,
+            "sessiondb_claude_code": 5,
+            "golden": 3,
+        }
+
+    def test_unknown_source_bucketed_as_unknown(self):
+        # Defensive: an EvalExample with empty/None source shouldn't crash
+        # the calibration JSON.
+        ex = EvalExample(task_input="t", expected_behavior="b", source="")
+        ds = EvalDataset(train=[ex], val=[], holdout=[])
+        payload = _dataset_payload(ds)
+        assert payload["sources"] == {"unknown": 1}
+
+    def test_payload_round_trips_json(self):
+        ds = EvalDataset(
+            train=[self._ex("synthetic")] * 2,
+            val=[self._ex("synthetic")] * 1,
+            holdout=[self._ex("synthetic")] * 1,
+        )
+        json.dumps(_dataset_payload(ds))
