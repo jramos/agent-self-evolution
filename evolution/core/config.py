@@ -33,23 +33,45 @@ class EvolutionConfig:
     length_penalty_weight: float = 0.0
 
     # Constraints
-    max_skill_size: int = 15_000  # 15KB default
+    max_skill_size: int = 15_000  # 15KB hard ceiling on absolute size (deployment-cost backstop)
     max_tool_desc_size: int = 500  # chars
     max_param_desc_size: int = 200  # chars
-    # Interim ceiling raised from 0.20 → 0.30 to accommodate the LM's
-    # observed "minimum viable documentation" floor for procedural skills
-    # (PR #4: +28.4%; PR #5: +24.2% on obsidian). The +20% bar was an
-    # arbitrary early guardrail, not a calibrated value. A proper
-    # quality-gated tiered threshold (growth tolerated in proportion to
-    # measurable holdout gain) is the next-PR design; this is a band-aid
-    # so deployable evolved skills aren't blocked by a magic number.
+    # Legacy field consulted only by the back-compat ConstraintValidator.validate_all()
+    # path that lacks holdout_improvement context. The primary deploy gate is now
+    # the continuous quality-gated curve (growth_free_threshold + growth_quality_slope
+    # below) consumed by validate_growth_with_quality(...).
     max_prompt_growth: float = 0.30
+    # Continuous quality-gated growth curve: required holdout improvement to
+    # justify any growth above growth_free_threshold scales linearly with slope.
+    #     min_improvement(growth) = max(0, slope * (growth - growth_free_threshold))
+    # Defaults (growth_free=0.20, slope=0.30) are calibrated against PR #5's
+    # obsidian run (+24.2% growth, ~+0.07 expected holdout improvement); see the
+    # full doc block above growth_free_threshold for rationale and recalibration
+    # procedure once we have ≥10 deployed skills' (growth, improvement) pairs.
+    # Continuous (vs. tiered step function) chosen because the prompt-optimization
+    # literature has no precedent for tiered deploy gates and tiers create
+    # boundary-gaming pathology (grow to 49.9% to dodge the next tier).
+    growth_free_threshold: float = 0.20
+    growth_quality_slope: float = 0.30
+    # Hard char ceiling on the evolved artifact, applied independently of
+    # the growth curve. Escape hatch for short baselines that legitimately
+    # need expansion (a 200-char baseline that grows to 1500 to be useful
+    # is +650% growth, well past any sane curve, but only 1500 chars
+    # absolute — fine to deploy).
+    max_absolute_chars: int = 5000
 
     # Eval dataset
     eval_dataset_size: int = 20  # Total examples to generate
     train_ratio: float = 0.5
     val_ratio: float = 0.25
-    holdout_ratio: float = 0.25
+    # Bumped 0.25 → 0.40 in PR #6 to mitigate sampling noise on the holdout
+    # improvement delta consumed by the quality gate. With eval_dataset_size=20
+    # this gives 8 holdout examples (was 5); judge-call cost ~+$0.005/run.
+    holdout_ratio: float = 0.40
+    # Refuse to gate on a holdout smaller than this — the improvement delta
+    # is too noisy to trust for deploy decisions. Raise eval_dataset_size or
+    # holdout_ratio rather than override this.
+    min_holdout_size: int = 6
 
     # Benchmark gating
     run_pytest: bool = True
