@@ -830,11 +830,20 @@ def evolve(
     type=int,
     help="Advanced: number of bootstrap resamples (default 2000).",
 )
+@click.option(
+    "--knee-point-epsilon",
+    default=None,
+    type=float,
+    help="Advanced: ε tolerance for knee-point Pareto selection. Default = "
+    "1/n_val (one valset example's worth of disagreement). Override only when "
+    "you have a calibrated reason — random tightening narrows the band and "
+    "biases selection back toward the GEPA default.",
+)
 def main(skill, iterations, eval_source, dataset_path, optimizer_model, reflection_model,
          eval_model, hermes_repo, run_tests, dry_run, seed, budget, no_fallback,
          length_penalty_weight, quality_gate, growth_free_threshold,
          growth_quality_slope, max_absolute_chars, bootstrap_confidence,
-         bootstrap_resamples):
+         bootstrap_resamples, knee_point_epsilon):
     """Evolve a Hermes Agent skill using DSPy + GEPA optimization."""
     evolve(
         skill_name=skill,
@@ -857,6 +866,7 @@ def main(skill, iterations, eval_source, dataset_path, optimizer_model, reflecti
         max_absolute_chars=max_absolute_chars,
         bootstrap_confidence=bootstrap_confidence,
         bootstrap_n_resamples=bootstrap_resamples,
+        knee_point_epsilon=knee_point_epsilon,
     )
 
 
