@@ -18,9 +18,19 @@ class EvolutionConfig:
     population_size: int = 5
 
     # LLM configuration
-    optimizer_model: str = "openai/gpt-4.1"  # Model for GEPA reflections
+    optimizer_model: str = "openai/gpt-4.1"  # Default for the eval LM bound to dspy.configure
+    # Reflection LM (the model GEPA's instruction proposer calls). Defaults
+    # to None → falls back to optimizer_model. Separated because reflection
+    # is the only place where model strength meaningfully changes outcomes
+    # (Decagon's blog: gpt-4o-mini "failed completely" as reflection LM).
+    # CLI default in evolve_skill.py overrides this to gpt-5-mini.
+    reflection_model: Optional[str] = None
     eval_model: str = "openai/gpt-4.1-mini"  # Model for LLM-as-judge scoring
     judge_model: str = "openai/gpt-4.1"  # Model for dataset generation
+    # Forward-wired for an upcoming custom-DspyAdapter PR that adds a
+    # score-side λ-penalty for instruction length. Currently unread by
+    # the metric; non-zero values are ignored until that PR lands.
+    length_penalty_weight: float = 0.0
 
     # Constraints
     max_skill_size: int = 15_000  # 15KB default
