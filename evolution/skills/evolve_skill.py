@@ -302,6 +302,8 @@ def evolve(
     growth_free_threshold: Optional[float] = None,
     growth_quality_slope: Optional[float] = None,
     max_absolute_chars: Optional[int] = None,
+    bootstrap_confidence: Optional[float] = None,
+    bootstrap_n_resamples: Optional[int] = None,
 ):
     """Main evolution function — orchestrates the full optimization loop."""
 
@@ -311,7 +313,7 @@ def evolve(
     resolved_slope = growth_quality_slope if growth_quality_slope is not None else preset["growth_quality_slope"]
     resolved_abs = max_absolute_chars if max_absolute_chars is not None else preset["max_absolute_chars"]
 
-    config = EvolutionConfig(
+    config_kwargs = dict(
         iterations=iterations,
         optimizer_model=optimizer_model,
         reflection_model=reflection_model,
@@ -324,6 +326,11 @@ def evolve(
         growth_quality_slope=resolved_slope,
         max_absolute_chars=int(resolved_abs),
     )
+    if bootstrap_confidence is not None:
+        config_kwargs["bootstrap_confidence"] = bootstrap_confidence
+    if bootstrap_n_resamples is not None:
+        config_kwargs["bootstrap_n_resamples"] = bootstrap_n_resamples
+    config = EvolutionConfig(**config_kwargs)
     if hermes_repo:
         config.hermes_agent_path = Path(hermes_repo)
 
@@ -750,10 +757,24 @@ def evolve(
     help="Advanced: override the preset's max_absolute_chars (hard char "
     "ceiling on the evolved artifact, independent of growth %).",
 )
+@click.option(
+    "--bootstrap-confidence",
+    default=None,
+    type=float,
+    help="Advanced: confidence level for the paired-bootstrap CI on the "
+    "holdout improvement (default 0.90).",
+)
+@click.option(
+    "--bootstrap-resamples",
+    default=None,
+    type=int,
+    help="Advanced: number of bootstrap resamples (default 2000).",
+)
 def main(skill, iterations, eval_source, dataset_path, optimizer_model, reflection_model,
          eval_model, hermes_repo, run_tests, dry_run, seed, budget, no_fallback,
          length_penalty_weight, quality_gate, growth_free_threshold,
-         growth_quality_slope, max_absolute_chars):
+         growth_quality_slope, max_absolute_chars, bootstrap_confidence,
+         bootstrap_resamples):
     """Evolve a Hermes Agent skill using DSPy + GEPA optimization."""
     evolve(
         skill_name=skill,
@@ -774,6 +795,8 @@ def main(skill, iterations, eval_source, dataset_path, optimizer_model, reflecti
         growth_free_threshold=growth_free_threshold,
         growth_quality_slope=growth_quality_slope,
         max_absolute_chars=max_absolute_chars,
+        bootstrap_confidence=bootstrap_confidence,
+        bootstrap_n_resamples=bootstrap_resamples,
     )
 
 
