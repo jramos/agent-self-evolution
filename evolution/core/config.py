@@ -41,16 +41,47 @@ class EvolutionConfig:
     # the continuous quality-gated curve (growth_free_threshold + growth_quality_slope
     # below) consumed by validate_growth_with_quality(...).
     max_prompt_growth: float = 0.30
-    # Continuous quality-gated growth curve: required holdout improvement to
-    # justify any growth above growth_free_threshold scales linearly with slope.
-    #     min_improvement(growth) = max(0, slope * (growth - growth_free_threshold))
-    # Defaults (growth_free=0.20, slope=0.30) are calibrated against PR #5's
-    # obsidian run (+24.2% growth, ~+0.07 expected holdout improvement); see the
-    # full doc block above growth_free_threshold for rationale and recalibration
-    # procedure once we have ≥10 deployed skills' (growth, improvement) pairs.
-    # Continuous (vs. tiered step function) chosen because the prompt-optimization
-    # literature has no precedent for tiered deploy gates and tiers create
-    # boundary-gaming pathology (grow to 49.9% to dodge the next tier).
+    # Continuous quality-gated growth curve.
+    #
+    # Shape:  min_improvement(growth) = max(0, slope * (growth - growth_free))
+    #         pass when actual holdout improvement >= min_improvement
+    #
+    # Why a curve, not a cliff: PRs #2-#5 progressively replaced an
+    # arbitrary +20% (later +30%) ratio gate with a quality-aware design.
+    # The cliff has two failure modes a curve fixes: (a) it ignores
+    # quality entirely — a +29% bloat with negative improvement passes
+    # alongside a +29% real rewrite, (b) it has a discrete boundary so
+    # the optimizer can grow to 49.9% to dodge the next tier's higher
+    # floor (boundary-gaming).
+    #
+    # Why continuous, not tiered: the prompt-optimization literature
+    # survey for this PR found NO published precedent for tiered (growth
+    # → required improvement) step-function deploy gates. The closest
+    # legitimate cousins — knee-point Pareto selection (Springer ACKP),
+    # length-controlled win rate (AlpacaEval 2 GLM debias), λ-penalty
+    # reward shaping (OPRO/Promptomatix) — are all continuous. Continuous
+    # also has fewer parameters (3 vs. an N-tier list) and is easier to
+    # reason about ("for each extra 10% growth, demand 3pp more
+    # improvement").
+    #
+    # How to recalibrate: each run writes a structured gate_decision.json
+    # to output/<skill>/<timestamp>/. Once we have ≥10 deployed skills'
+    # (growth, improvement) pairs:
+    #     jq -s '[.[] | select(.decision == "deploy") | {growth_pct, improvement}]' \
+    #         output/*/*/gate_decision.json > calibration.json
+    # Then fit a regression of `improvement` on `growth_pct` over the
+    # deployed set, set growth_free_threshold to the intercept where
+    # improvement crosses 0, set growth_quality_slope to the coefficient.
+    # The defaults below are interim — calibrated against PR #5's
+    # obsidian run only (+24.2% growth, ~+0.05-0.10 expected holdout
+    # improvement on a 1.0-valset run).
+    #
+    # Coordination with the deferred λ-penalty PR: when both ship, the
+    # penalty steers GEPA's selection toward concise candidates (in the
+    # optimization signal); this gate decides whether to deploy the
+    # candidate (in the deployment signal). Different layers — same
+    # principle, mutually reinforcing. Calibrating both together against
+    # the same gate_decision.json corpus avoids double-counting.
     growth_free_threshold: float = 0.20
     growth_quality_slope: float = 0.30
     # Hard char ceiling on the evolved artifact, applied independently of

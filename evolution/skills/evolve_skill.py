@@ -49,6 +49,42 @@ console = Console()
 _BUDGET_BY_ITERATIONS = {1: "light", 2: "medium", 3: "heavy"}
 
 
+# Quality-gate presets bundle the three curve parameters into named
+# operating modes so users don't need to set each independently. Tuned
+# from PR data points; "default" is calibrated against PR #5 obsidian
+# (+24.2% growth, ~+0.07 expected improvement).
+_QUALITY_GATE_PRESETS: dict[str, dict[str, float]] = {
+    "strict": {
+        # Tighter free threshold + steeper curve + lower abs ceiling.
+        # Use when shipping cost is dominated by inference per-token.
+        "growth_free_threshold": 0.10,
+        "growth_quality_slope": 0.50,
+        "max_absolute_chars": 3000,
+    },
+    "default": {
+        "growth_free_threshold": 0.20,
+        "growth_quality_slope": 0.30,
+        "max_absolute_chars": 5000,
+    },
+    "lenient": {
+        # Looser everywhere — useful early in evolution iteration when
+        # the LM judge metric or holdout dataset is noisy and we want
+        # to surface genuinely-improved candidates that strict would reject.
+        "growth_free_threshold": 0.30,
+        "growth_quality_slope": 0.20,
+        "max_absolute_chars": 8000,
+    },
+    "off": {
+        # Effectively disable the gate by setting the free threshold
+        # higher than any realistic growth. Static checks (size,
+        # non_empty, structure) still apply.
+        "growth_free_threshold": 100.0,
+        "growth_quality_slope": 0.0,
+        "max_absolute_chars": 100_000,
+    },
+}
+
+
 def _write_gate_decision(output_dir: Path, decision: dict[str, Any]) -> Path:
     """Persist the deploy-gate's structured decision for future calibration.
 
@@ -266,8 +302,18 @@ def evolve(
     no_fallback: bool = False,
     reflection_model: Optional[str] = None,
     length_penalty_weight: float = 0.0,
+    quality_gate: str = "default",
+    growth_free_threshold: Optional[float] = None,
+    growth_quality_slope: Optional[float] = None,
+    max_absolute_chars: Optional[int] = None,
 ):
     """Main evolution function — orchestrates the full optimization loop."""
+
+    # Resolve quality-gate preset; explicit overrides win.
+    preset = _QUALITY_GATE_PRESETS[quality_gate]
+    resolved_free = growth_free_threshold if growth_free_threshold is not None else preset["growth_free_threshold"]
+    resolved_slope = growth_quality_slope if growth_quality_slope is not None else preset["growth_quality_slope"]
+    resolved_abs = max_absolute_chars if max_absolute_chars is not None else preset["max_absolute_chars"]
 
     config = EvolutionConfig(
         iterations=iterations,
@@ -278,6 +324,9 @@ def evolve(
         run_pytest=run_tests,
         seed=seed,
         length_penalty_weight=length_penalty_weight,
+        growth_free_threshold=resolved_free,
+        growth_quality_slope=resolved_slope,
+        max_absolute_chars=int(resolved_abs),
     )
     if hermes_repo:
         config.hermes_agent_path = Path(hermes_repo)
@@ -659,9 +708,40 @@ def evolve(
     help="Forward-wired for an upcoming custom-DspyAdapter PR that adds a "
     "score-side λ-penalty for instruction length. Currently a no-op.",
 )
+@click.option(
+    "--quality-gate",
+    default="default",
+    type=click.Choice(["strict", "default", "lenient", "off"]),
+    help="Preset for the deploy gate's growth-vs-improvement curve. "
+    "strict=(0.10/0.50/3000), default=(0.20/0.30/5000), "
+    "lenient=(0.30/0.20/8000), off=disabled (static checks only).",
+)
+@click.option(
+    "--growth-free-threshold",
+    default=None,
+    type=float,
+    help="Advanced: override the preset's growth_free_threshold (growth "
+    "below which no improvement justification is required).",
+)
+@click.option(
+    "--growth-quality-slope",
+    default=None,
+    type=float,
+    help="Advanced: override the preset's growth_quality_slope (linear "
+    "rate at which required holdout improvement scales with growth above "
+    "the free threshold).",
+)
+@click.option(
+    "--max-absolute-chars",
+    default=None,
+    type=int,
+    help="Advanced: override the preset's max_absolute_chars (hard char "
+    "ceiling on the evolved artifact, independent of growth %).",
+)
 def main(skill, iterations, eval_source, dataset_path, optimizer_model, reflection_model,
          eval_model, hermes_repo, run_tests, dry_run, seed, budget, no_fallback,
-         length_penalty_weight):
+         length_penalty_weight, quality_gate, growth_free_threshold,
+         growth_quality_slope, max_absolute_chars):
     """Evolve a Hermes Agent skill using DSPy + GEPA optimization."""
     evolve(
         skill_name=skill,
@@ -678,6 +758,10 @@ def main(skill, iterations, eval_source, dataset_path, optimizer_model, reflecti
         budget=budget,
         no_fallback=no_fallback,
         length_penalty_weight=length_penalty_weight,
+        quality_gate=quality_gate,
+        growth_free_threshold=growth_free_threshold,
+        growth_quality_slope=growth_quality_slope,
+        max_absolute_chars=max_absolute_chars,
     )
 
 
