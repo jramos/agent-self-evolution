@@ -10,19 +10,16 @@ Works on any agent framework that emits `SKILL.md` markdown files. Hermes Agent 
 
 ## How It Works
 
-```
-Read current skill/prompt/tool ──► Generate eval dataset
-                                        │
-                                        ▼
-                                   GEPA Optimizer ◄── Execution traces
-                                        │                    ▲
-                                        ▼                    │
-                                   Candidate variants ──► Evaluate
-                                        │
-                                   Constraint gates (tests, size limits, benchmarks)
-                                        │
-                                        ▼
-                                   Best variant ──► PR against the source repo
+```mermaid
+flowchart TD
+    A[Read current skill/prompt/tool] --> B[Generate eval dataset]
+    B --> C[GEPA Optimizer]
+    C --> D[Candidate variants]
+    D --> E[Evaluate]
+    E -. Execution traces .-> C
+    E --> F["Constraint gates<br/>(tests, size limits, benchmarks)"]
+    F --> G[Best variant]
+    G --> H[PR against the source repo]
 ```
 
 GEPA reads execution traces to understand *why* things fail (not just that they failed), then proposes targeted improvements. ICLR 2026 Oral, MIT licensed.
