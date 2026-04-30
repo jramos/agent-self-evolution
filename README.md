@@ -6,7 +6,7 @@ Agent Self-Evolution uses DSPy + GEPA (Genetic-Pareto Prompt Evolution) to autom
 
 **No GPU training required.** Everything operates via API calls — mutating text, evaluating results, and selecting the best variants. ~$2-10 per optimization run.
 
-Works on any agent framework that emits `SKILL.md` markdown files. Hermes Agent skills are the original target; Claude Code skills (and any other agent's `<dir>/<skill>/SKILL.md` layout) are also supported via a pluggable skill-source abstraction.
+Works on any agent framework that emits `SKILL.md` markdown files. [Hermes Agent](https://github.com/NousResearch/hermes-agent) skills are the original target; Claude Code skills (and any other agent's `<dir>/<skill>/SKILL.md` layout) are also supported via a pluggable skill-source abstraction.
 
 ## How It Works
 
