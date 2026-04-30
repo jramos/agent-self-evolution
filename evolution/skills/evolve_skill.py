@@ -36,6 +36,10 @@ from evolution.core.external_importers import build_dataset_from_external
 from evolution.core.stats import paired_bootstrap
 from evolution.core.fitness import LLMJudge, make_skill_fitness_metric
 from evolution.core.constraints import ConstraintValidator
+from evolution.core.lm_timing_callback import (
+    LMTimingCallback,
+    register_litellm_failure_callback,
+)
 from evolution.skills.budget_aware_proposer import BudgetAwareProposer
 from evolution.skills.skill_module import (
     SkillModule,
@@ -214,6 +218,13 @@ def _default_gepa_runner(
             temperature=1.0,
             max_tokens=32000,
             cache=False,
+            # Bound each attempt at 300s (3x max observed legit gpt-5-mini
+            # call of 103s in the multi-seed spike). num_retries=2 caps
+            # worst-case wall at 10min before raising — preferable to a
+            # silent 30-80min stall. Raised TimeoutError is caught at
+            # _build_optimizer_and_compile and triggers MIPROv2 fallback.
+            request_timeout=300,
+            num_retries=2,
         ),
         seed=seed,
         # track_stats=True attaches DspyGEPAResult to optimized_module's
@@ -403,6 +414,25 @@ def evolve(
         console.print(f"  Would validate constraints and create PR")
         return
 
+    # Per-run output dir + log file. Created up-front (not after GEPA) so
+    # the FileHandler captures dataset-gen LM calls + GEPA reflection +
+    # holdout eval — useful for diagnosing background-run stalls post-hoc
+    # without re-attaching a TTY. Reused later for evolved_skill.md and
+    # gate_decision.json (don't re-create downstream).
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    output_dir = Path("output") / skill_name / timestamp
+    output_dir.mkdir(parents=True, exist_ok=True)
+    run_log_path = output_dir / "run.log"
+    file_handler = logging.FileHandler(run_log_path)
+    file_handler.setLevel(logging.INFO)
+    file_handler.setFormatter(logging.Formatter(
+        "%(asctime)s %(levelname)s %(name)s: %(message)s",
+        datefmt="%Y/%m/%d %H:%M:%S",
+    ))
+    logging.getLogger().addHandler(file_handler)
+    register_litellm_failure_callback()
+    console.print(f"  Run log: {run_log_path}")
+
     # ── 2. Build or load evaluation dataset ─────────────────────────────
     console.print(f"\n[bold]Building evaluation dataset[/bold] (source: {eval_source})")
 
@@ -481,14 +511,21 @@ def evolve(
     console.print(f"  Optimizer model: {optimizer_model}")
     console.print(f"  Eval model: {eval_model}")
 
-    # Configure DSPy
-    lm = dspy.LM(eval_model)
+    # Configure DSPy. request_timeout=60 = 6x P99 of slowest observed
+    # gpt-4.1-mini call (9.8s in the multi-seed spike); 5x60s = 5min worst
+    # case before raising. callbacks=[LMTimingCallback()] makes every LM
+    # call visible (start/end + heartbeats at 60s/180s/300s/600s).
+    lm = dspy.LM(eval_model, request_timeout=60, num_retries=5)
     # warn_on_type_mismatch gates DSPy's typeguard validation of
     # InputField values against their declared annotations. Several
     # signatures in this codebase pass empty/None into `str` inputs
     # (e.g. assistant_response in RelevanceFilter when an event has no
     # response yet) — fine, but spams a warning per call.
-    dspy.configure(lm=lm, warn_on_type_mismatch=False)
+    dspy.configure(
+        lm=lm,
+        warn_on_type_mismatch=False,
+        callbacks=[LMTimingCallback()],
+    )
 
     # Create the baseline skill module
     baseline_module = SkillModule(skill["body"])
@@ -586,11 +623,9 @@ def evolve(
     evolved_body = optimized_module.skill_text
     evolved_full = reassemble_skill(skill["frontmatter"], evolved_body)
 
-    # Per-run output dir (created here so failure paths can also write
-    # to a timestamped subdir rather than clobbering evolved_FAILED.md).
-    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    output_dir = Path("output") / skill_name / timestamp
-    output_dir.mkdir(parents=True, exist_ok=True)
+    # output_dir + timestamp were created up-front (right after dry_run
+    # check) so the per-run FileHandler captures all LM telemetry from
+    # dataset gen onward. Reuse them here.
 
     # ── 7. Static constraints (size, structure, non-empty) ──────────────
     # Fail-fast on broken artifacts before spending judge-call budget on

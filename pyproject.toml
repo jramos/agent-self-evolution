@@ -16,6 +16,11 @@ keywords = ["llm", "optimization", "evolution", "dspy", "gepa", "hermes", "agent
 
 dependencies = [
     "dspy>=3.2.0,<3.3",
+    # Pinned because lm_timing_callback.py uses litellm.failure_callback
+    # (a module-level list mutation API) and dspy.LM forwards
+    # request_timeout/num_retries to litellm. Both are stable at 1.82
+    # but not marked as public, so a future minor bump could move them.
+    "litellm>=1.82.0,<2.0",
     "openai>=1.0.0",
     "click>=8.0",
     "rich>=13.0",

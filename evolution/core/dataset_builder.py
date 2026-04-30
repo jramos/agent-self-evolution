@@ -129,7 +129,9 @@ class SyntheticDatasetBuilder:
         # headroom; gpt-4.1 supports 128K context so well within model
         # limits. The failure mode without this is silent corruption of
         # generated JSON → JSONDecodeError → process exit.
-        lm = dspy.LM(self.config.judge_model, temperature=0.7, max_tokens=16000)
+        # request_timeout=120 because dataset gen is bursty (single call
+        # producing 60 examples can run long); 5x120s = 10min worst case.
+        lm = dspy.LM(self.config.judge_model, temperature=0.7, max_tokens=16000, request_timeout=120, num_retries=5)
 
         with dspy.context(lm=lm):
             result = self.generator(
