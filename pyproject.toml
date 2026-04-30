@@ -3,16 +3,16 @@ requires = ["setuptools>=68.0", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "hermes-agent-self-evolution"
+name = "agent-self-evolution"
 version = "0.1.0"
-description = "Evolutionary self-improvement for Hermes Agent — optimize skills, prompts, tool descriptions, and code using DSPy + GEPA"
+description = "Evolutionary self-improvement for agent skills — optimize skills, prompts, tool descriptions, and code using DSPy + GEPA"
 readme = "README.md"
 license = {text = "MIT"}
 requires-python = ">=3.10"
 authors = [
     {name = "Nous Research", email = "team@nousresearch.com"},
 ]
-keywords = ["llm", "optimization", "evolution", "dspy", "gepa", "hermes", "agent"]
+keywords = ["llm", "optimization", "evolution", "dspy", "gepa", "agent", "skill"]
 
 dependencies = [
     "dspy>=3.2.0,<3.3",
@@ -40,8 +40,8 @@ darwinian = [
 ]
 
 [project.urls]
-Homepage = "https://github.com/NousResearch/hermes-agent-self-evolution"
-Repository = "https://github.com/NousResearch/hermes-agent-self-evolution"
+Homepage = "https://github.com/jramos/agent-self-evolution"
+Repository = "https://github.com/jramos/agent-self-evolution"
 
 [tool.setuptools.packages.find]
 include = ["evolution*"]
