@@ -1,8 +1,8 @@
-# Hermes Agent Self-Evolution — Evolutionary Self-Improvement for Hermes Agent
+# Agent Self-Evolution — Evolutionary Self-Improvement for Agent Skills
 
 ## Vision
 
-A standalone optimization pipeline that systematically improves Hermes Agent's performance by evolving skills, prompts, tool descriptions, and agent configurations using automated optimization loops. Lives in its own repo (`NousResearch/hermes-agent-self-evolution`), operates ON hermes-agent — not part of it.
+A standalone optimization pipeline that systematically improves an agent's performance by evolving skills, prompts, tool descriptions, and agent configurations using automated optimization loops. Lives in its own repo (`jramos/agent-self-evolution`), operates ON a target agent's skill repo — not part of it. Originally built for Hermes Agent; now works for any agent framework that emits `<skill>/SKILL.md` files (Claude Code, Hermes, custom local layouts).
 
 Three complementary engines, unified under one workflow:
 
@@ -171,8 +171,8 @@ hermes-agent-self-evolution/             # Standalone repo
 
 ```bash
 # Clone and install
-git clone https://github.com/NousResearch/hermes-agent-self-evolution.git
-cd hermes-agent-self-evolution
+git clone https://github.com/jramos/agent-self-evolution.git
+cd agent-self-evolution
 pip install -e ".[dev]"
 
 # Point at hermes-agent repo (auto-detected from ~/.hermes/hermes-agent or env var)

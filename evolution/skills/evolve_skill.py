@@ -1,4 +1,4 @@
-"""Evolve a Hermes Agent skill using DSPy + GEPA.
+"""Evolve an agent skill using DSPy + GEPA.
 
 Usage:
     python -m evolution.skills.evolve_skill --skill github-code-review --iterations 10
@@ -335,7 +335,7 @@ def _build_optimizer_and_compile(
         except ImportError as ie:
             console.print(
                 "[red]✗ MIPROv2 fallback requires the [miprov2] extra. "
-                "Install with: pip install hermes-agent-self-evolution[miprov2][/red]"
+                "Install with: pip install agent-self-evolution[miprov2][/red]"
             )
             raise ie from gepa_exc
 
@@ -393,7 +393,7 @@ def evolve(
         config.hermes_agent_path = Path(hermes_repo)
 
     # ── 1. Find and load the skill ──────────────────────────────────────
-    console.print(f"\n[bold cyan]🧬 Hermes Agent Self-Evolution[/bold cyan] — Evolving skill: [bold]{skill_name}[/bold]\n")
+    console.print(f"\n[bold cyan]🧬 Agent Skill Self-Evolution[/bold cyan] — Evolving skill: [bold]{skill_name}[/bold]\n")
 
     skill_path = find_skill(skill_name, config.hermes_agent_path)
     if not skill_path:
@@ -902,7 +902,7 @@ def main(skill, iterations, eval_source, dataset_path, optimizer_model, reflecti
          length_penalty_weight, quality_gate, growth_free_threshold,
          growth_quality_slope, max_absolute_chars, bootstrap_confidence,
          bootstrap_resamples, knee_point_epsilon):
-    """Evolve a Hermes Agent skill using DSPy + GEPA optimization."""
+    """Evolve an agent skill using DSPy + GEPA optimization."""
     evolve(
         skill_name=skill,
         iterations=iterations,

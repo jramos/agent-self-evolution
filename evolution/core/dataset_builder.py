@@ -1,4 +1,4 @@
-"""Evaluation dataset generation for hermes-agent-self-evolution.
+"""Evaluation dataset generation for agent-self-evolution.
 
 Sources:
 A) Synthetic generation — LLM reads a skill/tool/prompt and generates test cases

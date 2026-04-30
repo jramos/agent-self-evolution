@@ -99,7 +99,7 @@ def build_report(output_path: str = "reports/phase1_validation_report.pdf"):
 
     # ── TITLE PAGE ──────────────────────────────────────────────────────
     story.append(Spacer(1, 1.5 * inch))
-    story.append(Paragraph("🧬 Hermes Agent Self-Evolution", styles['Title2']))
+    story.append(Paragraph("🧬 Agent Self-Evolution", styles['Title2']))
     story.append(Paragraph("Phase 1 Validation Report", styles['Subtitle']))
     story.append(Spacer(1, 0.3 * inch))
     story.append(HRFlowable(width="60%", thickness=1, color=HexColor('#cccccc')))
@@ -115,7 +115,7 @@ def build_report(output_path: str = "reports/phase1_validation_report.pdf"):
                        fontSize=11, textColor=HexColor('#777777'))
     ))
     story.append(Paragraph(
-        "Repository: github.com/NousResearch/hermes-agent-self-evolution",
+        "Repository: github.com/jramos/agent-self-evolution",
         ParagraphStyle('RepoStyle', parent=styles['Normal'], alignment=TA_CENTER,
                        fontSize=10, textColor=HexColor('#999999'))
     ))
@@ -125,10 +125,11 @@ def build_report(output_path: str = "reports/phase1_validation_report.pdf"):
     # ── EXECUTIVE SUMMARY ───────────────────────────────────────────────
     story.append(Paragraph("Executive Summary", styles['SectionHead']))
     story.append(Paragraph(
-        "Hermes Agent Self-Evolution is a standalone optimization pipeline that uses DSPy and GEPA "
-        "(Genetic-Pareto Prompt Evolution) to automatically improve Hermes Agent's skills, "
+        "Agent Self-Evolution is a standalone optimization pipeline that uses DSPy and GEPA "
+        "(Genetic-Pareto Prompt Evolution) to automatically improve an agent's skills, "
         "tool descriptions, system prompts, and code through evolutionary search — all via "
-        "API calls with no GPU training required.",
+        "API calls with no GPU training required. Originally built for Hermes Agent; now "
+        "works for any agent framework that emits SKILL.md files.",
         styles['BodyJust']
     ))
     story.append(Paragraph(
@@ -487,11 +488,11 @@ def build_report(output_path: str = "reports/phase1_validation_report.pdf"):
     story.append(HRFlowable(width="100%", thickness=0.5, color=HexColor('#cccccc')))
     story.append(Spacer(1, 0.1 * inch))
     story.append(Paragraph(
-        f"Hermes Agent Self-Evolution — Phase 1 Validation Report — {datetime.now().strftime('%B %d, %Y')} — Nous Research",
+        f"Agent Self-Evolution — Phase 1 Validation Report — {datetime.now().strftime('%B %d, %Y')} — Nous Research",
         styles['Footer']
     ))
     story.append(Paragraph(
-        "github.com/NousResearch/hermes-agent-self-evolution",
+        "github.com/jramos/agent-self-evolution",
         styles['Footer']
     ))
 
