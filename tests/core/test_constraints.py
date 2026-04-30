@@ -7,15 +7,15 @@ from evolution.core.config import EvolutionConfig
 
 
 @pytest.fixture(autouse=True, scope="session")
-def _hermes_repo_env(tmp_path_factory):
-    """Satisfy EvolutionConfig.hermes_agent_path's requirement without
-    needing a real hermes-agent checkout. Without this the 16 tests in
-    this file error at collection time when the env var is unset and no
-    fallback paths exist on the running machine.
+def _skill_source_env(tmp_path_factory):
+    """Pin EvolutionConfig.skill_sources to a fake repo so discovery
+    doesn't pick up a real ~/.hermes or ~/.claude install on the test
+    machine.
     """
     import os
-    fake_repo = tmp_path_factory.mktemp("fake_hermes_repo")
-    os.environ["HERMES_AGENT_REPO"] = str(fake_repo)
+    fake_repo = tmp_path_factory.mktemp("fake_skill_repo")
+    (fake_repo / "skills").mkdir()
+    os.environ["SKILL_SOURCES_HERMES_REPO"] = str(fake_repo)
     yield
 
 

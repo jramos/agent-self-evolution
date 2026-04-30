@@ -11,10 +11,14 @@ from evolution.core.dataset_builder import GoldenDatasetLoader, SyntheticDataset
 
 
 @pytest.fixture(autouse=True, scope="session")
-def _hermes_repo_env(tmp_path_factory):
-    """SyntheticDatasetBuilder pulls EvolutionConfig which needs a repo path."""
-    fake_repo = tmp_path_factory.mktemp("fake_hermes_repo")
-    os.environ["HERMES_AGENT_REPO"] = str(fake_repo)
+def _skill_source_env(tmp_path_factory):
+    """SyntheticDatasetBuilder pulls EvolutionConfig which runs skill-source
+    discovery at default-factory time. Point it at a fake repo so tests
+    don't pick up a real ~/.hermes or ~/.claude install.
+    """
+    fake_repo = tmp_path_factory.mktemp("fake_skill_repo")
+    (fake_repo / "skills").mkdir()
+    os.environ["SKILL_SOURCES_HERMES_REPO"] = str(fake_repo)
     yield
 
 
