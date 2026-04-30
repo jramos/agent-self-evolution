@@ -58,29 +58,18 @@ def load_skill(skill_path: Path) -> dict:
     }
 
 
-def find_skill(skill_name: str, hermes_agent_path: Path) -> Optional[Path]:
-    """Find a skill by name in the hermes-agent skills directory.
+def find_skill(skill_name: str, sources) -> Optional[Path]:
+    """Find a skill by name across a list of `SkillSource` adapters.
 
-    Searches recursively for a SKILL.md in a directory matching the skill name.
+    Walks `sources` in order; returns the first SKILL.md any source resolves.
+    The actual layout-specific logic lives in each adapter (Hermes, Claude
+    Code, LocalDir). Use `evolution.core.discover_skill_sources()` to build
+    the default list.
     """
-    skills_dir = hermes_agent_path / "skills"
-    if not skills_dir.exists():
-        return None
-
-    # Direct match: skills/<category>/<skill_name>/SKILL.md
-    for skill_md in skills_dir.rglob("SKILL.md"):
-        if skill_md.parent.name == skill_name:
-            return skill_md
-
-    # Fuzzy match: check the name field in frontmatter
-    for skill_md in skills_dir.rglob("SKILL.md"):
-        try:
-            content = skill_md.read_text()[:500]
-            if f"name: {skill_name}" in content or f'name: "{skill_name}"' in content:
-                return skill_md
-        except Exception:
-            continue
-
+    for source in sources:
+        path = source.find_skill(skill_name)
+        if path is not None:
+            return path
     return None
 
 

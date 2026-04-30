@@ -31,22 +31,59 @@ GEPA reads execution traces to understand *why* things fail (not just that they 
 git clone https://github.com/jramos/agent-self-evolution.git
 cd agent-self-evolution
 pip install -e ".[dev]"
+```
 
-# Point at a skill repo (Hermes Agent example)
-export HERMES_AGENT_REPO=~/.hermes/hermes-agent
+### Skill discovery
 
-# Evolve a skill (synthetic eval data)
+Skills are resolved by walking a list of `SkillSource` adapters in priority order:
+
+1. **`--skill-source-dir PATH`** (repeatable) — generic `<dir>/<name>/SKILL.md` layout. Use for Codex, openclaw, or any custom framework.
+2. **Hermes Agent** — set `SKILL_SOURCES_HERMES_REPO=/path/to/hermes-agent` (or have `~/.hermes/hermes-agent` exist). Layout: `<root>/skills/<category>/<name>/SKILL.md`.
+3. **Claude Code** — auto-discovered if `~/.claude/plugins/cache/` exists. No env var needed. Layout: `<vendor>/<plugin>/<version>/skills/<name>/SKILL.md`.
+
+Sources whose roots don't exist on disk are skipped automatically.
+
+### Evolve a Hermes skill
+
+```bash
+export SKILL_SOURCES_HERMES_REPO=~/.hermes/hermes-agent
+
 python -m evolution.skills.evolve_skill \
     --skill github-code-review \
     --iterations 10 \
     --eval-source synthetic
+```
 
-# Or use real session history from Claude Code, Copilot, and Hermes
+### Evolve a Claude Code skill
+
+```bash
+# No env var needed if you have Claude Code installed
+python -m evolution.skills.evolve_skill \
+    --skill writing-skills \
+    --iterations 10 \
+    --eval-source synthetic
+```
+
+### Evolve a skill from any custom layout
+
+```bash
+python -m evolution.skills.evolve_skill \
+    --skill my-skill \
+    --skill-source-dir ~/path/to/my-skills \
+    --iterations 10 \
+    --eval-source synthetic
+```
+
+### Mine real session history for evals
+
+```bash
 python -m evolution.skills.evolve_skill \
     --skill github-code-review \
     --iterations 10 \
     --eval-source sessiondb
 ```
+
+Pulls real usage from Claude Code (`~/.claude/history.jsonl`), Copilot, and Hermes session logs.
 
 ## What It Optimizes
 

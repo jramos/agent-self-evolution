@@ -1,17 +1,29 @@
-"""Configuration and hermes-agent repo discovery."""
+"""Configuration and skill-source discovery.
+
+Skill discovery moved from a single hardcoded Hermes Agent layout to a
+pluggable SkillSource list (see evolution/core/skill_sources.py).
+The default list is built by sniffing the environment: HERMES_AGENT_REPO,
+~/.claude/plugins/cache, plus any explicit --skill-source-dir from the CLI.
+"""
 
 import os
 from pathlib import Path
 from dataclasses import dataclass, field
 from typing import Optional
 
+from evolution.core.skill_sources import SkillSource, discover_skill_sources
+
 
 @dataclass
 class EvolutionConfig:
     """Configuration for a self-evolution optimization run."""
 
-    # hermes-agent repo path
-    hermes_agent_path: Path = field(default_factory=lambda: get_hermes_agent_path())
+    # Skill discovery sources (Hermes / Claude Code / arbitrary local dirs).
+    # First match wins in find_skill(); see skill_sources.discover_skill_sources
+    # for the priority ordering and environment sniffing.
+    skill_sources: list[SkillSource] = field(
+        default_factory=lambda: discover_skill_sources()
+    )
 
     # Optimization parameters
     iterations: int = 10
@@ -87,29 +99,3 @@ class EvolutionConfig:
     seed: int = 42
 
 
-def get_hermes_agent_path() -> Path:
-    """Discover the hermes-agent repo path.
-
-    Priority:
-    1. HERMES_AGENT_REPO env var
-    2. ~/.hermes/hermes-agent (standard install location)
-    3. ../hermes-agent (sibling directory)
-    """
-    env_path = os.getenv("HERMES_AGENT_REPO")
-    if env_path:
-        p = Path(env_path).expanduser()
-        if p.exists():
-            return p
-
-    home_path = Path.home() / ".hermes" / "hermes-agent"
-    if home_path.exists():
-        return home_path
-
-    sibling_path = Path(__file__).parent.parent.parent / "hermes-agent"
-    if sibling_path.exists():
-        return sibling_path
-
-    raise FileNotFoundError(
-        "Cannot find hermes-agent repo. Set HERMES_AGENT_REPO env var "
-        "or ensure it exists at ~/.hermes/hermes-agent"
-    )

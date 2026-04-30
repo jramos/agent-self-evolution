@@ -20,7 +20,8 @@ from rich.console import Console
 from rich.panel import Panel
 from rich.table import Table
 
-from evolution.core.config import EvolutionConfig, get_hermes_agent_path
+from evolution.core.config import EvolutionConfig
+from evolution.core.skill_sources import discover_skill_sources
 
 # Surface our own package's logs alongside DSPy's. Without this the
 # BudgetAwareProposer per-call observability log (commit 1 of PR #5)
@@ -347,7 +348,7 @@ def evolve(
     dataset_path: Optional[str] = None,
     optimizer_model: str = "openai/gpt-4.1",
     eval_model: str = "openai/gpt-4.1-mini",
-    hermes_repo: Optional[str] = None,
+    skill_source_dirs: Optional[list[str]] = None,
     run_tests: bool = False,
     dry_run: bool = False,
     seed: int = 42,
@@ -389,19 +390,28 @@ def evolve(
     if bootstrap_n_resamples is not None:
         config_kwargs["bootstrap_n_resamples"] = bootstrap_n_resamples
     config = EvolutionConfig(**config_kwargs)
-    if hermes_repo:
-        config.hermes_agent_path = Path(hermes_repo)
+    explicit_dirs = [Path(d) for d in (skill_source_dirs or [])]
+    if explicit_dirs:
+        # Override the default discovery only when the caller passed dirs.
+        # Otherwise EvolutionConfig's default_factory already ran discovery.
+        config.skill_sources = discover_skill_sources(explicit_dirs=explicit_dirs)
 
     # ── 1. Find and load the skill ──────────────────────────────────────
     console.print(f"\n[bold cyan]🧬 Agent Skill Self-Evolution[/bold cyan] — Evolving skill: [bold]{skill_name}[/bold]\n")
 
-    skill_path = find_skill(skill_name, config.hermes_agent_path)
+    skill_path = find_skill(skill_name, config.skill_sources)
     if not skill_path:
-        console.print(f"[red]✗ Skill '{skill_name}' not found in {config.hermes_agent_path / 'skills'}[/red]")
+        searched = ", ".join(s.name for s in config.skill_sources) or "(no sources discovered)"
+        console.print(f"[red]✗ Skill '{skill_name}' not found across sources: {searched}[/red]")
+        for source in config.skill_sources:
+            available = source.list_skills()
+            if available:
+                preview = ", ".join(available[:8]) + (" …" if len(available) > 8 else "")
+                console.print(f"  [dim]{source.name}: {len(available)} skills available — {preview}[/dim]")
         sys.exit(1)
 
     skill = load_skill(skill_path)
-    console.print(f"  Loaded: {skill_path.relative_to(config.hermes_agent_path)}")
+    console.print(f"  Loaded: {skill_path}")
     console.print(f"  Name: {skill['name']}")
     console.print(f"  Size: {len(skill['raw']):,} chars")
     console.print(f"  Description: {skill['description'][:80]}...")
@@ -823,7 +833,15 @@ def evolve(
     "Reasoning models require max_tokens >= 16000 (we set 32000).",
 )
 @click.option("--eval-model", default="openai/gpt-4.1-mini", help="Model for evaluations")
-@click.option("--hermes-repo", default=None, help="Path to hermes-agent repo")
+@click.option(
+    "--skill-source-dir",
+    "skill_source_dir",
+    multiple=True,
+    type=click.Path(exists=True, file_okay=False, dir_okay=True),
+    help="Additional skill-source root: <dir>/<name>/SKILL.md. Repeatable; "
+    "explicit dirs take priority over auto-discovered Hermes/Claude Code "
+    "sources. Use for Codex, openclaw, or any custom layout.",
+)
 @click.option("--run-tests", is_flag=True, help="Run full pytest suite as constraint gate")
 @click.option("--dry-run", is_flag=True, help="Validate setup without running optimization")
 @click.option("--seed", default=42, type=int, help="RNG seed for dataset shuffles and DSPy optimizer")
@@ -898,7 +916,7 @@ def evolve(
     "biases selection back toward the GEPA default.",
 )
 def main(skill, iterations, eval_source, dataset_path, optimizer_model, reflection_model,
-         eval_model, hermes_repo, run_tests, dry_run, seed, budget, no_fallback,
+         eval_model, skill_source_dir, run_tests, dry_run, seed, budget, no_fallback,
          length_penalty_weight, quality_gate, growth_free_threshold,
          growth_quality_slope, max_absolute_chars, bootstrap_confidence,
          bootstrap_resamples, knee_point_epsilon):
@@ -911,7 +929,7 @@ def main(skill, iterations, eval_source, dataset_path, optimizer_model, reflecti
         optimizer_model=optimizer_model,
         reflection_model=reflection_model,
         eval_model=eval_model,
-        hermes_repo=hermes_repo,
+        skill_source_dirs=list(skill_source_dir) if skill_source_dir else None,
         run_tests=run_tests,
         dry_run=dry_run,
         seed=seed,

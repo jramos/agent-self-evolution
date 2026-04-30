@@ -26,10 +26,11 @@ from evolution.skills.knee_point import CandidatePick
 
 
 @pytest.fixture(autouse=True, scope="session")
-def _hermes_repo_env(tmp_path_factory):
+def _skill_source_env(tmp_path_factory):
     """Same env-var workaround as test_constraints.py."""
-    fake_repo = tmp_path_factory.mktemp("fake_hermes_repo")
-    os.environ["HERMES_AGENT_REPO"] = str(fake_repo)
+    fake_repo = tmp_path_factory.mktemp("fake_skill_repo")
+    (fake_repo / "skills").mkdir()
+    os.environ["SKILL_SOURCES_HERMES_REPO"] = str(fake_repo)
     yield
 
 
