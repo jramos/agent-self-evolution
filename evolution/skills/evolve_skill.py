@@ -100,6 +100,27 @@ def _write_gate_decision(output_dir: Path, decision: dict[str, Any]) -> Path:
     return path
 
 
+def _dataset_payload(dataset: EvalDataset) -> dict[str, Any]:
+    """Serialize dataset composition for gate_decision.json.
+
+    Records per-source counts (e.g. synthetic, sessiondb_*, golden) so a
+    future calibration script can ask "is mined-source dominance correlated
+    with deploy rate?" without re-running every PR. Source field is on
+    each EvalExample; we just bucket by it.
+    """
+    sources: dict[str, int] = {}
+    for ex in dataset.all_examples:
+        src = ex.source or "unknown"
+        sources[src] = sources.get(src, 0) + 1
+    return {
+        "size_total": len(dataset.all_examples),
+        "size_train": len(dataset.train),
+        "size_val": len(dataset.val),
+        "size_holdout": len(dataset.holdout),
+        "sources": sources,
+    }
+
+
 def _knee_point_payload(knee_pick: Optional[CandidatePick]) -> dict[str, Any]:
     """Serialize a CandidatePick (or its absence) for gate_decision.json.
 
@@ -595,6 +616,7 @@ def evolve(
             "failed_constraints": [c.constraint_name for c in static_constraints if not c.passed],
             "messages": [c.message for c in static_constraints if not c.passed],
             "knee_point": _knee_point_payload(knee_pick),
+            "dataset": _dataset_payload(dataset),
         })
         console.print(f"  Saved failed variant to {failed_path}")
         return
@@ -662,6 +684,7 @@ def evolve(
         "failed_constraints": [c.constraint_name for c in growth_constraints if not c.passed],
         "messages": [c.message for c in growth_constraints if not c.passed],
         "knee_point": _knee_point_payload(knee_pick),
+        "dataset": _dataset_payload(dataset),
     }
     gate_path = _write_gate_decision(output_dir, decision_payload)
     console.print(f"  [dim]Gate decision logged to {gate_path}[/dim]")

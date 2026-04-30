@@ -122,8 +122,14 @@ class SyntheticDatasetBuilder:
 
         n = num_cases or self.config.eval_dataset_size
 
-        # Configure DSPy to use the judge model for generation
-        lm = dspy.LM(self.config.judge_model, temperature=0.7, max_tokens=4000)
+        # Configure DSPy to use the judge model for generation. max_tokens
+        # bumped 4000→16000 after spike at eval_dataset_size=60 truncated
+        # the JSON output mid-string (line ~358), tripping the regex
+        # fallback below and ultimately ValueError. 16000 gives ~4x
+        # headroom; gpt-4.1 supports 128K context so well within model
+        # limits. The failure mode without this is silent corruption of
+        # generated JSON → JSONDecodeError → process exit.
+        lm = dspy.LM(self.config.judge_model, temperature=0.7, max_tokens=16000)
 
         with dspy.context(lm=lm):
             result = self.generator(
