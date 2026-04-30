@@ -77,7 +77,10 @@ class LLMJudge:
     ) -> FitnessScore:
         """Score an agent output using LLM-as-judge."""
 
-        lm = dspy.LM(self.config.eval_model, temperature=0.0, max_tokens=4000)
+        # request_timeout=60 = 6x P99 of slowest observed gpt-4.1-mini
+        # call (9.8s in multi-seed spike). 5x60s worst-case wall before
+        # raising; existing GEPA→MIPROv2 fallback handles the TimeoutError.
+        lm = dspy.LM(self.config.eval_model, temperature=0.0, max_tokens=4000, request_timeout=60, num_retries=5)
 
         with dspy.context(lm=lm):
             result = self.judge(
