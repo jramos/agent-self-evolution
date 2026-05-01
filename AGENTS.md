@@ -95,10 +95,9 @@ The `evolution/<tier>/` directories form **a clean layering**: `evolution/core/`
 Inferred from the existing source — follow these unless you have a specific reason to deviate.
 
 ### Comments
-- **Comments explain WHY, not WHAT.** Most non-trivial code blocks have a 2-4 line comment explaining the constraint, prior incident, or design choice. Examples: `evolve_skill.py:524-527` (timeout choice), `dataset_builder.py:125-133` (max_tokens history). **Match this density.**
+- **Comments should be rare and only when necessary to explain why an otherwise unintuitive decision was made.** If it's just explaining how the code works, that should be left to thoughtful variable naming and function docstrings.
 - **Don't reference task IDs / PR numbers in source comments** unless the PR/issue is the load-bearing context (e.g., "PR #5 obsidian deploy" calibration data points). Generic "added for PR #N" rots fast.
 - **No "removed X" or "deprecated Y" placeholder comments.** Just delete.
-- **No multi-paragraph docstrings.** One short line max, except on classes that wrap external Protocols (where the protocol shape itself is the documentation, e.g., `SkillModule.TaskWithSkill`).
 
 ### Imports
 - Stdlib first, third-party second, local last — separated by blank lines.

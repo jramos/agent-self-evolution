@@ -170,7 +170,7 @@ The framework's deploy decisions rest on three calibrated knobs in `EvolutionCon
 | `eval_dataset_size` | 60 | Total synthetic examples (≈ 21 train / 17 val / 22 holdout) |
 | `min_holdout_size` | 10 | Hard refuse-to-gate threshold |
 
-The N=60 default was set after a multi-seed spike on `obsidian` (4/5 deploys, mean +0.027, std 0.038 — see `experiments/2026-04-30-multi-seed-noise-floor.md`). At N=30 the bootstrap CI swamped real lift and almost every evolution was rejected regardless of quality.
+The N=60 default was set after a multi-seed spike on `obsidian` (4/5 deploys, mean +0.027, std 0.038). At N=30 the bootstrap CI swamped real lift and almost every evolution was rejected regardless of quality.
 
 Three named presets (`strict`, `default`, `lenient`, `off`) bundle the curve parameters together and are exposed via `--quality-gate`. Individual params can still be overridden via `--growth-free-threshold` etc.
 

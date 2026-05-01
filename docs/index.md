@@ -26,7 +26,7 @@ The codebase is small (~3.5K LOC of source + ~12 test files) but architecturally
 | **What's tested vs. not** | `interfaces.md` (test surfaces locked by tests) → `workflows.md` (Workflow 8) |
 | **What dependencies are pinned and why** | `dependencies.md` |
 | **What's planned but not built** | `codebase_info.md` (implementation status table) → `PLAN.md` |
-| **What changed recently / project history** | `git log --oneline` → `experiments/2026-04-30-multi-seed-noise-floor.md` |
+| **What changed recently / project history** | `git log --oneline` |
 | **Style / convention questions** | `AGENTS.md` (repo root) |
 
 ### When to read source vs. docs
@@ -55,7 +55,7 @@ The codebase is small (~3.5K LOC of source + ~12 test files) but architecturally
 | [`../README.md`](../README.md) | User-facing quick start. Skill discovery, evolve-a-skill command, CLI examples. |
 | [`../AGENTS.md`](../AGENTS.md) | AI-assistant-focused condensed reference. Project context, dirs, conventions, test/PR guidance. **Read this first when picking up the codebase.** |
 | [`../PLAN.md`](../PLAN.md) | Full project roadmap. Tier 1 (skills) is implemented; Tiers 2-5 are planned. Read this for the long-term architecture vision. |
-| [`../experiments/`](../experiments/) | Spike writeups (currently: 2026-04-30-multi-seed-noise-floor). These document load-bearing experiments and their findings. |
+| [`../experiments/`](../experiments/) | Spike writeups documenting load-bearing experiments and their findings. |
 
 ## Cross-cutting topics with multiple home documents
 
