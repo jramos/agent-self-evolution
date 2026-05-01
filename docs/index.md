@@ -44,7 +44,7 @@ The codebase is small (~3.5K LOC of source + ~12 test files) but architecturally
 | [`components.md`](components.md) | Per-module reference: what each owns, public surface, load-bearing implementation notes | ~210 lines |
 | [`interfaces.md`](interfaces.md) | CLIs, Python API, SkillSource Protocol, output artifacts, DSPy + litellm integration points, test surfaces, env vars | ~180 lines |
 | [`data_models.md`](data_models.md) | All dataclasses, on-disk formats, full `gate_decision.json` schema with worked examples | ~220 lines |
-| [`workflows.md`](workflows.md) | 8 step-by-step workflows with mermaid sequence diagrams: deploy path, two reject paths, GEPA→MIPROv2 fallback, sessiondb mining, etc. | ~240 lines |
+| [`workflows.md`](workflows.md) | 8 step-by-step workflows with mermaid sequence diagrams: deploy path (split into 4 phases), two reject paths, GEPA→MIPROv2 fallback, sessiondb mining, etc. | ~280 lines |
 | [`dependencies.md`](dependencies.md) | Each external package — what it's used for, why it's pinned, what we don't depend on | ~180 lines |
 | [`review_notes.md`](review_notes.md) | Consistency + completeness gaps found during this docs pass | ~50 lines |
 
@@ -59,7 +59,7 @@ The codebase is small (~3.5K LOC of source + ~12 test files) but architecturally
 
 ## Cross-cutting topics with multiple home documents
 
-- **The deploy gate decision** spans `architecture.md` (statistical substrate), `components.md` (`constraints.py`), `data_models.md` (`gate_decision.json` schema), and `workflows.md` (Workflow 1 §9, Workflow 2). Read together when debugging a deploy decision.
+- **The deploy gate decision** spans `architecture.md` (statistical substrate), `components.md` (`constraints.py`), `data_models.md` (`gate_decision.json` schema), and `workflows.md` (Workflow 1 Phase D, Workflow 2). Read together when debugging a deploy decision.
 - **LM observability** lives in `components.md` (`lm_timing_callback.py`), `interfaces.md` (litellm integration), and `dependencies.md` (litellm pinning rationale).
 - **Skill discovery** is in `components.md` (`skill_sources.py`), `interfaces.md` (SkillSource Protocol), and `codebase_info.md` (priority order).
 

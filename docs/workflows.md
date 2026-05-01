@@ -4,7 +4,7 @@ Step-by-step traces of the framework's main flows.
 
 ## Workflow 1: Evolve a skill (synthetic dataset, deploy path)
 
-The standard happy path.
+The standard happy path. Broken into four phases for legibility — see [architecture.md](architecture.md) for the top-level flowchart that ties them together.
 
 ```bash
 python -m evolution.skills.evolve_skill \
@@ -13,103 +13,131 @@ python -m evolution.skills.evolve_skill \
     --eval-source synthetic
 ```
 
+### Phase A — Setup: discovery, run dir, dataset build
+
 ```mermaid
 sequenceDiagram
     autonumber
     participant U as User
-    participant CLI as evolve_skill.main
+    participant CLI as evolve_skill
     participant Cfg as EvolutionConfig
     participant Src as SkillSource
     participant Log as FileHandler
-    participant Cb as LMTimingCallback
     participant LL as litellm.failure_callback
     participant Gen as SyntheticDatasetBuilder
-    participant Val as ConstraintValidator
-    participant LM as dspy.LM (judge)
-    participant J as LLMJudge
-    participant SM as SkillModule
-    participant Prop as BudgetAwareProposer
-    participant GEPA as dspy.GEPA
-    participant Knee as select_knee_point
-    participant Eval as dspy.Evaluate
-    participant Boot as paired_bootstrap
+    participant LM as judge LM
 
     U->>CLI: --skill obsidian --budget light
     CLI->>Cfg: EvolutionConfig(...)
     Cfg->>Src: discover_skill_sources()
-    Src-->>Cfg: [Hermes, ClaudeCode]
     CLI->>Src: find_skill("obsidian")
-    Src-->>CLI: Path to SKILL.md
-    CLI->>CLI: load_skill(path) → {name, description, body, frontmatter}
+    Src-->>CLI: SKILL.md path
+    CLI->>CLI: load_skill(path)
 
-    Note over CLI,Log: §1.5 Per-run output dir + run.log + litellm hook
-    CLI->>Log: addHandler(FileHandler(output/obsidian/<ts>/run.log))
+    CLI->>Log: addHandler(per-run FileHandler)
     CLI->>LL: register_litellm_failure_callback()
 
-    Note over CLI,Gen: §2 Build dataset
-    CLI->>Gen: generate(skill_text, "skill", n=60)
-    Gen->>LM: judge_model.generate(GenerateTestCases prompt)
-    LM-->>Gen: JSON array of test cases
+    CLI->>Gen: generate(skill_text, n=60)
+    Gen->>LM: GenerateTestCases prompt
+    LM-->>Gen: JSON test cases
     Gen-->>CLI: EvalDataset(train=21, val=17, holdout=22)
-    CLI->>CLI: dataset.save(datasets/skills/obsidian/)
+```
 
-    Note over CLI,Val: §3 Baseline static checks (warn-only)
+The per-run log file and litellm hook are installed **before** dataset gen so the FileHandler captures the dataset-gen LM calls — useful for diagnosing background-run stalls post-hoc without re-attaching a TTY.
+
+### Phase B — Configure: baseline check, judge, metric, proposer
+
+```mermaid
+sequenceDiagram
+    autonumber
+    participant CLI as evolve_skill
+    participant Val as ConstraintValidator
+    participant Cb as LMTimingCallback
+    participant SM as SkillModule
+    participant J as LLMJudge
+    participant Prop as BudgetAwareProposer
+
     CLI->>Val: validate_static(skill.raw, "skill")
-    Val-->>CLI: [size_limit ✓, non_empty ✓, skill_structure ✓]
+    Val-->>CLI: [size ✓, non_empty ✓, structure ✓] warn-only
 
-    Note over CLI,Cb: §4 Configure DSPy + judge + metric
     CLI->>Cb: dspy.configure(lm, callbacks=[LMTimingCallback()])
     CLI->>SM: baseline_module = SkillModule(skill.body)
-    CLI->>J: judge = LLMJudge(config)
-    CLI->>CLI: metric = make_skill_fitness_metric(judge, baseline_text, max_growth=free_threshold)
-    CLI->>Prop: BudgetAwareProposer(baseline_chars, max_growth=free_threshold)
+    CLI->>J: LLMJudge(config)
+    CLI->>CLI: metric = make_skill_fitness_metric(judge, baseline_text, free_threshold)
+    CLI->>Prop: BudgetAwareProposer(baseline_chars, free_threshold)
+```
 
-    Note over CLI,GEPA: §5 GEPA optimization
-    CLI->>GEPA: compile(baseline_module, trainset, valset)
+Baseline static checks here are **warn-only** — they never block the run. The metric is built once so DSPy's LM cache lines up across GEPA per-iteration scoring and the holdout eval in Phase D.
+
+### Phase C — Optimize: GEPA loop, then knee-point pick
+
+```mermaid
+sequenceDiagram
+    autonumber
+    participant CLI as evolve_skill
+    participant GEPA as dspy.GEPA
+    participant Prop as BudgetAwareProposer
+    participant Refl as Reflection LM
+    participant SM as SkillModule
+    participant LM as Judge LM
+    participant J as LLMJudge
+    participant Knee as select_knee_point
+    participant Val as ConstraintValidator
+
+    CLI->>GEPA: compile(baseline, trainset, valset)
     loop per iteration
-        GEPA->>Prop: __call__(candidate, reflective_dataset, ["self"])
-        Prop->>LM: reflection_lm.propose(current, examples_with_feedback)
-        LM-->>Prop: improved_instruction
-        Prop-->>GEPA: {self: new_text}
+        GEPA->>Prop: __call__(candidate, reflective_dataset)
+        Prop->>Refl: propose with budget-aware prompt
+        Refl-->>Prop: improved_instruction
+        Prop-->>GEPA: candidate update
         GEPA->>SM: forward each train example
         SM->>LM: predict
-        LM-->>SM: output
-        SM-->>GEPA: prediction
+        LM-->>GEPA: predictions
         GEPA->>J: metric(example, prediction)
-        J->>LM: score (judge call)
-        LM-->>J: scores
         J-->>GEPA: dspy.Prediction(score, feedback)
     end
-    GEPA-->>CLI: optimized_module (with detailed_results)
+    GEPA-->>CLI: optimized_module with detailed_results
 
-    Note over CLI,Knee: §5b Knee-point Pareto selection
     CLI->>Knee: select_knee_point(candidates, val_scores, n_val, validator)
-    Knee->>Val: validate_static for each band candidate (ascending body chars)
-    Knee-->>CLI: CandidatePick (picked_idx, body_chars, fallback="knee")
+    Knee->>Val: validate_static for each band candidate (asc body chars)
+    Knee-->>CLI: CandidatePick — picked_idx, body_chars, fallback=knee
     CLI->>SM: optimized_module = SkillModule(knee_pick.skill_text)
+```
 
-    Note over CLI,Val: §6+§7 Reassemble + static checks on evolved
-    CLI->>CLI: evolved_full = reassemble_skill(frontmatter, optimized_module.skill_text)
+The GEPA loop is unrolled to show what each iteration touches. Knee-point picks the most parsimonious candidate within ε=1/n_val of the best valset score, falling back to GEPA's default only if every band candidate fails static.
+
+### Phase D — Validate, gate, persist
+
+```mermaid
+sequenceDiagram
+    autonumber
+    participant CLI as evolve_skill
+    participant Val as ConstraintValidator
+    participant Eval as dspy.Evaluate
+    participant Boot as paired_bootstrap
+    participant FS as filesystem
+    participant U as User
+
+    CLI->>CLI: evolved_full = reassemble_skill(frontmatter, evolved_body)
     CLI->>Val: validate_static(evolved_full, "skill")
-    Val-->>CLI: [size_limit ✓, non_empty ✓, skill_structure ✓]
+    Val-->>CLI: pass
 
-    Note over CLI,Eval: §8 Holdout evaluation (≈ 2 × |holdout| judge calls)
     CLI->>Eval: evaluate(baseline_module, holdout)
-    Eval->>J: per-example metric → score
     Eval-->>CLI: avg_baseline, baseline_per_example
     CLI->>Eval: evaluate(optimized_module, holdout)
     Eval-->>CLI: avg_evolved, evolved_per_example
 
-    Note over CLI,Boot: §9 Paired bootstrap + growth-quality gate
     CLI->>Boot: paired_bootstrap(baseline_per_ex, evolved_per_ex)
-    Boot-->>CLI: {mean, lower_bound, upper_bound, ...}
+    Boot-->>CLI: mean, lower_bound, upper_bound
     CLI->>Val: validate_growth_with_quality(evolved, baseline, bootstrap)
     Val-->>CLI: [growth_quality_gate ✓, absolute_char_ceiling ✓]
 
-    CLI->>CLI: write gate_decision.json (decision="deploy")
-    CLI->>CLI: write evolved_skill.md, baseline_skill.md, metrics.json
+    CLI->>FS: write gate_decision.json — decision=deploy
+    CLI->>FS: write evolved_skill.md, baseline_skill.md, metrics.json
     CLI-->>U: ✓ Evolution improved skill by +0.054 (+6.1%)
 ```
+
+Holdout costs ≈ 2 × |holdout| judge calls (baseline + evolved). The bootstrap runs on the per-example improvement vector; `validate_growth_with_quality` then applies the curve `required(growth) = max(0, slope * (growth - free))` and only deploys if both `mean ≥ required` and `lower_bound > 0`.
 
 ## Workflow 2: Evolve a skill (rejected on quality gate)
 
