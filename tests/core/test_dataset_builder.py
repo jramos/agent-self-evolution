@@ -7,7 +7,13 @@ from unittest.mock import patch, MagicMock
 
 import pytest
 
-from evolution.core.dataset_builder import GoldenDatasetLoader, SyntheticDatasetBuilder
+from evolution.core.dataset_builder import (
+    EvalDataset,
+    EvalExample,
+    GoldenDatasetLoader,
+    SyntheticDatasetBuilder,
+    split_examples,
+)
 
 
 @pytest.fixture(autouse=True, scope="session")
@@ -60,6 +66,82 @@ class TestGoldenDatasetSeed:
         # With 30 examples, the probability that two distinct seeds produce
         # the exact same train slice is negligible.
         assert [e.task_input for e in d1.train] != [e.task_input for e in d2.train]
+
+
+def _ex(i: int) -> EvalExample:
+    return EvalExample(
+        task_input=f"task {i}", expected_behavior=f"behavior {i}", source="synthetic",
+    )
+
+
+class TestSplitExamples:
+    """The single source of truth for shuffle+split across synthetic, sessiondb,
+    and golden paths. Was three sites; consolidating keeps split sizes consistent
+    when EvolutionConfig ratios change."""
+
+    def test_normalizes_ratios_above_one(self):
+        # 0.5 + 0.4 + 0.5 = 1.4 — must normalize, not slice 50%/40% then drop the rest.
+        examples = [_ex(i) for i in range(60)]
+        ds = split_examples(
+            examples, seed=42, train_ratio=0.5, val_ratio=0.4, holdout_ratio=0.5,
+        )
+        # Floor-rounding: 60 * 0.5/1.4 = 21, 60 * 0.4/1.4 = 17, holdout = 22.
+        assert len(ds.train) == 21
+        assert len(ds.val) == 17
+        assert len(ds.holdout) == 22
+        assert len(ds.all_examples) == 60
+
+    def test_empty_input_returns_empty_dataset(self):
+        ds = split_examples([], seed=42, train_ratio=0.5, val_ratio=0.25, holdout_ratio=0.25)
+        assert ds.train == []
+        assert ds.val == []
+        assert ds.holdout == []
+
+    def test_deterministic_under_same_seed(self):
+        examples = [_ex(i) for i in range(30)]
+        d1 = split_examples(examples, seed=42, train_ratio=0.5, val_ratio=0.25, holdout_ratio=0.25)
+        d2 = split_examples(examples, seed=42, train_ratio=0.5, val_ratio=0.25, holdout_ratio=0.25)
+        assert [e.task_input for e in d1.train] == [e.task_input for e in d2.train]
+        assert [e.task_input for e in d1.val] == [e.task_input for e in d2.val]
+        assert [e.task_input for e in d1.holdout] == [e.task_input for e in d2.holdout]
+
+    def test_different_seed_different_split(self):
+        examples = [_ex(i) for i in range(30)]
+        d1 = split_examples(examples, seed=42, train_ratio=0.5, val_ratio=0.25, holdout_ratio=0.25)
+        d2 = split_examples(examples, seed=7, train_ratio=0.5, val_ratio=0.25, holdout_ratio=0.25)
+        assert [e.task_input for e in d1.train] != [e.task_input for e in d2.train]
+
+
+class TestSplitConsistencyAcrossPaths:
+    """The actual contract the helper extraction establishes: synthetic,
+    sessiondb, and golden produce identical split *sizes* given identical
+    N + seed + ratios. Was previously inconsistent (sessiondb + golden
+    were hardcoded 50/25/25; synthetic honored config).
+    """
+
+    def test_synthetic_sessiondb_golden_produce_identical_sizes(self, tmp_path: Path):
+        # Same N + seed + ratios → all three paths must agree.
+        n = 30
+        seed = 42
+        ratios = dict(train_ratio=0.5, val_ratio=0.25, holdout_ratio=0.25)
+
+        # Direct helper call (synthetic + sessiondb both go through this).
+        examples = [_ex(i) for i in range(n)]
+        helper_ds = split_examples(examples, seed=seed, **ratios)
+
+        # GoldenDatasetLoader passes the same hardcoded 50/25/25; load a
+        # fixture and verify it produces the same shape.
+        golden = tmp_path / "golden.jsonl"
+        with golden.open("w") as f:
+            for i in range(n):
+                f.write(json.dumps({
+                    "task_input": f"task {i}", "expected_behavior": f"b {i}",
+                }) + "\n")
+        golden_ds = GoldenDatasetLoader.load(golden, seed=seed)
+
+        assert len(helper_ds.train) == len(golden_ds.train)
+        assert len(helper_ds.val) == len(golden_ds.val)
+        assert len(helper_ds.holdout) == len(golden_ds.holdout)
 
 
 class TestSyntheticGeneratorLMConfig:

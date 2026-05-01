@@ -32,8 +32,6 @@ class EvolutionConfig:
     reflection_model: Optional[str] = None
     eval_model: str = "openai/gpt-4.1-mini"
     judge_model: str = "openai/gpt-4.1"
-    # Forward-wired for an upcoming custom-DspyAdapter PR; currently a no-op.
-    length_penalty_weight: float = 0.0
 
     max_skill_size: int = 15_000
     max_tool_desc_size: int = 500

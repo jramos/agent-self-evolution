@@ -333,7 +333,6 @@ def evolve(
     budget: Optional[str] = None,
     no_fallback: bool = False,
     reflection_model: Optional[str] = None,
-    length_penalty_weight: float = 0.0,
     quality_gate: str = "default",
     growth_free_threshold: Optional[float] = None,
     growth_quality_slope: Optional[float] = None,
@@ -357,7 +356,6 @@ def evolve(
         judge_model=eval_model,  # Use same model for dataset generation
         run_pytest=run_tests,
         seed=seed,
-        length_penalty_weight=length_penalty_weight,
         growth_free_threshold=resolved_free,
         growth_quality_slope=resolved_slope,
         max_absolute_chars=int(resolved_abs),
@@ -785,13 +783,6 @@ def evolve(
     help="Re-raise GEPA failures instead of falling back to MIPROv2 (for debugging)",
 )
 @click.option(
-    "--length-penalty-weight",
-    default=0.0,
-    type=float,
-    help="Forward-wired for an upcoming custom-DspyAdapter PR that adds a "
-    "score-side λ-penalty for instruction length. Currently a no-op.",
-)
-@click.option(
     "--quality-gate",
     default="default",
     type=click.Choice(["strict", "default", "lenient", "off"]),
@@ -845,7 +836,7 @@ def evolve(
 )
 def main(skill, iterations, eval_source, dataset_path, optimizer_model, reflection_model,
          eval_model, skill_source_dir, run_tests, dry_run, seed, budget, no_fallback,
-         length_penalty_weight, quality_gate, growth_free_threshold,
+         quality_gate, growth_free_threshold,
          growth_quality_slope, max_absolute_chars, bootstrap_confidence,
          bootstrap_resamples, knee_point_epsilon):
     """Evolve an agent skill using DSPy + GEPA optimization."""
@@ -863,7 +854,6 @@ def main(skill, iterations, eval_source, dataset_path, optimizer_model, reflecti
         seed=seed,
         budget=budget,
         no_fallback=no_fallback,
-        length_penalty_weight=length_penalty_weight,
         quality_gate=quality_gate,
         growth_free_threshold=growth_free_threshold,
         growth_quality_slope=growth_quality_slope,

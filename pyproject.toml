@@ -25,6 +25,9 @@ dependencies = [
     "click>=8.0",
     "rich>=13.0",
     "reportlab>=4.0",
+    # Used by stats.paired_bootstrap. Floor predates the 2.0 ABI break;
+    # no upper bound — only stable np.array/np.percentile/np.random APIs.
+    "numpy>=1.24",
 ]
 
 [project.optional-dependencies]

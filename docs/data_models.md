@@ -18,7 +18,6 @@ class EvolutionConfig:
     reflection_model: Optional[str] = None  # falls back to optimizer_model
     eval_model: str = "openai/gpt-4.1-mini"
     judge_model: str = "openai/gpt-4.1"
-    length_penalty_weight: float = 0.0      # forward-wired no-op
 
     # Static constraints
     max_skill_size: int = 15_000            # absolute deployment-cost backstop

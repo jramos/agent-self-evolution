@@ -201,9 +201,8 @@ Per-run dir: `output/<skill>/<YYYYMMDD_HHMMSS>/`. Contents vary by outcome:
 `[meta:gotchas]`
 
 - **Empty `evolution/{tools,prompts,code,monitor}/`** — these are stubs anchoring the planned tier 2-5 work. See [docs/codebase_info.md](docs/codebase_info.md) status table.
-- **`length_penalty_weight` is a no-op** — declared on `EvolutionConfig` and `--length-penalty-weight` CLI but never read. Forward-wired for an upcoming PR.
 - **`logging.basicConfig` at module import** — `evolve_skill.py:30-34` configures the root logger when imported. Side effect, intentional for the CLI; surprising if you `from evolution.skills.evolve_skill import evolve` in a notebook.
-- **`val_ratio + holdout_ratio + train_ratio = 1.40`** — looks like a bug; isn't. The synthetic builder normalizes them to actually sum to 1. Sessiondb path uses a hardcoded 50/25/25 split (inconsistency, see [docs/review_notes.md](docs/review_notes.md)).
+- **`val_ratio + holdout_ratio + train_ratio = 1.40`** — looks like a bug; isn't. `split_examples()` normalizes the three ratios so they sum to 1; the synthetic, sessiondb, and golden paths all go through the same helper.
 - **`max_tokens=16000` on dataset gen LM** — load-bearing. At `eval_dataset_size=60` the JSON output truncates mid-string with anything lower. Locked by `TestSyntheticGeneratorLMConfig`.
 - **Reflection LM `request_timeout=300, num_retries=2`** (vs `=5` for judge) — deliberate fast-fail. A reflection-LM `TimeoutError` triggers MIPROv2 fallback rather than burning more time on a stuck call.
 - **Knee-point reads `optimized_module.detailed_results`** — only present when GEPA succeeded (and `track_stats=True`). MIPROv2 fallback path skips knee-point cleanly. `gate_decision.json.knee_point.applied=false` with `reason="no_detailed_results"` is the signal.

@@ -49,7 +49,6 @@ The primary user-facing interface.
 |---|---|---|
 | `--run-tests` | off | Run target repo's pytest suite as a constraint gate (not used by default). |
 | `--dry-run` | off | Validate setup; don't run optimization. |
-| `--length-penalty-weight <float>` | `0.0` | Forward-wired no-op; reserved for upcoming custom-DspyAdapter PR. |
 
 ### Exit conditions
 - `sys.exit(1)` if skill not found across all `SkillSource`s — prints available skills per source.
@@ -92,7 +91,6 @@ evolve(
     seed=42,
     budget=None,                    # "light" | "medium" | "heavy"
     no_fallback=False,
-    length_penalty_weight=0.0,
     quality_gate="default",         # "strict" | "default" | "lenient" | "off"
     growth_free_threshold=None,
     growth_quality_slope=None,

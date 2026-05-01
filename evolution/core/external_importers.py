@@ -33,7 +33,8 @@ import dspy
 from rich.console import Console
 from rich.progress import Progress
 
-from evolution.core.dataset_builder import EvalExample, EvalDataset
+from evolution.core.config import EvolutionConfig
+from evolution.core.dataset_builder import EvalExample, EvalDataset, split_examples
 
 console = Console()
 
@@ -639,15 +640,15 @@ def build_dataset_from_external(
             f"recommended for meaningful train/val/holdout split)[/yellow]"
         )
 
-    random.Random(seed).shuffle(examples)
-    n = len(examples)
-    n_train = max(1, int(n * 0.5))
-    n_val = max(1, int(n * 0.25))
-
-    dataset = EvalDataset(
-        train=examples[:n_train],
-        val=examples[n_train:n_train + n_val],
-        holdout=examples[n_train + n_val:],
+    # Source ratios from EvolutionConfig defaults so synthetic + sessiondb
+    # produce the same splits at the same N (was: hardcoded 50/25/25).
+    config = EvolutionConfig()
+    dataset = split_examples(
+        examples,
+        seed=seed,
+        train_ratio=config.train_ratio,
+        val_ratio=config.val_ratio,
+        holdout_ratio=config.holdout_ratio,
     )
 
     dataset.save(output_path)

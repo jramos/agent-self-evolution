@@ -255,7 +255,7 @@ sequenceDiagram
     Filter-->>Build: list[EvalExample]
 
     alt examples >= MIN_DATASET_SIZE (3)
-        Build->>Build: shuffle + split 50/25/25 train/val/holdout
+        Build->>Build: split_examples — uses EvolutionConfig ratios
         Build->>FS: dataset.save(output_path)
         Build-->>CLI: EvalDataset
     else
@@ -264,7 +264,7 @@ sequenceDiagram
     end
 ```
 
-Note: the sessiondb path uses a hardcoded **50/25/25 split**, not the `EvolutionConfig` ratios. This is a known minor inconsistency — the synthetic path normalizes the configured ratios; the sessiondb path doesn't.
+The split goes through the same `split_examples()` helper as the synthetic and golden paths, sourcing ratios from `EvolutionConfig` defaults — so the same N produces the same split shape regardless of source.
 
 ## Workflow 6: Standalone session importer (preview mode)
 

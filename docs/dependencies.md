@@ -64,6 +64,10 @@ Terminal UI. Two surfaces:
 
 Used only by `generate_report.py` (top-level, not part of `evolution/`) to build `reports/phase1_validation_report.pdf`. Not exercised by the optimization pipeline.
 
+### `numpy>=1.24`
+
+Used by `evolution/core/stats.py:paired_bootstrap` for the resample matrix and percentile computation (`np.array`, `np.percentile`, `np.random`). Floor 1.24 predates the 2.0 ABI break and stays compatible with both numpy 1.x and 2.x. No upper bound — only stable APIs are touched.
+
 ## Optional extras
 
 ### `[dev]` — `pytest>=7.0`, `pytest-asyncio>=0.21`
@@ -85,10 +89,6 @@ If missing, the fallback raises `ImportError` (re-raised with the GEPA failure p
 Reserved for the planned Tier 4 (code-evolution) work. The `evolution/code/` package is empty; this dependency will be wired when that tier is implemented.
 
 ## Implicit dependencies (not in pyproject.toml)
-
-### `numpy`
-
-Used by `evolution/core/stats.py:paired_bootstrap` for the resample matrix and percentile computation. Pulled in transitively via `dspy` → `litellm` → `numpy`. Not pinned directly — relying on the dspy/litellm bound. Should probably be added explicitly.
 
 ### `threading` (stdlib)
 
