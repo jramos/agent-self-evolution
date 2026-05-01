@@ -86,7 +86,6 @@ class ConstraintValidator:
                     details=result.stdout.strip().split("\n")[-1] if result.stdout else "",
                 )
             else:
-                # Extract failure summary
                 last_lines = result.stdout.strip().split("\n")[-5:] if result.stdout else []
                 return ConstraintResult(
                     passed=False,
@@ -116,7 +115,7 @@ class ConstraintValidator:
         elif artifact_type == "param_description":
             limit = self.config.max_param_desc_size
         else:
-            limit = self.config.max_skill_size  # Default
+            limit = self.config.max_skill_size
 
         if size <= limit:
             return ConstraintResult(
@@ -167,7 +166,6 @@ class ConstraintValidator:
         conf = bootstrap_result["confidence"]
 
         if required == 0.0:
-            # No-regression branch: just confirm we didn't break things.
             if mean >= 0.0:
                 return ConstraintResult(
                     passed=True,
@@ -185,7 +183,6 @@ class ConstraintValidator:
                 ),
             )
 
-        # Dual check: effect size AND no-regression CI.
         mean_ok = mean >= required
         lower_ok = lower > 0.0
 

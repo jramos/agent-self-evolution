@@ -122,15 +122,8 @@ class SyntheticDatasetBuilder:
 
         n = num_cases or self.config.eval_dataset_size
 
-        # Configure DSPy to use the judge model for generation. max_tokens
-        # bumped 4000→16000 after spike at eval_dataset_size=60 truncated
-        # the JSON output mid-string (line ~358), tripping the regex
-        # fallback below and ultimately ValueError. 16000 gives ~4x
-        # headroom; gpt-4.1 supports 128K context so well within model
-        # limits. The failure mode without this is silent corruption of
-        # generated JSON → JSONDecodeError → process exit.
-        # request_timeout=120 because dataset gen is bursty (single call
-        # producing 60 examples can run long); 5x120s = 10min worst case.
+        # max_tokens=16000 because at eval_dataset_size=60 the JSON output
+        # truncates mid-string at 4000, producing JSONDecodeError → process exit.
         lm = dspy.LM(self.config.judge_model, temperature=0.7, max_tokens=16000, request_timeout=120, num_retries=5)
 
         with dspy.context(lm=lm):
@@ -140,11 +133,9 @@ class SyntheticDatasetBuilder:
                 num_cases=n,
             )
 
-        # Parse the generated test cases
         try:
             cases_raw = json.loads(result.test_cases)
         except json.JSONDecodeError:
-            # Try to extract JSON from the response
             import re
             match = re.search(r'\[.*\]', result.test_cases, re.DOTALL)
             if match:
@@ -164,8 +155,8 @@ class SyntheticDatasetBuilder:
             if c.get("task_input") and c.get("expected_behavior")
         ]
 
-        # Shuffle and split. Normalize the three ratios so they actually
-        # sum to 1; the holdout split is no longer just "whatever's left".
+        # Normalize the three ratios so they sum to 1; otherwise the holdout
+        # split would silently absorb whatever the other two left over.
         random.Random(self.config.seed).shuffle(examples)
         n_total = len(examples)
         ratio_sum = (
@@ -192,7 +183,6 @@ class GoldenDatasetLoader:
         if (path / "train.jsonl").exists():
             return EvalDataset.load(path)
 
-        # Single file — auto-split
         golden_file = path if path.suffix == ".jsonl" else path / "golden.jsonl"
         if not golden_file.exists():
             raise FileNotFoundError(f"No golden dataset found at {golden_file}")

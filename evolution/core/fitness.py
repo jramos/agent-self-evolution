@@ -17,16 +17,16 @@ logger = logging.getLogger(__name__)
 
 @dataclass
 class FitnessScore:
-    """Multi-dimensional fitness score."""
-    correctness: float = 0.0  # Did the agent produce correct output? (0-1)
-    procedure_following: float = 0.0  # Did it follow the skill's procedure? (0-1)
-    conciseness: float = 0.0  # Was it appropriately concise? (0-1)
-    length_penalty: float = 0.0  # Penalty for being too verbose (0-1, 0 = no penalty)
-    feedback: str = ""  # Textual feedback for GEPA's reflective analysis
+    """Multi-dimensional fitness score. All sub-scores are in [0, 1]."""
+    correctness: float = 0.0
+    procedure_following: float = 0.0
+    conciseness: float = 0.0
+    length_penalty: float = 0.0
+    feedback: str = ""
 
     @property
     def composite(self) -> float:
-        """Weighted composite score."""
+        """Weighted composite. Length penalty is subtracted, then floored at 0."""
         raw = (
             0.5 * self.correctness
             + 0.3 * self.procedure_following
@@ -55,9 +55,8 @@ class LLMJudge:
         task_input: str = dspy.InputField(desc="The task the agent was given")
         expected_behavior: str = dspy.InputField(desc="Rubric describing what a good response looks like")
         agent_output: str = dspy.InputField(desc="The agent's actual response")
-        # Scores arrive as strings from the LLM and are clamped to [0,1] in
-        # score(); declaring them as `str` keeps the typeguard quiet without
-        # the ceremony of float-coercion fields.
+        # Typed `str` (not `float`) because LLMs sometimes emit explanatory
+        # text or confidence ranges; _clamp_to_unit parses + clamps in score().
         correctness: str = dspy.OutputField(desc="Score 0.0-1.0: Did the response correctly address the task?")
         procedure_following: str = dspy.OutputField(desc="Score 0.0-1.0: Did it follow the expected procedure?")
         conciseness: str = dspy.OutputField(desc="Score 0.0-1.0: Appropriately concise?")
@@ -77,9 +76,8 @@ class LLMJudge:
     ) -> FitnessScore:
         """Score an agent output using LLM-as-judge."""
 
-        # request_timeout=60 = 6x P99 of slowest observed gpt-4.1-mini
-        # call (9.8s in multi-seed spike). 5x60s worst-case wall before
-        # raising; existing GEPA→MIPROv2 fallback handles the TimeoutError.
+        # request_timeout=60 ≈ 6x P99 of the slowest observed gpt-4.1-mini
+        # call. TimeoutError after retries propagates to GEPA's fallback path.
         lm = dspy.LM(self.config.eval_model, temperature=0.0, max_tokens=4000, request_timeout=60, num_retries=5)
 
         with dspy.context(lm=lm):
@@ -93,12 +91,11 @@ class LLMJudge:
         procedure_following = _clamp_to_unit(result.procedure_following)
         conciseness = _clamp_to_unit(result.conciseness)
 
-        # Length penalty
+        # Penalty ramps from 0 at 90% of max_size to 0.3 at 100%+.
         length_penalty = 0.0
         if artifact_size is not None and max_size is not None:
             ratio = artifact_size / max_size
             if ratio > 0.9:
-                # Penalty ramps from 0 at 90% to 0.3 at 100%+
                 length_penalty = min(0.3, (ratio - 0.9) * 3.0)
 
         return FitnessScore(
@@ -117,31 +114,18 @@ def make_skill_fitness_metric(
 ):
     """Build a GEPA-compatible metric closed over an LLMJudge instance.
 
-    The returned callable matches GEPA's metric protocol:
-    (gold, pred, trace=None, pred_name=None, pred_trace=None) ->
-    dspy.Prediction(score: float, feedback: str).
+    Returns a callable matching GEPA's 5-arg protocol:
+    ``(gold, pred, trace=None, pred_name=None, pred_trace=None) ->
+    dspy.Prediction(score: float, feedback: str)``.
 
-    Returning Prediction(score, feedback) lets GEPA's reflective loop
-    consume the judge's natural-language critique directly instead of
-    falling back to its canned "trajectory got a score of {x}" template
-    (see dspy/teleprompt/gepa/gepa.py:537).
+    Returning ``Prediction(score, feedback)`` lets GEPA's reflective loop
+    consume the judge's natural-language critique directly instead of falling
+    back to its canned "trajectory got a score of {x}" template
+    (``dspy/teleprompt/gepa/gepa.py:537``).
 
-    When `pred_trace` is populated (the predictor-level call site —
-    GEPA's Evaluate-over-valset path passes None), the metric also
-    appends:
-
-    - `[BUDGET]` line reporting current vs baseline instruction length,
-      so the reflection LM can see when it has bloated past the
-      configured `max_growth` ratio. Computed from
-      `pred_trace[0][0].signature.instructions`.
-    - `[REASONING]` block quoting the predictor's chain-of-thought
-      reasoning (when present), giving the reflection LM a window into
-      *why* the agent produced the output, not just the final string.
-
-    Critical: GEPA warns and overrides the score if predictor-level
-    scoring (pred_name set) diverges from module-level scoring
-    (pred_name None). Score must be byte-identical across both call
-    sites; only feedback varies.
+    Score must be byte-identical between predictor-level and module-level
+    call sites — GEPA warns and overrides on divergence — so the
+    pred_trace-driven feedback enrichment never touches the score.
     """
     baseline_len = len(baseline_skill_text or "")
     target_len = int(baseline_len * (1 + max_growth)) if baseline_len else 0
@@ -157,9 +141,9 @@ def make_skill_fitness_metric(
         task = getattr(example, "task_input", "") or ""
 
         if not agent_output.strip():
-            # Empty output is a real upstream failure signal (timeout,
-            # content filter, malformed prompt) that GEPA can't otherwise
-            # distinguish from a wrong answer. Surface it.
+            # Surfaces real upstream failures (timeout, content filter,
+            # malformed prompt) that GEPA otherwise can't distinguish from
+            # a wrong answer.
             logger.warning(
                 "skill_fitness_metric: empty agent output for task=%r",
                 task[:80],
@@ -191,13 +175,11 @@ def _augment_feedback_with_pred_trace(
     baseline_len: int,
     target_len: int,
 ) -> str:
-    """Append BUDGET + REASONING context to feedback when pred_trace is set.
+    """Append [BUDGET] + [REASONING] context when pred_trace is set.
 
-    GEPA passes `pred_trace=None` from its Evaluate-over-valset path and
-    a one-tuple list `[(predictor, inputs, output)]` from its reflective
-    feedback path. We only enrich the feedback in the latter case;
-    score is unchanged either way (GEPA enforces score equality across
-    both call sites).
+    GEPA passes ``pred_trace=None`` from its Evaluate-over-valset path and
+    a one-tuple ``[(predictor, inputs, output)]`` from its reflective
+    feedback path. The feedback is enriched only in the latter case.
     """
     if not pred_trace:
         return base_feedback
@@ -239,10 +221,8 @@ def _augment_feedback_with_pred_trace(
 def _clamp_to_unit(value: str) -> float:
     """Parse an LLM-emitted score string and clamp it to [0, 1].
 
-    Falls back to 0.5 (neutral) on malformed output rather than raising —
-    LLMs occasionally emit explanatory text or confidence ranges instead
-    of a clean float. Loud failure here would crash an optimization run
-    over a single noisy judge call.
+    Returns the neutral 0.5 on malformed input rather than raising — a single
+    noisy judge call shouldn't crash a whole optimization run.
     """
     try:
         return min(1.0, max(0.0, float(str(value).strip())))

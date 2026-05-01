@@ -37,11 +37,8 @@ from evolution.core.dataset_builder import EvalExample, EvalDataset
 
 console = Console()
 
-# ── Secret Detection ──────────────────────────────────────────────────────
-
-# Patterns that indicate secrets — NEVER include these in datasets.
-# Each pattern is intentionally anchored to known key formats to minimize
-# false positives on normal prose.
+# Patterns are anchored to known key formats so prose-mining doesn't drop
+# legitimate text containing the substring "password" or "token".
 SECRET_PATTERNS = re.compile(
     r'('
     r'sk-ant-api\S+'           # Anthropic API keys
@@ -91,23 +88,19 @@ def _validate_eval_example(
     Returns:
         Dict of validated fields, or None if the example should be skipped.
     """
-    # task_input and expected_behavior must be non-empty
     if not task_input or not task_input.strip():
         return None
     if not expected_behavior or not expected_behavior.strip():
         return None
 
-    # Normalize difficulty to a known value
     difficulty = difficulty.strip().lower() if difficulty else "medium"
     if difficulty not in VALID_DIFFICULTIES:
         difficulty = "medium"
 
-    # Category must be non-empty
     category = category.strip() if category else "general"
     if not category:
         category = "general"
 
-    # Cap task_input length to prevent bloated datasets
     task_input = task_input[:2000]
 
     return {
@@ -128,30 +121,23 @@ def _is_relevant_to_skill(text: str, skill_name: str, skill_text: str) -> bool:
     text_lower = text.lower()
     skill_lower = skill_name.lower().replace("-", " ").replace("_", " ")
 
-    # Exact full skill name match (handles short names like "mcp", "tdd", "git")
     if skill_lower in text_lower:
         return True
 
-    # Individual word match (only words > 3 chars to avoid false positives
-    # from short fragments like "run", "use", etc.)
+    # Words ≤ 3 chars are skipped to avoid matching "run", "use", etc.
     for word in skill_lower.split():
         if len(word) > 3 and word in text_lower:
             return True
 
-    # Extract meaningful keywords from skill text (first 500 chars)
     skill_keywords = set()
     for word in skill_text[:500].lower().split():
         word = re.sub(r'[^a-z]', '', word)
         if len(word) > 4:
             skill_keywords.add(word)
 
-    # Require at least 2 keyword matches
     message_words = set(re.sub(r'[^a-z\s]', '', text_lower).split())
     overlap = message_words & skill_keywords
     return len(overlap) >= 2
-
-
-# ── Importers ─────────────────────────────────────────────────────────────
 
 
 class ClaudeCodeImporter:
@@ -292,7 +278,6 @@ def _parse_copilot_events(
                 data = event.get("data", {})
 
                 if event_type == "user.message":
-                    # Save previous pair before starting new one
                     if current_user_msg and current_assistant_msg:
                         if not _contains_secret(current_user_msg) and not _contains_secret(current_assistant_msg):
                             pairs.append({
@@ -314,7 +299,6 @@ def _parse_copilot_events(
                         else:
                             current_assistant_msg = content
 
-        # Don't forget the last pair in the file
         if current_user_msg and current_assistant_msg:
             if not _contains_secret(current_user_msg) and not _contains_secret(current_assistant_msg):
                 pairs.append({
@@ -378,8 +362,6 @@ class HermesSessionImporter:
 
             session_id = data.get("session_id", session_file.stem)
 
-            # Walk messages: pair each user message with the next assistant
-            # response (skipping tool messages in between).
             for i, msg in enumerate(msg_list):
                 if msg.get("role") != "user":
                     continue
@@ -389,7 +371,6 @@ class HermesSessionImporter:
                 if _contains_secret(user_text):
                     continue
 
-                # Find the next assistant response
                 assistant_text = ""
                 for j in range(i + 1, len(msg_list)):
                     if msg_list[j].get("role") == "assistant":
@@ -398,7 +379,7 @@ class HermesSessionImporter:
                             assistant_text = content
                             break
                     elif msg_list[j].get("role") == "user":
-                        break  # next user turn, no assistant response found
+                        break
 
                 if assistant_text and _contains_secret(assistant_text):
                     continue
@@ -414,9 +395,6 @@ class HermesSessionImporter:
                     return messages
 
         return messages
-
-
-# ── Relevance Filtering ───────────────────────────────────────────────────
 
 
 class RelevanceFilter:
@@ -443,7 +421,7 @@ class RelevanceFilter:
         scoring: str = dspy.OutputField(desc="JSON object with: relevant, expected_behavior, difficulty, category")
 
     # Class-level default load-bearing for tests that bypass __init__ via
-    # __new__; runtime instances overwrite this in __init__.
+    # __new__; runtime instances overwrite it.
     seed: int = 42
 
     def __init__(self, model: str, seed: int = 42):
@@ -471,28 +449,25 @@ class RelevanceFilter:
         """
         skill_desc = skill_text[:800]
 
-        # Stage 0: drop messages missing required fields
         messages = [m for m in messages if m.get("task_input") and m.get("source")]
 
-        # Stage 1: cheap heuristic pre-filter
         candidates = [
             m for m in messages
             if _is_relevant_to_skill(m["task_input"], skill_name, skill_text)
         ]
 
-        # If heuristics found too few, sample remaining messages
+        # Backfill from random non-matching messages so the LLM sees a useful
+        # sample even when the cheap heuristic misses everything.
         if len(candidates) < max_examples:
             candidate_ids = {id(m) for m in candidates}
             remaining = [m for m in messages if id(m) not in candidate_ids]
             random.Random(self.seed).shuffle(remaining)
             candidates.extend(remaining[:max_examples * 2])
 
-        # Cap candidates to control LLM costs
         candidates = candidates[:max_examples * 3]
 
         console.print(f"  Pre-filtered to {len(candidates)} candidates (from {len(messages)} total)")
 
-        # Stage 2: LLM relevance scoring
         examples = []
         errors = 0
         lm = dspy.LM(self.model, temperature=0.0, max_tokens=2000)
@@ -537,7 +512,6 @@ class RelevanceFilter:
                 if len(examples) >= max_examples:
                     break
 
-        # Report error rate so users know if the LLM is misbehaving
         total_scored = len(candidates)
         if errors > 0:
             console.print(
@@ -551,17 +525,14 @@ class RelevanceFilter:
 def _parse_scoring_json(text: str) -> Optional[dict]:
     """Extract a JSON object from LLM scoring output.
 
-    Strategy:
-      1. Try direct json.loads (handles clean LLM output)
-      2. Fall back to regex extraction (handles text-wrapped or fenced JSON)
-
-    Returns:
-        Parsed dict or None if no valid JSON found.
+    First tries ``json.loads`` for clean output, then falls back to a
+    balanced-brace walk. Regex extraction was rejected — ``r'\\{[^}]+\\}'``
+    breaks on nested braces (e.g. "handle {edge} cases" inside a string).
+    Returns None when no valid JSON object is found.
     """
     if not text:
         return None
 
-    # Fast path: LLM returned clean JSON
     try:
         result = json.loads(text)
         if isinstance(result, dict):
@@ -569,9 +540,6 @@ def _parse_scoring_json(text: str) -> Optional[dict]:
     except json.JSONDecodeError:
         pass
 
-    # Slow path: find balanced {...} block using brace counting.
-    # Simple regex like r'\{[^}]+\}' breaks on nested braces
-    # (e.g. "handle {edge} cases" in a string value).
     start = text.find('{')
     if start == -1:
         return None
@@ -603,9 +571,6 @@ def _parse_scoring_json(text: str) -> Optional[dict]:
                     return None
 
     return None
-
-
-# ── Orchestration ─────────────────────────────────────────────────────────
 
 
 def build_dataset_from_external(
@@ -674,7 +639,6 @@ def build_dataset_from_external(
             f"recommended for meaningful train/val/holdout split)[/yellow]"
         )
 
-    # Split into train/val/holdout (50/25/25)
     random.Random(seed).shuffle(examples)
     n = len(examples)
     n_train = max(1, int(n * 0.5))
@@ -719,7 +683,6 @@ def _load_skill_text(skill_name: str, skills_dir: Optional[Path] = None) -> tupl
     if skills_dir is None:
         skills_dir = Path.home() / ".hermes" / "skills"
 
-    # Try direct match, then subdirectory search
     for pattern in [skill_name, f"*/{skill_name}"]:
         for skill_dir in skills_dir.glob(pattern):
             skill_file = skill_dir / "SKILL.md"
@@ -727,9 +690,6 @@ def _load_skill_text(skill_name: str, skills_dir: Optional[Path] = None) -> tupl
                 return skill_name, skill_file.read_text()
 
     raise FileNotFoundError(f"Skill '{skill_name}' not found in {skills_dir}")
-
-
-# ── CLI ───────────────────────────────────────────────────────────────────
 
 
 @click.command()

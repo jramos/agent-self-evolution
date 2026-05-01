@@ -63,14 +63,12 @@ class TestHoldoutEvaluate:
                             with_inputs=lambda *a, **k: SimpleNamespace(task_input=f"task {i}"))
             for i in range(3)
         ]
-        # Module that returns the same prediction every call.
         module = MagicMock()
         module.return_value = prediction
-        # Metric returns a Prediction-shaped object with .score=0.7 always.
         metric = MagicMock(return_value=SimpleNamespace(score=0.7))
 
-        # Patch dspy.Evaluate to invoke the metric on each example, simulating
-        # what real Evaluate does without spinning up DSPy's machinery.
+        # Stand in for dspy.Evaluate without spinning up DSPy's machinery —
+        # invoke the metric per example, mirroring real Evaluate's contract.
         with patch("evolution.skills.evolve_skill.dspy.Evaluate") as evaluate_cls:
             captured_metric = {}
 

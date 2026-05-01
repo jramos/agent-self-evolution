@@ -23,10 +23,8 @@ from rich.table import Table
 from evolution.core.config import EvolutionConfig
 from evolution.core.skill_sources import discover_skill_sources
 
-# Surface our own package's logs alongside DSPy's. Without this the
-# BudgetAwareProposer per-call observability log (commit 1 of PR #5)
-# stays invisible because Python's `logging` module defaults to WARNING
-# on un-configured root and our package logger never gets reached.
+# Without this, the BudgetAwareProposer + LMTimingCallback logs stay
+# invisible: Python's root logger defaults to WARNING when unconfigured.
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s %(levelname)s %(name)s: %(message)s",
@@ -56,14 +54,11 @@ console = Console()
 _BUDGET_BY_ITERATIONS = {1: "light", 2: "medium", 3: "heavy"}
 
 
-# Quality-gate presets bundle the three curve parameters into named
-# operating modes so users don't need to set each independently. Tuned
-# from PR data points; "default" is calibrated against PR #5 obsidian
-# (+24.2% growth, ~+0.07 expected improvement).
+# `default` is calibrated against the obsidian deploy (+24.2% growth,
+# ~+0.07 expected improvement). `off` disables the gate by setting the
+# free threshold above any realistic growth — static checks still apply.
 _QUALITY_GATE_PRESETS: dict[str, dict[str, float]] = {
     "strict": {
-        # Tighter free threshold + steeper curve + lower abs ceiling.
-        # Use when shipping cost is dominated by inference per-token.
         "growth_free_threshold": 0.10,
         "growth_quality_slope": 0.50,
         "max_absolute_chars": 3000,
@@ -74,17 +69,11 @@ _QUALITY_GATE_PRESETS: dict[str, dict[str, float]] = {
         "max_absolute_chars": 5000,
     },
     "lenient": {
-        # Looser everywhere — useful early in evolution iteration when
-        # the LM judge metric or holdout dataset is noisy and we want
-        # to surface genuinely-improved candidates that strict would reject.
         "growth_free_threshold": 0.30,
         "growth_quality_slope": 0.20,
         "max_absolute_chars": 8000,
     },
     "off": {
-        # Effectively disable the gate by setting the free threshold
-        # higher than any realistic growth. Static checks (size,
-        # non_empty, structure) still apply.
         "growth_free_threshold": 100.0,
         "growth_quality_slope": 0.0,
         "max_absolute_chars": 100_000,
@@ -172,8 +161,9 @@ def _holdout_evaluate_with_metric(module, holdout_examples, metric, lm) -> tuple
     )
     with dspy.context(lm=lm):
         result = evaluator(module)
-    # dspy.Evaluate returns EvaluationResult(score=mean*100, results=[(ex, pred, score), ...]).
-    # Per-example scores are in devset order (evaluate.py:179: zip(devset, results, strict=False)).
+    # dspy.Evaluate returns EvaluationResult(score=mean*100, results=[(ex,
+    # pred, score), ...]) — per-example scores in devset order
+    # (evaluate.py:179: zip(devset, results, strict=False)).
     mean = float(result.score) / 100.0
     per_example = [float(s) for _, _, s in result.results]
     return mean, per_example
@@ -203,42 +193,31 @@ def _default_gepa_runner(
     instruction_proposer=None,
     reflection_model: Optional[str] = None,
 ):
-    # Resolve reflection LM: explicit reflection_model wins; otherwise
-    # fall back to the eval optimizer_model. DSPy's GEPA docstring
-    # recommends gpt-5 with max_tokens=32000; reasoning models also
-    # require max_tokens >= 16000 (DSPy raises ValueError otherwise).
+    # max_tokens=32000 satisfies DSPy's reasoning-model floor of 16000
+    # (DSPy raises ValueError below that).
     reflection_lm_model = reflection_model or optimizer_model
     optimizer = dspy.GEPA(
         metric=metric,
         auto=gepa_budget,
-        # cache=False on the reflection LM: at temperature=1.0 the disk
-        # cache would replay stale mutations across runs and shrink the
-        # diversity of proposed candidates.
+        # cache=False because at temperature=1.0 the disk cache would
+        # replay stale mutations across runs and shrink candidate diversity.
         reflection_lm=dspy.LM(
             reflection_lm_model,
             temperature=1.0,
             max_tokens=32000,
             cache=False,
-            # Bound each attempt at 300s (3x max observed legit gpt-5-mini
-            # call of 103s in the multi-seed spike). num_retries=2 caps
-            # worst-case wall at 10min before raising — preferable to a
-            # silent 30-80min stall. Raised TimeoutError is caught at
-            # _build_optimizer_and_compile and triggers MIPROv2 fallback.
+            # 300s ≈ 3x the longest observed legitimate gpt-5-mini call.
+            # num_retries=2 caps worst-case wall at 10min — preferable to
+            # the silent 30-80min stalls we saw without bounded retries.
+            # The TimeoutError surfaces at _build_optimizer_and_compile
+            # and triggers the MIPROv2 fallback.
             request_timeout=300,
             num_retries=2,
         ),
         seed=seed,
-        # track_stats=True attaches DspyGEPAResult to optimized_module's
-        # .detailed_results, exposing all candidates (not just the best),
-        # the Pareto front mapping, and per-example val_subscores. Doesn't
-        # affect this PR's deploy decision but unlocks future work
-        # (knee-point selection, champion-challenger registry) without
-        # re-architecture.
+        # Required for knee-point selection: exposes DspyGEPAResult
+        # (.candidates, .val_aggregate_scores) on the returned module.
         track_stats=True,
-        # When set, GEPA calls our proposer instead of its default
-        # InstructionProposalSignature path (dspy/teleprompt/gepa/
-        # gepa_utils.py:112-118). The proposer runs inside the
-        # reflection_lm context — the reflection_lm above still drives it.
         instruction_proposer=instruction_proposer,
     )
     return optimizer.compile(baseline_module, trainset=trainset, valset=valset)
@@ -251,9 +230,8 @@ def _default_mipro_runner(
     metric,
     seed: int,
 ):
-    # MIPROv2 expects a metric returning a float; our GEPA-shaped metric
-    # returns dspy.Prediction(score, feedback). Unwrap .score for MIPROv2's
-    # score aggregation; pass-through if the metric already returns float.
+    # MIPROv2 expects float-returning metrics; the GEPA-shaped one returns
+    # dspy.Prediction(score, feedback).
     def float_metric(*args, **kwargs):
         result = metric(*args, **kwargs)
         return float(getattr(result, "score", result))
@@ -366,7 +344,6 @@ def evolve(
 ):
     """Main evolution function — orchestrates the full optimization loop."""
 
-    # Resolve quality-gate preset; explicit overrides win.
     preset = _QUALITY_GATE_PRESETS[quality_gate]
     resolved_free = growth_free_threshold if growth_free_threshold is not None else preset["growth_free_threshold"]
     resolved_slope = growth_quality_slope if growth_quality_slope is not None else preset["growth_quality_slope"]
@@ -392,11 +369,10 @@ def evolve(
     config = EvolutionConfig(**config_kwargs)
     explicit_dirs = [Path(d) for d in (skill_source_dirs or [])]
     if explicit_dirs:
-        # Override the default discovery only when the caller passed dirs.
-        # Otherwise EvolutionConfig's default_factory already ran discovery.
+        # Without explicit dirs, EvolutionConfig's default_factory already
+        # ran discovery — don't double-walk.
         config.skill_sources = discover_skill_sources(explicit_dirs=explicit_dirs)
 
-    # ── 1. Find and load the skill ──────────────────────────────────────
     console.print(f"\n[bold cyan]🧬 Agent Skill Self-Evolution[/bold cyan] — Evolving skill: [bold]{skill_name}[/bold]\n")
 
     skill_path = find_skill(skill_name, config.skill_sources)
@@ -424,11 +400,9 @@ def evolve(
         console.print(f"  Would validate constraints and create PR")
         return
 
-    # Per-run output dir + log file. Created up-front (not after GEPA) so
-    # the FileHandler captures dataset-gen LM calls + GEPA reflection +
-    # holdout eval — useful for diagnosing background-run stalls post-hoc
-    # without re-attaching a TTY. Reused later for evolved_skill.md and
-    # gate_decision.json (don't re-create downstream).
+    # Created up-front (not after GEPA) so the FileHandler captures
+    # dataset-gen LM calls + GEPA reflection + holdout eval. Reused later
+    # for evolved_skill.md and gate_decision.json.
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     output_dir = Path("output") / skill_name / timestamp
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -443,7 +417,6 @@ def evolve(
     register_litellm_failure_callback()
     console.print(f"  Run log: {run_log_path}")
 
-    # ── 2. Build or load evaluation dataset ─────────────────────────────
     console.print(f"\n[bold]Building evaluation dataset[/bold] (source: {eval_source})")
 
     if eval_source == "golden" and dataset_path:
@@ -469,7 +442,6 @@ def evolve(
             artifact_text=skill["raw"],
             artifact_type="skill",
         )
-        # Save for reuse
         save_path = Path("datasets") / "skills" / skill_name
         dataset.save(save_path)
         console.print(f"  Generated {len(dataset.all_examples)} synthetic examples")
@@ -483,11 +455,9 @@ def evolve(
 
     console.print(f"  Split: {len(dataset.train)} train / {len(dataset.val)} val / {len(dataset.holdout)} holdout")
 
-    # Refuse to run if the holdout would be too small to gate on. The
-    # quality-gated growth check consumes the holdout improvement delta;
-    # a 1-2 example holdout has stdev ~0.2 and would make the gate's
-    # decisions essentially noise. Raise eval_dataset_size or
-    # holdout_ratio rather than override min_holdout_size.
+    # A 1-2 example holdout has stdev ~0.2 — the bootstrap CI swamps any
+    # real lift signal. Raise eval_dataset_size or holdout_ratio rather
+    # than override min_holdout_size.
     if len(dataset.holdout) < config.min_holdout_size:
         console.print(
             f"[red]✗ Holdout has only {len(dataset.holdout)} examples; need ≥{config.min_holdout_size} "
@@ -495,11 +465,8 @@ def evolve(
         )
         sys.exit(1)
 
-    # ── 3. Validate constraints on baseline ─────────────────────────────
-    # Static checks only — there's no quality signal for the baseline
-    # because there's nothing to compare it against. The growth-with-
-    # quality gate runs on the evolved skill once the holdout has
-    # produced an improvement signal (§9 below).
+    # Static checks only — the growth-with-quality gate runs later on
+    # the evolved artifact once there's a holdout improvement signal.
     console.print(f"\n[bold]Validating baseline constraints[/bold]")
     validator = ConstraintValidator(config)
     baseline_constraints = validator.validate_static(skill["raw"], "skill")
@@ -514,42 +481,30 @@ def evolve(
     if not all_pass:
         console.print("[yellow]⚠ Baseline skill has constraint violations — proceeding anyway[/yellow]")
 
-    # ── 4. Set up DSPy + GEPA optimizer ─────────────────────────────────
     gepa_budget = _resolve_budget(iterations, budget)
     console.print(f"\n[bold]Configuring optimizer[/bold]")
     console.print(f"  Optimizer: GEPA (budget={gepa_budget})")
     console.print(f"  Optimizer model: {optimizer_model}")
     console.print(f"  Eval model: {eval_model}")
 
-    # Configure DSPy. request_timeout=60 = 6x P99 of slowest observed
-    # gpt-4.1-mini call (9.8s in the multi-seed spike); 5x60s = 5min worst
-    # case before raising. callbacks=[LMTimingCallback()] makes every LM
-    # call visible (start/end + heartbeats at 60s/180s/300s/600s).
+    # request_timeout=60 ≈ 6x P99 of slowest observed gpt-4.1-mini call.
     lm = dspy.LM(eval_model, request_timeout=60, num_retries=5)
-    # warn_on_type_mismatch gates DSPy's typeguard validation of
-    # InputField values against their declared annotations. Several
-    # signatures in this codebase pass empty/None into `str` inputs
-    # (e.g. assistant_response in RelevanceFilter when an event has no
-    # response yet) — fine, but spams a warning per call.
+    # warn_on_type_mismatch=False silences spam from signatures that pass
+    # empty/None into `str` inputs (e.g. RelevanceFilter.assistant_response
+    # before any assistant turn).
     dspy.configure(
         lm=lm,
         warn_on_type_mismatch=False,
         callbacks=[LMTimingCallback()],
     )
 
-    # Create the baseline skill module
     baseline_module = SkillModule(skill["body"])
 
-    # Build the LLM-as-judge metric. The judge is shared by GEPA's
-    # per-iteration scoring and the holdout eval below; constructing it
-    # once means DSPy's LM cache lines up across both surfaces.
-    # Pass baseline + growth budget so the metric can append a [BUDGET]
-    # line to feedback when GEPA hands us pred_trace, teaching the
-    # reflection LM to prefer concise instructions.
-    # The metric's [BUDGET] feedback line targets growth_free_threshold —
-    # the zone where the deploy gate doesn't require quality justification.
-    # The optimizer learns to land there; growth above only deploys if
-    # the holdout improvement justifies it (validate_growth_with_quality).
+    # Build the metric once: DSPy's LM cache lines up across GEPA's
+    # per-iteration scoring and the holdout eval below. The [BUDGET]
+    # feedback line targets growth_free_threshold (the zone where the
+    # deploy gate doesn't require quality justification) so the optimizer
+    # learns to land there.
     judge = LLMJudge(config)
     metric = make_skill_fitness_metric(
         judge,
@@ -557,23 +512,18 @@ def evolve(
         max_growth=config.growth_free_threshold,
     )
 
-    # Prepare DSPy examples
     trainset = dataset.to_dspy_examples("train")
     valset = dataset.to_dspy_examples("val")
 
-    # ── 5. Run GEPA optimization ────────────────────────────────────────
     console.print(f"\n[bold cyan]Running GEPA optimization (budget={gepa_budget})...[/bold cyan]\n")
 
     start_time = time.time()
     failure_log_path = Path("output") / skill_name / "gepa_failure.log"
 
-    # Inject a custom instruction proposer that bakes the size budget into
-    # the reflection prompt the LM sees on every iteration. DSPy's
-    # gepa_kwargs={"reflection_prompt_template": ...} would be the simpler
-    # path, but gepa.api rejects it whenever the adapter (DspyAdapter
-    # always) provides its own propose_new_texts (gepa/api.py:317-321).
-    # This is the documented DSPy-side extension point instead.
-    # Same target as the metric: the no-quality-justification zone.
+    # gepa_kwargs={"reflection_prompt_template": ...} is the simpler path
+    # but gepa.api rejects it whenever DspyAdapter (always) provides its
+    # own propose_new_texts (gepa/api.py:317-321). instruction_proposer
+    # is DSPy's documented extension point.
     proposer = BudgetAwareProposer(
         baseline_chars=len(skill["body"]),
         max_growth=config.growth_free_threshold,
@@ -596,11 +546,10 @@ def evolve(
     elapsed = time.time() - start_time
     console.print(f"\n  {optimizer_name} optimization completed in {elapsed:.1f}s")
 
-    # ── 5b. Knee-point Pareto selection ─────────────────────────────────
-    # GEPA's default = "best by aggregate valset score." With small valsets
-    # (N≤10) that overfits aggressively. Scan candidates within ε=1/n_val of
-    # best valset and pick the most parsimonious one. Skip cleanly when
-    # MIPROv2 fallback fired (no detailed_results attribute).
+    # GEPA's default ("best by aggregate valset score") overfits on small
+    # valsets — observed 1.000 valset / 0.78 holdout on obsidian. Knee-point
+    # picks the most parsimonious candidate within ε=1/n_val instead.
+    # Skipped cleanly when MIPROv2 fallback fired (no detailed_results).
     knee_pick: Optional[CandidatePick] = None
     if hasattr(optimized_module, "detailed_results"):
         details = optimized_module.detailed_results
@@ -614,10 +563,9 @@ def evolve(
             gepa_default_idx=details.best_idx,
             epsilon=knee_point_epsilon,
         )
-        # Fresh SkillModule(knee_text) — never mutate the predictor in place.
-        # Avoids carrying ChainOfThought state (e.g. demos) from the
-        # GEPA-default module; the picked candidate's instruction text is
-        # the only thing we want.
+        # Fresh module instead of mutating in place: avoids carrying
+        # ChainOfThought state (demos, etc.) from the GEPA-default module —
+        # we only want the picked candidate's instruction text.
         optimized_module = SkillModule(knee_pick.skill_text)
         console.print(
             f"\n[bold]Knee-point selection[/bold]: picked candidate "
@@ -628,18 +576,11 @@ def evolve(
             f"fallback={knee_pick.fallback})"
         )
 
-    # ── 6. Extract evolved skill text ───────────────────────────────────
-    # The optimized module's instructions contain the evolved skill text
     evolved_body = optimized_module.skill_text
     evolved_full = reassemble_skill(skill["frontmatter"], evolved_body)
 
-    # output_dir + timestamp were created up-front (right after dry_run
-    # check) so the per-run FileHandler captures all LM telemetry from
-    # dataset gen onward. Reuse them here.
-
-    # ── 7. Static constraints (size, structure, non-empty) ──────────────
     # Fail-fast on broken artifacts before spending judge-call budget on
-    # the holdout. Growth-with-quality is checked after the holdout in §9.
+    # the holdout. Growth-with-quality is checked after the holdout.
     console.print(f"\n[bold]Validating evolved skill (static checks)[/bold]")
     static_constraints = validator.validate_static(evolved_full, "skill")
     static_pass = True
@@ -666,7 +607,6 @@ def evolve(
         console.print(f"  Saved failed variant to {failed_path}")
         return
 
-    # ── 8. Evaluate on holdout set ──────────────────────────────────────
     console.print(
         f"\n[bold]Evaluating on holdout set ({len(dataset.holdout)} examples)[/bold]"
     )
@@ -684,7 +624,6 @@ def evolve(
     )
     improvement = avg_evolved - avg_baseline
 
-    # ── 9. Growth-with-quality gate (paired bootstrap on holdout) ──────
     console.print(f"\n[bold]Validating growth against holdout improvement[/bold]")
     bootstrap = paired_bootstrap(
         baseline_per_example,
@@ -741,7 +680,6 @@ def evolve(
         console.print(f"  Saved failed variant to {failed_path}")
         return
 
-    # ── 9. Report results ───────────────────────────────────────────────
     table = Table(title="Evolution Results")
     table.add_column("Metric", style="bold")
     table.add_column("Baseline", justify="right")
@@ -767,18 +705,8 @@ def evolve(
     console.print()
     console.print(table)
 
-    # ── 10. Save output ─────────────────────────────────────────────────
-    # output_dir + timestamp were created earlier (before §7) so failure
-    # paths can also write evolved_FAILED.md + gate_decision.json into
-    # the same per-run subdir. Reuse them here.
-
-    # Save evolved skill
     (output_dir / "evolved_skill.md").write_text(evolved_full)
-
-    # Save baseline for comparison
     (output_dir / "baseline_skill.md").write_text(skill["raw"])
-
-    # Save metrics
     metrics = {
         "skill_name": skill_name,
         "timestamp": timestamp,

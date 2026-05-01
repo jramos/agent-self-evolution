@@ -30,7 +30,6 @@ def load_skill(skill_path: Path) -> dict:
     """
     raw = skill_path.read_text()
 
-    # Parse YAML frontmatter
     frontmatter = ""
     body = raw
     if raw.strip().startswith("---"):
@@ -39,7 +38,6 @@ def load_skill(skill_path: Path) -> dict:
             frontmatter = parts[1].strip()
             body = parts[2].strip()
 
-    # Extract name and description from frontmatter
     name = ""
     description = ""
     for line in frontmatter.split("\n"):
