@@ -23,9 +23,6 @@ A consistency + completeness pass over the docs in this directory, performed 202
 ### 2. `length_penalty_weight` is a forward-wired no-op
 Declared on `EvolutionConfig` and the CLI (`--length-penalty-weight`) but never read by the metric. Documented inline in `config.py:42-45` and reproduced in `interfaces.md`. Either remove the flag or wire it.
 
-### 3. `numpy` is an implicit dependency
-Used by `evolution/core/stats.py` but not declared in `pyproject.toml` — relying on the dspy/litellm transitive pull. **Documented in `dependencies.md`.** Should be added explicitly so the dependency tree doesn't silently break if dspy ever drops numpy.
-
 ### 4. Module-import-time `logging.basicConfig`
 `evolution/skills/evolve_skill.py:30-34` calls `logging.basicConfig` at import. This is *idempotent* in stdlib (only first call wins) but means importing `evolve_skill` from another script silently configures the root logger. Documented in `interfaces.md` (Logging conventions) — flag if a future user wants to import `evolve()` from a notebook without the side effect.
 
