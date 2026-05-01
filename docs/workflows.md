@@ -129,9 +129,9 @@ sequenceDiagram
     CLI->>Val: validate_growth_with_quality(evolved, baseline, bootstrap)
     Val-->>CLI: [growth_quality_gate ✗ "regression — mean -0.025 < 0"]
 
-    CLI->>FS: write gate_decision.json (decision="reject", reason="growth_quality_gate")
+    CLI->>FS: write gate_decision.json — decision=reject reason=growth_quality_gate
     CLI->>FS: write evolved_FAILED.md
-    CLI-->>CLI: print red banner; return (no metrics.json, no evolved_skill.md)
+    CLI-->>CLI: print red banner and return — no metrics.json or evolved_skill.md
 ```
 
 The reject path is deliberately quiet — it returns instead of raising, so callers (including pytest harnesses) can treat reject as a normal outcome.
