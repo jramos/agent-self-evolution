@@ -17,9 +17,6 @@ A consistency + completeness pass over the docs in this directory, performed 202
 
 ## Minor inconsistencies in the codebase (worth tracking, not blockers)
 
-### 1. Sessiondb path uses hardcoded 50/25/25 split, not config ratios
-`build_dataset_from_external` (`evolution/core/external_importers.py:678-687`) hardcodes `n_train = max(1, int(n*0.5))` / `n_val = max(1, int(n*0.25))` / holdout = remainder. The synthetic path (`SyntheticDatasetBuilder.generate`) normalizes the `EvolutionConfig` ratios. **Documented in `workflows.md` Workflow 5.** Surfaces inconsistent split sizes when comparing synthetic vs. sessiondb runs of the same skill.
-
 ### 2. `length_penalty_weight` is a forward-wired no-op
 Declared on `EvolutionConfig` and the CLI (`--length-penalty-weight`) but never read by the metric. Documented inline in `config.py:42-45` and reproduced in `interfaces.md`. Either remove the flag or wire it.
 

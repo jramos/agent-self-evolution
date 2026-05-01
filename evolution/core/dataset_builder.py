@@ -86,6 +86,38 @@ class EvalDataset:
         ]
 
 
+def split_examples(
+    examples: list[EvalExample],
+    *,
+    seed: int,
+    train_ratio: float,
+    val_ratio: float,
+    holdout_ratio: float,
+) -> EvalDataset:
+    """Shuffle ``examples`` and split into train/val/holdout.
+
+    Ratios are normalized internally — they don't need to sum to 1. Empty
+    input returns an empty dataset. All three ratios are required (no
+    defaults) so callers can't drift from EvolutionConfig defaults silently.
+    """
+    if not examples:
+        return EvalDataset()
+
+    shuffled = list(examples)
+    random.Random(seed).shuffle(shuffled)
+
+    n_total = len(shuffled)
+    ratio_sum = train_ratio + val_ratio + holdout_ratio
+    n_train = max(1, int(n_total * train_ratio / ratio_sum))
+    n_val = max(1, int(n_total * val_ratio / ratio_sum))
+
+    return EvalDataset(
+        train=shuffled[:n_train],
+        val=shuffled[n_train:n_train + n_val],
+        holdout=shuffled[n_train + n_val:],
+    )
+
+
 class SyntheticDatasetBuilder:
     """Generate evaluation datasets using a strong LLM.
 
@@ -155,22 +187,12 @@ class SyntheticDatasetBuilder:
             if c.get("task_input") and c.get("expected_behavior")
         ]
 
-        # Normalize the three ratios so they sum to 1; otherwise the holdout
-        # split would silently absorb whatever the other two left over.
-        random.Random(self.config.seed).shuffle(examples)
-        n_total = len(examples)
-        ratio_sum = (
-            self.config.train_ratio
-            + self.config.val_ratio
-            + self.config.holdout_ratio
-        )
-        n_train = max(1, int(n_total * self.config.train_ratio / ratio_sum))
-        n_val = max(1, int(n_total * self.config.val_ratio / ratio_sum))
-
-        return EvalDataset(
-            train=examples[:n_train],
-            val=examples[n_train:n_train + n_val],
-            holdout=examples[n_train + n_val:],
+        return split_examples(
+            examples,
+            seed=self.config.seed,
+            train_ratio=self.config.train_ratio,
+            val_ratio=self.config.val_ratio,
+            holdout_ratio=self.config.holdout_ratio,
         )
 
 
@@ -193,13 +215,12 @@ class GoldenDatasetLoader:
                 if line.strip():
                     examples.append(EvalExample.from_dict(json.loads(line)))
 
-        random.Random(seed).shuffle(examples)
-        n = len(examples)
-        n_train = max(1, int(n * 0.5))
-        n_val = max(1, int(n * 0.25))
-
-        return EvalDataset(
-            train=examples[:n_train],
-            val=examples[n_train:n_train + n_val],
-            holdout=examples[n_train + n_val:],
+        # Golden ratios are not config-driven yet; preserve historical
+        # 50/25/25 until anyone needs to tune them.
+        return split_examples(
+            examples,
+            seed=seed,
+            train_ratio=0.5,
+            val_ratio=0.25,
+            holdout_ratio=0.25,
         )

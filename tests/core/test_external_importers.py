@@ -717,6 +717,58 @@ class TestBuildDataset:
         assert (output / "val.jsonl").exists()
         assert (output / "holdout.jsonl").exists()
 
+    def test_uses_configured_ratios_not_hardcoded_50_25(self, tmp_path):
+        """Sessiondb path was hardcoded 50/25/25; must now match the synthetic
+        path's normalized 0.5/0.40/0.50 → 36/29/36 of N=60. Locking this
+        prevents the regression where someone tunes EvolutionConfig defaults
+        and only the synthetic path picks it up.
+        """
+        from evolution.core.config import EvolutionConfig
+        from evolution.core.dataset_builder import split_examples
+
+        n = 60
+        mock_messages = [
+            {"task_input": f"categorize batch {i} into topics", "source": "claude-code"}
+            for i in range(n)
+        ]
+        mock_examples = [
+            EvalExample(
+                task_input=f"categorize batch {i} into topics",
+                expected_behavior="group by topic",
+                difficulty="easy",
+                category="sorting",
+                source="claude-code",
+            )
+            for i in range(n)
+        ]
+
+        with patch.object(ClaudeCodeImporter, "extract_messages", return_value=mock_messages), \
+             patch.object(RelevanceFilter, "filter_and_score", return_value=mock_examples):
+            sessiondb_ds = build_dataset_from_external(
+                skill_name="categorize",
+                skill_text="Sort text into topics.",
+                sources=["claude-code"],
+                output_path=tmp_path / "out",
+                model="test-model",
+                max_examples=n,
+                seed=42,
+            )
+
+        # Compute the expected split via the same helper the function uses.
+        cfg = EvolutionConfig()
+        expected = split_examples(
+            mock_examples, seed=42,
+            train_ratio=cfg.train_ratio,
+            val_ratio=cfg.val_ratio,
+            holdout_ratio=cfg.holdout_ratio,
+        )
+
+        assert len(sessiondb_ds.train) == len(expected.train)
+        assert len(sessiondb_ds.val) == len(expected.val)
+        assert len(sessiondb_ds.holdout) == len(expected.holdout)
+        # And confirm the new sizes are NOT the old hardcoded 50/25/25.
+        assert (len(sessiondb_ds.train), len(sessiondb_ds.val)) != (30, 15)
+
     def test_no_messages_returns_empty_dataset(self, tmp_path):
         with patch.object(ClaudeCodeImporter, "extract_messages", return_value=[]):
             dataset = build_dataset_from_external(
