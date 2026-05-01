@@ -117,4 +117,4 @@ See [PLAN.md](PLAN.md) for the complete architecture, evaluation data strategy, 
 
 ## License
 
-MIT — © 2026 Nous Research
+MIT — © 2026 [jramos](https://github.com/jramos) and [Nous Research](https://github.com/NousResearch)
