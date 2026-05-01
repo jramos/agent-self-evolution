@@ -17,9 +17,6 @@ A consistency + completeness pass over the docs in this directory, performed 202
 
 ## Minor inconsistencies in the codebase (worth tracking, not blockers)
 
-### 2. `length_penalty_weight` is a forward-wired no-op
-Declared on `EvolutionConfig` and the CLI (`--length-penalty-weight`) but never read by the metric. Documented inline in `config.py:42-45` and reproduced in `interfaces.md`. Either remove the flag or wire it.
-
 ### 4. Module-import-time `logging.basicConfig`
 `evolution/skills/evolve_skill.py:30-34` calls `logging.basicConfig` at import. This is *idempotent* in stdlib (only first call wins) but means importing `evolve_skill` from another script silently configures the root logger. Documented in `interfaces.md` (Logging conventions) — flag if a future user wants to import `evolve()` from a notebook without the side effect.
 
