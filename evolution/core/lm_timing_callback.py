@@ -49,9 +49,8 @@ class LMTimingCallback(BaseCallback):
         self,
         timer_factory: Callable[..., threading.Timer] = threading.Timer,
     ) -> None:
-        # `timer_factory` is injectable so tests use a FakeTimer with
-        # .advance(seconds) instead of time.sleep on real intervals
-        # (deterministic, sub-ms, not flaky on slow CI).
+        # Injectable so tests can use a FakeTimer.advance(seconds) double
+        # instead of monkeypatching intervals + time.sleep (flaky on slow CI).
         self._timer_factory = timer_factory
         self._inflight: dict[str, tuple[float, str, list[Any]]] = {}
         self._lock = threading.Lock()

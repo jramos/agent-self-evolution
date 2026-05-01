@@ -41,19 +41,12 @@ class _BudgetAwareInstructionProposal(dspy.Signature):
     )
 
 
-# Phrasing patterns are deliberate, drawn from the prompt-engineering
-# literature on length-constrained generation:
-#   - Countdown framing ("at most N characters") raised exact-length
-#     compliance from <30% to >95% on GPT-4.1 in arXiv:2508.13805.
-#   - "At most" beats "must be"/"should not exceed" across multiple
-#     A/B-tested sources.
-#   - Loss-frame ("each character above N is wasted") leverages a known
-#     compliance lever; brevity becomes a directly costed resource.
-#   - One-shot example anchors the LM to a concrete pattern at the
-#     target length rather than just a number.
-# Curated tight example below is in the same domain as our typical
-# inputs (terminal/CLI procedural skills) so the LM has a recognizable
-# stylistic reference, not a domain mismatch.
+# The phrasings below are picked from length-constrained-generation
+# literature: countdown framing + "at most N" + loss-frame ("each char
+# above N is wasted") + a one-shot example at the target length. Together
+# these raised exact-length compliance from <30% to >95% on GPT-4.1
+# (arXiv:2508.13805). The example is from the terminal/CLI domain to
+# match our typical input style.
 _TIGHT_INSTRUCTION_EXAMPLE = """\
 Read, list, and search markdown notes in $VAULT_PATH (default ~/notes).
 
@@ -108,12 +101,9 @@ class BudgetAwareProposer:
         safety_margin: float = 0.10,
     ):
         self.baseline_chars = baseline_chars
-        # Effective fraction we ask the LM for (clamped at 0 — if the
-        # validator's max_growth is itself <= safety_margin, we ask for
-        # zero growth, not negative).
         prompt_growth = max(0.0, max_growth - safety_margin)
-        # Floor the target at 1 to avoid handing the LM a literal 0; if the
-        # caller passes baseline_chars=0 they're disabling the budget anyway.
+        # Floor at 1 so the LM never gets handed a literal 0; baseline_chars=0
+        # is the documented "disable the budget" case anyway.
         self.target_chars = max(1, int(baseline_chars * (1 + prompt_growth)))
         signature = _BudgetAwareInstructionProposal.with_instructions(
             _BUDGET_AWARE_INSTRUCTIONS.format(
@@ -142,18 +132,15 @@ class BudgetAwareProposer:
             new_text = result.improved_instruction
             new_len = len(new_text)
             pct_of_target = (new_len / self.target_chars * 100) if self.target_chars else 0
-            # Always log per-call observation. Without this the only way to
-            # confirm the budget signal is reaching the LM is to grep GEPA's
-            # internal logs (which print proposer outputs but not its inputs).
+            # GEPA's own logs print proposer outputs but not inputs; this is
+            # the only way to confirm the budget signal reached the LM.
             logger.info(
                 "BudgetAwareProposer iter: target=%d, proposed[%s]=%d chars (%.1f%% of target)",
                 self.target_chars, name, new_len, pct_of_target,
             )
             if new_len > self.target_chars:
-                # Soft enforcement: hard truncation would corrupt mid-sentence
-                # and lose the very change that might have helped. Log louder
-                # for tracking; future PRs may add a multi-objective Pareto
-                # term or a custom-adapter score-side penalty.
+                # Soft enforcement only: hard truncation would corrupt
+                # mid-sentence and could lose the very change that helped.
                 logger.warning(
                     "BudgetAwareProposer: %s came back at %d chars (target %d)",
                     name, new_len, self.target_chars,

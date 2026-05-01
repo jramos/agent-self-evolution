@@ -49,7 +49,6 @@ def paired_bootstrap(
     rng = np.random.default_rng(seed)
     indices = rng.integers(0, n, size=(n_resamples, n))
     resample_means = diffs[indices].mean(axis=1)
-
     alpha = (1.0 - confidence) / 2.0
     return {
         "mean": float(diffs.mean()),

@@ -60,11 +60,10 @@ class HermesSkillSource:
         skills_dir = self._skills_dir()
         if skills_dir is None:
             return None
-        # Direct match: skills/<category>/<skill_name>/SKILL.md
         for skill_md in skills_dir.rglob("SKILL.md"):
             if skill_md.parent.name == skill_name:
                 return skill_md
-        # Fuzzy: scan frontmatter `name:` field
+        # Fall back to frontmatter `name:` for skills whose dir name differs.
         for skill_md in skills_dir.rglob("SKILL.md"):
             try:
                 head = skill_md.read_text()[:500]
@@ -101,7 +100,11 @@ class ClaudeCodeSkillSource:
         self.name = "claude-code"
 
     def _skill_dirs(self) -> list[Path]:
-        """All ``<vendor>/<plugin>/<version>/skills`` directories on disk."""
+        """All ``<vendor>/<plugin>/<version>/skills`` directories on disk.
+
+        On per-plugin version collisions the highest version (lex-sorted, works
+        for SemVer) wins.
+        """
         if not self.plugins_cache.exists():
             return []
         roots: list[Path] = []
@@ -117,7 +120,6 @@ class ClaudeCodeSkillSource:
                 )
                 if not versions:
                     continue
-                # Highest version wins on per-plugin collisions.
                 latest_skills = versions[-1] / "skills"
                 if latest_skills.is_dir():
                     roots.append(latest_skills)

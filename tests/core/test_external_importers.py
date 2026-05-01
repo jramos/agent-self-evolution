@@ -42,7 +42,6 @@ from evolution.core.external_importers import (
 from evolution.core.dataset_builder import EvalExample
 
 
-# ── Secret Detection ────────────────────────────────────────────────────────
 
 
 class TestSecretDetection:
@@ -103,8 +102,6 @@ class TestSecretDetection:
         # "ask" contains "sk" — should not trigger
         assert not _contains_secret("ask the user for their preferences")
 
-    # -- Targeted assignment patterns (password=, secret=, token=) --
-
     def test_detects_password_assignment(self):
         assert _contains_secret("password=my_super_secret_123")
         assert _contains_secret("password: hunter2abc")
@@ -153,7 +150,6 @@ class TestSecretDetection:
         assert _contains_secret("DATABASE_URL=postgres://user:pass@host/db")
 
 
-# ── Relevance Heuristics ────────────────────────────────────────────────────
 
 
 class TestRelevanceHeuristics:
@@ -199,7 +195,6 @@ class TestRelevanceHeuristics:
         )
 
 
-# ── Scoring JSON Parser ─────────────────────────────────────────────────────
 
 
 class TestScoringJsonParser:
@@ -251,7 +246,6 @@ class TestScoringJsonParser:
         assert _parse_scoring_json("") is None
 
 
-# ── Claude Code Importer ────────────────────────────────────────────────────
 
 
 class TestClaudeCodeImporter:
@@ -266,7 +260,7 @@ class TestClaudeCodeImporter:
         with patch.object(ClaudeCodeImporter, "HISTORY_PATH", history):
             messages = ClaudeCodeImporter.extract_messages()
 
-        # 1 valid message (second too short, third has secret)
+        # Second message is too short, third contains a secret.
         assert len(messages) == 1
         assert messages[0]["task_input"] == "sort my slack messages by topic"
         assert messages[0]["source"] == "claude-code"
@@ -317,7 +311,6 @@ class TestClaudeCodeImporter:
         assert len(messages) == 1
 
 
-# ── Copilot Importer ────────────────────────────────────────────────────────
 
 
 class TestCopilotImporter:
@@ -377,7 +370,6 @@ class TestCopilotImporter:
 
         events = [
             {"type": "user.message", "data": {"content": "hello this is a long enough message"}},
-            # No assistant response follows
         ]
         (session_dir / "events.jsonl").write_text(
             "\n".join(json.dumps(e) for e in events) + "\n"
@@ -464,7 +456,6 @@ class TestCopilotHelpers:
             events_path.chmod(0o644)  # Restore for cleanup
 
 
-# ── Hermes Session Importer ──────────────────────────────────────────────────
 
 
 class TestHermesSessionImporter:
@@ -556,7 +547,6 @@ class TestHermesSessionImporter:
         assert len(msgs) == 3
 
 
-# ── Skill Name Matching ──────────────────────────────────────────────────────
 
 
 class TestSkillNameMatching:
@@ -584,7 +574,6 @@ class TestSkillNameMatching:
         )
 
 
-# ── RelevanceFilter (mocked DSPy) ───────────────────────────────────────────
 
 
 class TestRelevanceFilter:
@@ -594,7 +583,6 @@ class TestRelevanceFilter:
     def mock_dspy(self):
         """Mock dspy.LM and dspy.context to avoid real LLM calls."""
         with patch("evolution.core.external_importers.dspy") as mock:
-            # Make dspy.context a no-op context manager
             mock.context.return_value.__enter__ = MagicMock(return_value=None)
             mock.context.return_value.__exit__ = MagicMock(return_value=False)
             yield mock
@@ -603,7 +591,6 @@ class TestRelevanceFilter:
         rf = RelevanceFilter.__new__(RelevanceFilter)
         rf.model = "test-model"
 
-        # Mock scorer to return relevant=True
         rf.scorer = MagicMock()
         rf.scorer.return_value = SimpleNamespace(
             scoring='{"relevant": true, "expected_behavior": "group by topic", "difficulty": "easy", "category": "sorting"}'
@@ -620,7 +607,6 @@ class TestRelevanceFilter:
         inputs = {ex.task_input for ex in examples}
         assert "sort these messages by topic" in inputs
         assert "categorize my emails please" in inputs
-        # All examples should have the scoring metadata
         for ex in examples:
             assert ex.expected_behavior == "group by topic"
             assert ex.difficulty == "easy"
@@ -687,7 +673,6 @@ class TestRelevanceFilter:
         assert len(examples) == 0
 
 
-# ── build_dataset_from_external ──────────────────────────────────────────────
 
 
 class TestBuildDataset:
@@ -724,13 +709,10 @@ class TestBuildDataset:
                 max_examples=10,
             )
 
-        # Dataset has all three splits
         assert len(dataset.train) > 0
         assert len(dataset.val) > 0
-        # total examples preserved
         assert len(dataset.all_examples) == 10
 
-        # JSONL files written
         assert (output / "train.jsonl").exists()
         assert (output / "val.jsonl").exists()
         assert (output / "holdout.jsonl").exists()
@@ -800,7 +782,6 @@ class TestBuildDataset:
         assert len(dataset.all_examples) == 0
 
 
-# ── End-to-End Roundtrip ─────────────────────────────────────────────────────
 
 
 class TestEndToEndRoundtrip:
@@ -823,7 +804,6 @@ class TestEndToEndRoundtrip:
         ]
         history.write_text("\n".join(lines) + "\n")
 
-        # Mock examples that RelevanceFilter would produce
         mock_examples = [
             EvalExample(
                 task_input=f"categorize these {i} messages into topics",
@@ -847,16 +827,13 @@ class TestEndToEndRoundtrip:
                 model="test-model",
             )
 
-        # Verify files exist
         assert (output / "train.jsonl").exists()
         assert (output / "val.jsonl").exists()
         assert (output / "holdout.jsonl").exists()
 
-        # Verify GoldenDatasetLoader can read them back
         reloaded = GoldenDatasetLoader.load(output)
         assert len(reloaded.all_examples) == len(dataset.all_examples)
 
-        # Verify content survived the roundtrip
         for ex in reloaded.all_examples:
             assert ex.task_input.startswith("categorize these")
             assert ex.expected_behavior == "group by theme"
@@ -902,13 +879,11 @@ class TestEndToEndRoundtrip:
 
         assert len(dataset.all_examples) == 1
 
-        # Reload and verify
         reloaded = EvalDataset.load(output)
         assert len(reloaded.all_examples) == 1
         assert reloaded.all_examples[0].task_input == "sort these messages into categories for me"
 
 
-# ── _load_skill_text ─────────────────────────────────────────────────────────
 
 
 class TestLoadSkillText:
@@ -943,7 +918,6 @@ class TestLoadSkillText:
             _load_skill_text("my-skill", skills_dir=tmp_path)
 
 
-# ── Validation ───────────────────────────────────────────────────────────────
 
 
 class TestValidateEvalExample:
@@ -1146,7 +1120,6 @@ class TestMinDatasetSizeWarning:
         assert MIN_DATASET_SIZE > 1  # Confirm the constant is meaningful
 
 
-# ── CLI (CliRunner) ──────────────────────────────────────────────────────────
 
 
 class TestCLI:
@@ -1166,9 +1139,6 @@ class TestCLI:
                 "--source", "claude-code",
                 "--dry-run",
             ], catch_exceptions=False, env={"HOME": str(tmp_path.parent)})
-
-            # _load_skill_text uses ~/.hermes/skills by default, so we patch it
-        # Instead, use the skills_dir parameter approach
         with patch("evolution.core.external_importers._load_skill_text", return_value=("test-skill", "Test skill.")), \
              patch.object(ClaudeCodeImporter, "extract_messages", return_value=[
                  {"task_input": "hello with enough length", "source": "claude-code"},
@@ -1197,7 +1167,6 @@ class TestCLI:
         assert "Import external session data" in result.output
 
 
-# ── EvalExample Format ───────────────────────────────────────────────────────
 
 
 class TestEvalExampleFormat:

@@ -24,7 +24,6 @@ def _write_skill(path: Path, name: str, body: str = "# Body\n") -> Path:
     return path
 
 
-# ── HermesSkillSource ──────────────────────────────────────────────────
 
 
 class TestHermesSkillSource:
@@ -65,7 +64,6 @@ class TestHermesSkillSource:
         assert source.list_skills() == ["alpha", "beta"]
 
 
-# ── ClaudeCodeSkillSource ─────────────────────────────────────────────
 
 
 class TestClaudeCodeSkillSource:
@@ -124,7 +122,6 @@ class TestClaudeCodeSkillSource:
         assert source.find_skill("missing") is None
 
 
-# ── LocalDirSkillSource ───────────────────────────────────────────────
 
 
 class TestLocalDirSkillSource:
@@ -145,7 +142,6 @@ class TestLocalDirSkillSource:
         assert source.list_skills() == ["with-skill"]
 
 
-# ── discover_skill_sources ────────────────────────────────────────────
 
 
 class TestDiscoverSkillSources:
