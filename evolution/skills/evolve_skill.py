@@ -885,8 +885,8 @@ def evolve(
     type=click.Choice(["val-best", "smallest"]),
     help="Within the ε-band, which candidate to pick. val-best (default): "
     "highest val score wins, smallest body as tiebreak. smallest: greedy "
-    "parsimony (the prior default before May 2026) — picks the smallest body "
-    "regardless of val cost; available for users explicitly chasing compression.",
+    "parsimony — picks the smallest body regardless of val cost; "
+    "available for users explicitly chasing compression.",
 )
 def main(skill, iterations, eval_source, dataset_path, optimizer_model, reflection_model,
          eval_model, skill_source_dir, run_tests, dry_run, seed, budget, no_fallback,

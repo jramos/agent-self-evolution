@@ -1,12 +1,10 @@
 """Knee-point Pareto selection from a GEPA candidate front.
 
 GEPA's default is "pick the candidate with the best aggregate valset score."
-With small valsets (N≤10) that pick overfits aggressively — we observed
-1.000 valset / 0.78 holdout on `obsidian` (PR #7 e2e). Knee-point
-selection scans the band of candidates within ε of the best valset and
-picks the most parsimonious one (smallest instruction body). Parsimony
-is a legitimate regularizer (MDL / Occam) and is uncorrelated with the
-lucky-on-N noise driving the overfit.
+On small valsets that pick overfits aggressively — high val score paired with
+a meaningfully worse holdout. Knee-point selection scans the band of candidates
+within ε of the best valset and walks them in `strategy` order (default
+val-best; smallest body available for compression-chasing).
 
 References:
 - Branke et al. 2004, "Finding Knees in Multi-objective Optimization"
@@ -77,11 +75,10 @@ def select_knee_point(
             entire band fails static, and recorded in telemetry regardless.
         epsilon: override the 1/n_val default. CLI flag passes this through.
         strategy: which order to walk the band when picking.
-            "val-best" (default): highest val score first, smallest body
-                as tiebreak. Set as default May 2026 after the arxiv run
-                showed the prior parsimony-first sort sacrificed val=0.044
-                for body=240 chars (5%) — a bad trade.
-            "smallest": ascending body_chars (the prior default). Available
+            "val-best" (default): highest val score first, smallest body as
+                tiebreak. Picks the candidate most likely to generalize.
+            "smallest": ascending body_chars. Greedy parsimony — picks the
+                smallest body in the band regardless of val cost. Available
                 via --knee-point-strategy for users explicitly chasing
                 compression even at val cost.
 

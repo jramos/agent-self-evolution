@@ -46,7 +46,7 @@ evolution/
 │   ├── dataset_builder.py               # synthetic + golden dataset loaders
 │   ├── external_importers.py            # session-history mining (Claude Code / Copilot / Hermes)
 │   ├── fitness.py                       # LLMJudge + GEPA-shaped metric
-│   ├── lm_timing_callback.py            # LM-call observability (PR #11)
+│   ├── lm_timing_callback.py            # LM-call observability
 │   ├── skill_sources.py                 # SkillSource protocol + 3 implementations
 │   └── stats.py                         # paired_bootstrap CI
 ├── skills/                              # Tier 1: skill-file evolution (only tier implemented)
@@ -78,7 +78,7 @@ evolution/
 | `evolution/core/stats.py` | 61 | `paired_bootstrap` helper |
 | **Total** | **~3,500** | excludes empty `__init__.py` shims |
 
-Test suite: 12 test files under `tests/core/` and `tests/skills/`. **282 tests** collected (verified 2026-05-03 after R1+R3+R4).
+Test suite: 12 test files under `tests/core/` and `tests/skills/`. **282 tests** collected.
 
 ## Runtime dependencies
 

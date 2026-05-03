@@ -1,20 +1,20 @@
 # Documentation Review Notes
 
-Initial consistency + completeness pass performed 2026-04-30 against the codebase at branch `feature/docs`. Re-verified 2026-05-03 against the post-PR-#15 + post-report-refactor state of the codebase. See `recent_changes.md` for the change log between the two verification dates.
+A consistency + completeness pass over the docs in this directory.
 
-## Verified accurate (2026-05-03)
+## Verified accurate
 
 - Module / package layout matches `find evolution -type f -name "*.py"`.
-- `EvolutionConfig` field defaults match `evolution/core/config.py` (now includes `gate_mode` and `inferiority_tolerance` fields per PR #15; `eval_dataset_size=150`).
+- `EvolutionConfig` field defaults match `evolution/core/config.py`.
 - `gate_decision.json` schema_version `"4"` matches both payload-writer sites in `evolution/skills/evolve_skill.py` and the test fixtures in `tests/skills/test_evolve_skill_validation_flow.py`.
 - `_HEARTBEAT_TIERS` table matches `evolution/core/lm_timing_callback.py:37-42`.
 - LM `request_timeout` / `num_retries` values per surface verified:
   - judge LM (`fitness.py`): `request_timeout=60, num_retries=5`
   - dataset gen LM (`dataset_builder.py`): `request_timeout=120, num_retries=5`
   - reflection LM (`evolve_skill.py`): `request_timeout=300, num_retries=2`
-- Pinned dep ranges verified against `pyproject.toml`. Direct deps now include `numpy>=1.24` (PR #14) and `pyyaml>=6.0` (report-refactor branch).
+- Pinned dep ranges verified against `pyproject.toml`. Direct deps include `numpy>=1.24` and `pyyaml>=6.0`.
 - 282 tests collected (`pytest tests/ -q` inside venv).
-- `generate_report.py` is now a renderer; `reports/phase1_prose.yaml` carries editorial content; `assets/dna.png` is the title-page logo. Reflected in `dependencies.md`, `codebase_info.md` repo-layout diagram, and the AGENTS.md gotchas section.
+- `generate_report.py` is a renderer that takes `--run output/<skill>/<ts>/ --prose reports/<phase>_prose.yaml --out reports/<phase>_validation_report.pdf`. Numbers come from the run dir's `gate_decision.json` + `metrics.json` + `run.log`; editorial prose + tables come from the YAML; the title-page logo is `assets/dna.png`.
 
 ## Minor inconsistencies in the codebase (worth tracking, not blockers)
 
@@ -57,7 +57,7 @@ The fallback chain is implemented but the "when does GEPA underperform / when do
 
 ## What's NOT documented (intentionally)
 
-- **Per-PR rationale.** That's `git log --oneline` + PR descriptions.
+- **Per-PR rationale or change log.** That's `git log` + PR descriptions — not duplicated here.
 - **Bug-fix recipes.** The fix is in the code; the commit message has the context.
 - **Debugging output samples.** Run logs and `gate_decision.json` snapshots are user-specific and rot fast.
 - **Style preferences.** Lives in `AGENTS.md`.

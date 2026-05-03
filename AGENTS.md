@@ -98,7 +98,7 @@ Inferred from the existing source — follow these unless you have a specific re
 
 ### Comments
 - **Comments should be rare and only when necessary to explain why an otherwise unintuitive decision was made.** If it's just explaining how the code works, that should be left to thoughtful variable naming and function docstrings.
-- **Don't reference task IDs / PR numbers in source comments** unless the PR/issue is the load-bearing context (e.g., "PR #5 obsidian deploy" calibration data points). Generic "added for PR #N" rots fast.
+- **Don't reference task IDs, PR numbers, internal change designators, or "in May 2026"-style dates anywhere user-visible** — not in source comments, not in docs, not in commit messages, not in PR bodies. Git log is authoritative for "when" and "why"; describe the *current state* or the *behavior change*, not the PR-numbered journey.
 - **No "removed X" or "deprecated Y" placeholder comments.** Just delete.
 
 ### Imports
@@ -136,7 +136,7 @@ Inferred from the existing source — follow these unless you have a specific re
 
 `[meta:test-workflow]` Cross-ref: [docs/interfaces.md](docs/interfaces.md), [docs/workflows.md Workflow 8](docs/workflows.md)
 
-- Run all tests: `pytest tests/ -q` from the repo root, **inside the venv** (`source .venv/bin/activate`). 262 tests as of 2026-04-30.
+- Run all tests: `pytest tests/ -q` from the repo root, **inside the venv** (`source .venv/bin/activate`). Currently 282 tests.
 - All tests use mocks for LM calls — no API keys required.
 - The `_skill_source_env` autouse fixture (defined per-module, e.g., `tests/core/test_constraints.py:9`) sets `SKILL_SOURCES_HERMES_REPO` to a `tmp_path` fake repo so discovery doesn't pick up real `~/.hermes` / `~/.claude` installs. Add this fixture to any new test that touches `EvolutionConfig`.
 
@@ -206,7 +206,7 @@ Per-run dir: `output/<skill>/<YYYYMMDD_HHMMSS>/`. Contents vary by outcome:
 - **`logging.basicConfig` at module import** — `evolve_skill.py:30-34` configures the root logger when imported. Side effect, intentional for the CLI; surprising if you `from evolution.skills.evolve_skill import evolve` in a notebook.
 - **`val_ratio + holdout_ratio + train_ratio = 1.40`** — looks like a bug; isn't. `split_examples()` normalizes the three ratios so they sum to 1; the synthetic, sessiondb, and golden paths all go through the same helper.
 - **`max_tokens=16000` on dataset gen LM** — load-bearing. At `eval_dataset_size>=60` the JSON output truncates mid-string with anything lower; the current default `eval_dataset_size=150` makes this even more critical. Locked by `TestSyntheticGeneratorLMConfig`.
-- **Default `eval_dataset_size` was bumped from 60 → 150 in May 2026** to tighten the bootstrap CI on the holdout split. Historical experiments (notably `experiments/2026-04-30-multi-seed-noise-floor.md` and any per-skill calibration done at N=60) need re-running to re-establish the noise floor for current defaults.
+- **`eval_dataset_size=150` is the current default**, sized for a ~53-example holdout that's tight enough on the bootstrap CI to detect ±2% effects. Per-skill calibration runs at smaller N are no longer authoritative.
 - **Reflection LM `request_timeout=300, num_retries=2`** (vs `=5` for judge) — deliberate fast-fail. A reflection-LM `TimeoutError` triggers MIPROv2 fallback rather than burning more time on a stuck call.
 - **Knee-point reads `optimized_module.detailed_results`** — only present when GEPA succeeded (and `track_stats=True`). MIPROv2 fallback path skips knee-point cleanly. `gate_decision.json.knee_point.applied=false` with `reason="no_detailed_results"` is the signal.
 - **`SkillModule.TaskWithSkill` docstring is a placeholder** — `__init__` overwrites the signature instructions per-instance via `with_instructions(skill_text)`. Don't rely on the class-level docstring.

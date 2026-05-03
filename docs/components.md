@@ -67,7 +67,7 @@ Reference of the major modules in `evolution/`. Each entry: what it owns, the pu
 
 **Iteration order:** ascending `body_chars`, tiebreak `-val_score`, then `idx`. First candidate whose `static_validator(text)` returns all-passed is picked. If every band candidate fails static, falls back to `gepa_default_idx` and records `fallback="static_failed_all"`.
 
-**Why parsimony:** it's a legitimate regularizer (MDL / Occam) and is uncorrelated with the "lucky on N" noise that drives GEPA's overfit on small valsets — observed on PR #7 e2e (1.000 valset / 0.78 holdout on `obsidian`).
+**Why parsimony:** it's a legitimate regularizer (MDL / Occam) and is uncorrelated with the "lucky on N" noise that drives GEPA's overfit on small valsets.
 
 ## evolution/core/config.py — EvolutionConfig dataclass
 

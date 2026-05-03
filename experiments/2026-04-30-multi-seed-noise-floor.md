@@ -1,7 +1,5 @@
 # Multi-seed noise floor + cross-skill validation (Combo 1 spike)
 
-> **NOTE (2026-05-03):** This experiment was run at `eval_dataset_size=60` and the results below characterize the noise floor at that N. The framework default has since been bumped to `eval_dataset_size=150` (rationale in `evolution/core/config.py`). The N=60 numbers here are a historical baseline; future calibration should re-run at N=150 to re-establish the deploy-rate / noise-floor characteristics under current defaults.
-
 **Date:** 2026-04-30
 **Branch:** `feat/n60-valset-cleanup` (PR #9 open, awaiting merge)
 **Config:** `eval_dataset_size=60`, `val_ratio=0.40`, knee-point ε=1/n_val ≈ 0.0625
