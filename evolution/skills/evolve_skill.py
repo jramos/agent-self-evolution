@@ -34,7 +34,7 @@ from evolution.core.dataset_builder import SyntheticDatasetBuilder, EvalDataset,
 from evolution.core.external_importers import build_dataset_from_external
 from evolution.core.stats import paired_bootstrap
 from evolution.core.fitness import LLMJudge, make_skill_fitness_metric
-from evolution.core.constraints import ConstraintValidator
+from evolution.core.constraints import ConstraintValidator, resolve_decision_rule
 from evolution.core.lm_timing_callback import (
     LMTimingCallback,
     register_litellm_failure_callback,
@@ -55,9 +55,15 @@ _BUDGET_BY_ITERATIONS = {1: "light", 2: "medium", 3: "heavy"}
 
 
 # `default` is calibrated against the obsidian deploy (+24.2% growth,
-# ~+0.07 expected improvement). `off` disables the gate by setting the
-# free threshold above any realistic growth — static checks still apply.
-_QUALITY_GATE_PRESETS: dict[str, dict[str, float]] = {
+# ~+0.07 expected improvement). `off` disables the slope/ceiling checks
+# but still enforces bootstrap.mean ≥ 0 — see deprecation warning when
+# users select it. `non-inferiority` is the recommended preset for
+# compression-focused runs: it ships variants statistically not-worse-
+# than-baseline by more than ``inferiority_tolerance``.
+#
+# Type widens to ``Any`` because ``gate_mode`` is a string and
+# ``inferiority_tolerance`` is a float — no longer a uniform float dict.
+_QUALITY_GATE_PRESETS: dict[str, dict[str, Any]] = {
     "strict": {
         "growth_free_threshold": 0.10,
         "growth_quality_slope": 0.50,
@@ -77,6 +83,13 @@ _QUALITY_GATE_PRESETS: dict[str, dict[str, float]] = {
         "growth_free_threshold": 100.0,
         "growth_quality_slope": 0.0,
         "max_absolute_chars": 100_000,
+    },
+    "non-inferiority": {
+        "growth_free_threshold": 100.0,
+        "growth_quality_slope": 0.0,
+        "max_absolute_chars": 100_000,
+        "gate_mode": "non_inferiority",
+        "inferiority_tolerance": 0.02,
     },
 }
 
@@ -337,6 +350,7 @@ def evolve(
     growth_free_threshold: Optional[float] = None,
     growth_quality_slope: Optional[float] = None,
     max_absolute_chars: Optional[int] = None,
+    inferiority_tolerance: Optional[float] = None,
     bootstrap_confidence: Optional[float] = None,
     bootstrap_n_resamples: Optional[int] = None,
     knee_point_epsilon: Optional[float] = None,
@@ -344,9 +358,21 @@ def evolve(
     """Main evolution function — orchestrates the full optimization loop."""
 
     preset = _QUALITY_GATE_PRESETS[quality_gate]
+    if quality_gate == "off":
+        logging.getLogger(__name__).warning(
+            '--quality-gate off still enforces a regression check (mean ≥ 0). '
+            'For "deploy if not significantly worse than baseline" semantics, '
+            'use --quality-gate non-inferiority --inferiority-tolerance 0.02.'
+        )
     resolved_free = growth_free_threshold if growth_free_threshold is not None else preset["growth_free_threshold"]
     resolved_slope = growth_quality_slope if growth_quality_slope is not None else preset["growth_quality_slope"]
     resolved_abs = max_absolute_chars if max_absolute_chars is not None else preset["max_absolute_chars"]
+    resolved_gate_mode = preset.get("gate_mode", "no_regression")
+    resolved_tolerance = (
+        inferiority_tolerance
+        if inferiority_tolerance is not None
+        else preset.get("inferiority_tolerance", 0.0)
+    )
 
     config_kwargs = dict(
         iterations=iterations,
@@ -359,6 +385,8 @@ def evolve(
         growth_free_threshold=resolved_free,
         growth_quality_slope=resolved_slope,
         max_absolute_chars=int(resolved_abs),
+        gate_mode=resolved_gate_mode,
+        inferiority_tolerance=float(resolved_tolerance),
     )
     if bootstrap_confidence is not None:
         config_kwargs["bootstrap_confidence"] = bootstrap_confidence
@@ -594,7 +622,7 @@ def evolve(
         failed_path = output_dir / "evolved_FAILED.md"
         failed_path.write_text(evolved_full)
         _write_gate_decision(output_dir, {
-            "schema_version": "3",
+            "schema_version": "4",
             "decision": "reject",
             "reason": "static_constraint_failure",
             "failed_constraints": [c.constraint_name for c in static_constraints if not c.passed],
@@ -646,11 +674,15 @@ def evolve(
         0.0,
         config.growth_quality_slope * (growth_pct - config.growth_free_threshold),
     )
+    # Single source of truth for the rule string — same helper the constraint uses.
+    decision_rule_used = resolve_decision_rule(config, growth_pct)
     decision_payload = {
-        "schema_version": "3",
+        "schema_version": "4",
         "decision": "deploy" if growth_pass else "reject",
         "reason": "passed" if growth_pass else "growth_quality_gate",
-        "decision_rule_used": "no_regression_only" if required_improvement == 0.0 else "dual_check",
+        "decision_rule_used": decision_rule_used,
+        "gate_mode": config.gate_mode,
+        "inferiority_tolerance": config.inferiority_tolerance,
         "growth_pct": growth_pct,
         "required_improvement": required_improvement,
         "baseline_chars": len(skill["raw"]),
@@ -785,10 +817,13 @@ def evolve(
 @click.option(
     "--quality-gate",
     default="default",
-    type=click.Choice(["strict", "default", "lenient", "off"]),
+    type=click.Choice(["strict", "default", "lenient", "off", "non-inferiority"]),
     help="Preset for the deploy gate's growth-vs-improvement curve. "
     "strict=(0.10/0.50/3000), default=(0.20/0.30/5000), "
-    "lenient=(0.30/0.20/8000), off=disabled (static checks only).",
+    "lenient=(0.30/0.20/8000), off=slope/ceiling disabled but mean ≥ 0 still "
+    "enforced (misnamed; see deprecation warning), "
+    "non-inferiority=ships variants statistically not-worse-than-baseline by "
+    "more than --inferiority-tolerance (recommended for compression runs).",
 )
 @click.option(
     "--growth-free-threshold",
@@ -811,6 +846,14 @@ def evolve(
     type=int,
     help="Advanced: override the preset's max_absolute_chars (hard char "
     "ceiling on the evolved artifact, independent of growth %).",
+)
+@click.option(
+    "--inferiority-tolerance",
+    default=None,
+    type=float,
+    help="Tolerance for the non-inferiority gate: pass when bootstrap "
+    "lower bound > -tolerance. Only meaningful with "
+    "--quality-gate non-inferiority (default tolerance there: 0.02).",
 )
 @click.option(
     "--bootstrap-confidence",
@@ -837,8 +880,8 @@ def evolve(
 def main(skill, iterations, eval_source, dataset_path, optimizer_model, reflection_model,
          eval_model, skill_source_dir, run_tests, dry_run, seed, budget, no_fallback,
          quality_gate, growth_free_threshold,
-         growth_quality_slope, max_absolute_chars, bootstrap_confidence,
-         bootstrap_resamples, knee_point_epsilon):
+         growth_quality_slope, max_absolute_chars, inferiority_tolerance,
+         bootstrap_confidence, bootstrap_resamples, knee_point_epsilon):
     """Evolve an agent skill using DSPy + GEPA optimization."""
     evolve(
         skill_name=skill,
@@ -858,6 +901,7 @@ def main(skill, iterations, eval_source, dataset_path, optimizer_model, reflecti
         growth_free_threshold=growth_free_threshold,
         growth_quality_slope=growth_quality_slope,
         max_absolute_chars=max_absolute_chars,
+        inferiority_tolerance=inferiority_tolerance,
         bootstrap_confidence=bootstrap_confidence,
         bootstrap_n_resamples=bootstrap_resamples,
         knee_point_epsilon=knee_point_epsilon,

@@ -6,7 +6,7 @@ A consistency + completeness pass over the docs in this directory, performed 202
 
 - Module / package layout matches `find evolution -type f -name "*.py"`.
 - `EvolutionConfig` field defaults match `evolution/core/config.py:18-99`.
-- `gate_decision.json` schema_version `"3"` matches `evolution/skills/evolve_skill.py:713` and the test fixture in `tests/skills/test_evolve_skill_validation_flow.py:208`.
+- `gate_decision.json` schema_version `"4"` matches `evolution/skills/evolve_skill.py:713` and the test fixture in `tests/skills/test_evolve_skill_validation_flow.py:208`.
 - `_HEARTBEAT_TIERS` table matches `evolution/core/lm_timing_callback.py:37-42`.
 - LM `request_timeout` / `num_retries` values per surface verified:
   - judge LM (`fitness.py:83`): `request_timeout=60, num_retries=5`

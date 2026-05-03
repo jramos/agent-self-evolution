@@ -28,6 +28,8 @@ class EvolutionConfig:
     growth_free_threshold: float = 0.20     # required(growth) = max(0, slope*(growth-free))
     growth_quality_slope: float = 0.30
     max_absolute_chars: int = 5000          # hard ceiling, independent of growth %
+    gate_mode: str = "no_regression"        # "no_regression" | "non_inferiority"
+    inferiority_tolerance: float = 0.0      # only used when gate_mode == "non_inferiority"
 
     # Bootstrap CI
     bootstrap_confidence: float = 0.90
@@ -154,7 +156,7 @@ class CandidatePick:
 
 Frozen for safety — once selected, the pick + diagnostics shouldn't be mutated. `band_roster` is sorted by descending `val_score`, ties broken by `idx`.
 
-## gate_decision.json (schema_version "3")
+## gate_decision.json (schema_version "4")
 
 The structured deploy-gate decision, written to `output/<skill>/<timestamp>/gate_decision.json` on every run regardless of outcome. The schema is the **calibration substrate** — `tests/skills/test_evolve_skill_validation_flow.py:TestGrowthGateDecisionSchema` locks the field list so future calibration scripts (`jq -s '...' output/*/*/gate_decision.json`) don't break.
 
@@ -164,7 +166,7 @@ Written when any `validate_static` check fails on the evolved artifact (short-ci
 
 ```json
 {
-  "schema_version": "3",
+  "schema_version": "4",
   "decision": "reject",
   "reason": "static_constraint_failure",
   "failed_constraints": ["non_empty"],
@@ -178,10 +180,12 @@ Written when any `validate_static` check fails on the evolved artifact (short-ci
 
 ```json
 {
-  "schema_version": "3",
+  "schema_version": "4",
   "decision": "deploy",                          // or "reject"
   "reason": "passed",                            // or "growth_quality_gate"
-  "decision_rule_used": "dual_check",            // or "no_regression_only"
+  "decision_rule_used": "dual_check",            // or "no_regression_only" | "non_inferiority"
+  "gate_mode": "no_regression",                  // "no_regression" | "non_inferiority"
+  "inferiority_tolerance": 0.0,                  // only meaningful when gate_mode == "non_inferiority"
   "growth_pct": 0.242,                           // (evolved_chars - baseline_chars) / baseline_chars
   "required_improvement": 0.013,                 // max(0, slope * (growth - free))
   "baseline_chars": 1264,
@@ -230,7 +234,8 @@ Written when any `validate_static` check fails on the evolved artifact (short-ci
 ```
 
 ### Decision rule mapping
-- `decision_rule_used == "no_regression_only"` ⟺ `required_improvement == 0.0` ⟺ `growth_pct ≤ growth_free_threshold` (or growth was negative).
+- `decision_rule_used == "no_regression_only"` ⟺ `required_improvement == 0.0` AND `gate_mode == "no_regression"` (default). Pass requires `bootstrap.mean >= 0`.
+- `decision_rule_used == "non_inferiority"` ⟺ `required_improvement == 0.0` AND `gate_mode == "non_inferiority"`. Pass requires `bootstrap.lower_bound > -inferiority_tolerance` (Decagon-style; recommended for compression-focused runs at small N).
 - `decision_rule_used == "dual_check"` ⟺ `required_improvement > 0`. Pass requires `bootstrap.mean ≥ required_improvement` AND `bootstrap.lower_bound > 0`.
 
 ### Knee-point applied/skipped

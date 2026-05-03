@@ -42,6 +42,14 @@ class EvolutionConfig:
     # Backstop for short baselines that legitimately need expansion —
     # a 200-char baseline growing to 1500 is +650% but only 1500 absolute.
     max_absolute_chars: int = 5000
+    # Decision rule when required_improvement == 0 (growth ≤ free threshold).
+    # "no_regression": pass when bootstrap.mean ≥ 0 (default; safer).
+    # "non_inferiority": pass when bootstrap.lower_bound > -inferiority_tolerance
+    # (Decagon-style; ships variants statistically not-worse-than-baseline by
+    # more than the tolerance — necessary at small N where bootstrap CI swamps
+    # tiny effects).
+    gate_mode: str = "no_regression"
+    inferiority_tolerance: float = 0.0
     # Basic (reverse percentile) bootstrap is the literature-recommended
     # method when N is small. BCa is the upgrade path once N≥20 routinely.
     bootstrap_confidence: float = 0.90

@@ -67,7 +67,7 @@ The `evolution/<tier>/` directories form **a clean layering**: `evolution/core/`
 2. Eval dataset is built (synthetic LM gen / golden file / sessiondb mining).
 3. Skill body wrapped as `dspy.Module`; GEPA optimizes it with `BudgetAwareProposer` injecting a char budget into the reflection prompt.
 4. Knee-point Pareto selection picks the most parsimonious candidate within ε of the best valset score (instead of GEPA's "best by valset score" default which overfits on small N).
-5. Static constraints + paired-bootstrap growth-quality gate decide deploy vs. reject; both outcomes write `gate_decision.json`.
+5. Static constraints + paired-bootstrap growth-quality gate decide deploy vs. reject; both outcomes write `gate_decision.json`. The default rule is `no_regression` (`mean >= 0`); `--quality-gate non-inferiority` switches to `lower_bound > -inferiority_tolerance` (recommended for compression-focused runs at small N where the bootstrap CI swamps tiny effects).
 
 ## What lives where
 
@@ -186,7 +186,7 @@ Per-run dir: `output/<skill>/<YYYYMMDD_HHMMSS>/`. Contents vary by outcome:
 | File | When | Purpose |
 |---|---|---|
 | `run.log` | always | Every LM call (start, end, heartbeats), every retry |
-| `gate_decision.json` | always | Structured deploy decision (schema_version `"3"`) |
+| `gate_decision.json` | always | Structured deploy decision (schema_version `"4"`) |
 | `evolved_skill.md` | deploy only | New SKILL.md ready to ship |
 | `baseline_skill.md` | deploy only | Original (for diffing) |
 | `metrics.json` | deploy only | Top-level run summary |

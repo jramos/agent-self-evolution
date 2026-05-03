@@ -119,7 +119,7 @@ class TestStaticValidationShortCircuitsBeforeHoldout:
         # Manual reproduction of the static-failure branch's payload —
         # locks the schema so a future refactor can't silently drop fields.
         payload = {
-            "schema_version": "3",
+            "schema_version": "4",
             "decision": "reject",
             "reason": "static_constraint_failure",
             "failed_constraints": ["non_empty"],
@@ -128,7 +128,7 @@ class TestStaticValidationShortCircuitsBeforeHoldout:
         }
         path = _write_gate_decision(tmp_path, payload)
         loaded = json.loads(path.read_text())
-        assert loaded["schema_version"] == "3"
+        assert loaded["schema_version"] == "4"
         assert loaded["reason"] == "static_constraint_failure"
         assert "non_empty" in loaded["failed_constraints"]
         assert "knee_point" in loaded
@@ -142,10 +142,12 @@ class TestGrowthGateDecisionSchema:
 
     def test_required_fields_present(self, tmp_path: Path):
         payload = {
-            "schema_version": "3",
+            "schema_version": "4",
             "decision": "reject",
             "reason": "growth_quality_gate",
             "decision_rule_used": "dual_check",
+            "gate_mode": "no_regression",
+            "inferiority_tolerance": 0.0,
             "growth_pct": 0.30,
             "required_improvement": 0.030,
             "baseline_chars": 1000,
@@ -197,13 +199,14 @@ class TestGrowthGateDecisionSchema:
         # Calibration script will rely on these keys.
         for required in (
             "schema_version", "decision", "decision_rule_used",
+            "gate_mode", "inferiority_tolerance",
             "growth_pct", "required_improvement",
             "baseline_chars", "evolved_chars",
             "growth_free_threshold", "growth_quality_slope",
             "bootstrap", "knee_point", "dataset",
         ):
             assert required in loaded, f"missing {required}"
-        assert loaded["schema_version"] == "3"
+        assert loaded["schema_version"] == "4"
         for required_in_bootstrap in (
             "mean", "lower_bound", "upper_bound", "n_examples",
             "n_resamples", "confidence",

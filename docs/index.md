@@ -68,7 +68,7 @@ The codebase is small (~3.5K LOC of source + ~12 test files) but architecturally
 These docs are written for a snapshot of the codebase as of **2026-04-30**. The fast-moving parts to verify when consulting:
 
 - `EvolutionConfig` defaults (especially `eval_dataset_size`, `growth_*`, `bootstrap_*`)
-- `gate_decision.json` schema_version (currently `"3"`)
+- `gate_decision.json` schema_version (currently `"4"`)
 - LM model defaults in `evolve_skill.py` CLI options
 - Test count (262 as of last verification)
 - LM `request_timeout` / `num_retries` — these were added in PR #11 (`lm-call-hardening`) and may be tuned further

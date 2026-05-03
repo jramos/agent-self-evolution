@@ -201,6 +201,149 @@ class TestGrowthQualityGate:
         assert "regression risk" in result.message
 
 
+class TestNonInferiorityGate:
+    """Non-inferiority decision rule (gate_mode='non_inferiority').
+
+    When the quality slope yields required_improvement == 0 (negative or
+    in-budget growth) AND gate_mode is 'non_inferiority', the gate passes
+    when bootstrap.lower_bound > -inferiority_tolerance — i.e. we have
+    `confidence` confidence the evolved isn't worse than baseline by more
+    than the tolerance. This is the rule that ships compression-without-
+    regression candidates that the default no_regression rule rejects.
+    """
+
+    @staticmethod
+    def _validator(tolerance: float):
+        config = EvolutionConfig(
+            gate_mode="non_inferiority",
+            inferiority_tolerance=tolerance,
+        )
+        return ConstraintValidator(config)
+
+    @staticmethod
+    def _bootstrap(mean: float, lower: float, upper: float = None, n: int = 23) -> dict:
+        return {
+            "mean": mean,
+            "lower_bound": lower,
+            "upper_bound": upper if upper is not None else max(mean, lower),
+            "n_examples": n,
+            "n_resamples": 2000,
+            "confidence": 0.90,
+        }
+
+    def test_passes_when_lower_bound_within_tolerance(self):
+        # codebase-summary case: mean=-0.0006, lower=-0.007, tol=0.02 → PASS
+        validator = self._validator(tolerance=0.02)
+        baseline = "x" * 14_827
+        evolved = "x" * 6_980  # negative growth
+        result = validator._check_growth_with_quality_gate(
+            evolved, baseline, self._bootstrap(mean=-0.0006, lower=-0.007),
+        )
+        assert result.passed
+        assert "non-inferior" in result.message
+
+    def test_passes_at_exact_tolerance_boundary(self):
+        validator = self._validator(tolerance=0.02)
+        baseline = "x" * 1000
+        evolved = "x" * 800
+        # lower_bound exactly at -tolerance → boundary inclusive
+        result = validator._check_growth_with_quality_gate(
+            evolved, baseline, self._bootstrap(mean=-0.01, lower=-0.02),
+        )
+        assert result.passed
+
+    def test_fails_when_lower_bound_below_tolerance(self):
+        # arxiv-style: mean=-0.023, lower=-0.135, tol=0.02 → FAIL (lower < -tol)
+        validator = self._validator(tolerance=0.02)
+        baseline = "x" * 10_036
+        evolved = "x" * 4_777
+        result = validator._check_growth_with_quality_gate(
+            evolved, baseline, self._bootstrap(mean=-0.023, lower=-0.135),
+        )
+        assert not result.passed
+        assert "lower-bound" in result.message
+        assert "tolerance" in result.message
+
+    def test_passes_with_negative_mean_when_lower_within_tolerance(self):
+        # Distinguishes non_inferiority from no_regression_only: a negative
+        # mean would fail no_regression but passes here when CI is tight.
+        validator = self._validator(tolerance=0.05)
+        baseline = "x" * 1000
+        evolved = "x" * 800
+        result = validator._check_growth_with_quality_gate(
+            evolved, baseline, self._bootstrap(mean=-0.03, lower=-0.04),
+        )
+        assert result.passed  # would fail under no_regression_only (mean < 0)
+
+    def test_zero_tolerance_reduces_to_lower_strictly_above_zero(self):
+        # tolerance=0 → require lower >= 0 (matches Statsig "no regression risk")
+        validator = self._validator(tolerance=0.0)
+        baseline = "x" * 1000
+        evolved = "x" * 800
+        # lower exactly 0 → passes (>= -0)
+        result = validator._check_growth_with_quality_gate(
+            evolved, baseline, self._bootstrap(mean=0.01, lower=0.0),
+        )
+        assert result.passed
+        # lower slightly negative → fails
+        result = validator._check_growth_with_quality_gate(
+            evolved, baseline, self._bootstrap(mean=0.01, lower=-0.001),
+        )
+        assert not result.passed
+
+    def test_dual_check_branch_unaffected_by_gate_mode(self):
+        # Even with gate_mode=non_inferiority, dual_check fires when
+        # growth exceeds the free threshold (required > 0).
+        validator = self._validator(tolerance=0.02)
+        baseline = "x" * 1000
+        evolved = "x" * 1400  # +40% → required = 0.30 * 0.20 = 0.06
+        # Pass dual_check: mean ≥ required AND lower > 0
+        result = validator._check_growth_with_quality_gate(
+            evolved, baseline, self._bootstrap(mean=0.07, lower=0.005),
+        )
+        assert result.passed
+        # Fail dual_check: lower ≤ 0 (regression risk) — non_inferiority
+        # tolerance does NOT apply here because required > 0
+        result = validator._check_growth_with_quality_gate(
+            evolved, baseline, self._bootstrap(mean=0.10, lower=-0.01),
+        )
+        assert not result.passed
+        assert "regression risk" in result.message
+
+
+class TestResolveDecisionRule:
+    """Single-source-of-truth helper for the decision rule string.
+
+    Both the constraint and the gate_decision.json payload writer must
+    agree on the rule name; computing it in one place avoids drift.
+    """
+
+    def test_dual_check_when_required_positive(self):
+        config = EvolutionConfig()  # default slope=0.30, free=0.20
+        # Growth 0.50 → required = 0.30 * 0.30 = 0.09 > 0
+        from evolution.core.constraints import resolve_decision_rule
+        assert resolve_decision_rule(config, growth_pct=0.50) == "dual_check"
+
+    def test_no_regression_only_default_when_required_zero(self):
+        config = EvolutionConfig()
+        from evolution.core.constraints import resolve_decision_rule
+        assert resolve_decision_rule(config, growth_pct=0.0) == "no_regression_only"
+        assert resolve_decision_rule(config, growth_pct=-0.5) == "no_regression_only"
+
+    def test_non_inferiority_when_gate_mode_set_and_required_zero(self):
+        config = EvolutionConfig(gate_mode="non_inferiority", inferiority_tolerance=0.02)
+        from evolution.core.constraints import resolve_decision_rule
+        assert resolve_decision_rule(config, growth_pct=0.0) == "non_inferiority"
+        assert resolve_decision_rule(config, growth_pct=-0.5) == "non_inferiority"
+
+    def test_dual_check_overrides_gate_mode(self):
+        # gate_mode only matters in the required==0 branch; dual_check fires
+        # regardless when required > 0.
+        config = EvolutionConfig(gate_mode="non_inferiority", inferiority_tolerance=0.02)
+        from evolution.core.constraints import resolve_decision_rule
+        assert resolve_decision_rule(config, growth_pct=0.50) == "dual_check"
+
+
 class TestAbsoluteCharCeiling:
     def test_under_ceiling_passes(self, validator):
         result = validator._check_absolute_chars("x" * 4000)
