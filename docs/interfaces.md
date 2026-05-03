@@ -44,6 +44,7 @@ The primary user-facing interface.
 | `--bootstrap-confidence <float>` | `0.90` | Two-sided CI confidence for the holdout improvement bootstrap. |
 | `--bootstrap-resamples <int>` | `2000` | Bootstrap iterations. |
 | `--knee-point-epsilon <float>` | `1/n_val` | ε for knee-point Pareto band. Override only with calibrated reason. |
+| `--knee-point-strategy {val-best,smallest}` | `val-best` | Within the ε-band, which candidate to pick. `val-best` (default): highest val score wins, smallest body as tiebreak. `smallest`: greedy parsimony (the prior default before May 2026), available for users explicitly chasing compression. |
 
 ### Misc
 | Flag | Default | Notes |
@@ -100,6 +101,7 @@ evolve(
     bootstrap_confidence=None,
     bootstrap_n_resamples=None,
     knee_point_epsilon=None,
+    knee_point_strategy="val-best", # "val-best" | "smallest"
 )
 ```
 

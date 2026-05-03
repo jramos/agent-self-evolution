@@ -354,6 +354,7 @@ def evolve(
     bootstrap_confidence: Optional[float] = None,
     bootstrap_n_resamples: Optional[int] = None,
     knee_point_epsilon: Optional[float] = None,
+    knee_point_strategy: str = "val-best",
 ):
     """Main evolution function — orchestrates the full optimization loop."""
 
@@ -588,6 +589,7 @@ def evolve(
             ),
             gepa_default_idx=details.best_idx,
             epsilon=knee_point_epsilon,
+            strategy=knee_point_strategy,
         )
         # Fresh module instead of mutating in place: avoids carrying
         # ChainOfThought state (demos, etc.) from the GEPA-default module —
@@ -877,11 +879,21 @@ def evolve(
     "you have a calibrated reason — random tightening narrows the band and "
     "biases selection back toward the GEPA default.",
 )
+@click.option(
+    "--knee-point-strategy",
+    default="val-best",
+    type=click.Choice(["val-best", "smallest"]),
+    help="Within the ε-band, which candidate to pick. val-best (default): "
+    "highest val score wins, smallest body as tiebreak. smallest: greedy "
+    "parsimony (the prior default before May 2026) — picks the smallest body "
+    "regardless of val cost; available for users explicitly chasing compression.",
+)
 def main(skill, iterations, eval_source, dataset_path, optimizer_model, reflection_model,
          eval_model, skill_source_dir, run_tests, dry_run, seed, budget, no_fallback,
          quality_gate, growth_free_threshold,
          growth_quality_slope, max_absolute_chars, inferiority_tolerance,
-         bootstrap_confidence, bootstrap_resamples, knee_point_epsilon):
+         bootstrap_confidence, bootstrap_resamples, knee_point_epsilon,
+         knee_point_strategy):
     """Evolve an agent skill using DSPy + GEPA optimization."""
     evolve(
         skill_name=skill,
@@ -905,6 +917,7 @@ def main(skill, iterations, eval_source, dataset_path, optimizer_model, reflecti
         bootstrap_confidence=bootstrap_confidence,
         bootstrap_n_resamples=bootstrap_resamples,
         knee_point_epsilon=knee_point_epsilon,
+        knee_point_strategy=knee_point_strategy,
     )
 
 
