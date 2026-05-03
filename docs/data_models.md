@@ -36,7 +36,7 @@ class EvolutionConfig:
     bootstrap_n_resamples: int = 2000
 
     # Eval dataset
-    eval_dataset_size: int = 150            # bumped from 60 in May 2026; see config.py for rationale
+    eval_dataset_size: int = 150
     train_ratio: float = 0.5
     val_ratio: float = 0.40
     holdout_ratio: float = 0.50

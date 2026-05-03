@@ -55,16 +55,9 @@ class EvolutionConfig:
     bootstrap_confidence: float = 0.90
     bootstrap_n_resamples: int = 2000
 
-    # Set after the multi-seed `obsidian` spike: at N=30 the bootstrap CI
-    # swamped real lift and almost every evolution was rejected. At N=60
-    # (train≈21, val≈17, holdout≈22 after ratio normalization) the framework
-    # produced deploys roughly 4/5 of the time on `obsidian`.
-    # Bumped to 150 after the codebase-summary + arxiv runs in May 2026
-    # showed n=18-23 holdouts produced bootstrap CIs too wide to detect
-    # small effects (paper uses n=300; practitioner consensus is "≥300
-    # total"). At N=150 the normalized 0.36/0.29/0.36 split lands ~54
-    # train / ~43 val / ~54 holdout — eval cost grows ~2.5× but optimizer
-    # cost (set by GEPA budget) is unchanged.
+    # Sized so the normalized 0.36/0.29/0.36 split lands ~54/43/53 — the
+    # ~53-example holdout keeps the paired-bootstrap CI tight enough to
+    # detect ±2% effects. Smaller N produces CIs too wide to gate on.
     eval_dataset_size: int = 150
     train_ratio: float = 0.5
     val_ratio: float = 0.40

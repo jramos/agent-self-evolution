@@ -1,19 +1,20 @@
 # Documentation Review Notes
 
-A consistency + completeness pass over the docs in this directory, performed 2026-04-30 against the codebase at branch `feature/docs`.
+A consistency + completeness pass over the docs in this directory.
 
 ## Verified accurate
 
 - Module / package layout matches `find evolution -type f -name "*.py"`.
-- `EvolutionConfig` field defaults match `evolution/core/config.py:18-99`.
-- `gate_decision.json` schema_version `"4"` matches `evolution/skills/evolve_skill.py:713` and the test fixture in `tests/skills/test_evolve_skill_validation_flow.py:208`.
+- `EvolutionConfig` field defaults match `evolution/core/config.py`.
+- `gate_decision.json` schema_version `"4"` matches both payload-writer sites in `evolution/skills/evolve_skill.py` and the test fixtures in `tests/skills/test_evolve_skill_validation_flow.py`.
 - `_HEARTBEAT_TIERS` table matches `evolution/core/lm_timing_callback.py:37-42`.
 - LM `request_timeout` / `num_retries` values per surface verified:
-  - judge LM (`fitness.py:83`): `request_timeout=60, num_retries=5`
-  - dataset gen LM (`dataset_builder.py:134`): `request_timeout=120, num_retries=5`
-  - reflection LM (`evolve_skill.py:227-228`): `request_timeout=300, num_retries=2`
-- Pinned dep ranges verified against `pyproject.toml`.
-- 262 tests collected (`pytest --collect-only` inside venv).
+  - judge LM (`fitness.py`): `request_timeout=60, num_retries=5`
+  - dataset gen LM (`dataset_builder.py`): `request_timeout=120, num_retries=5`
+  - reflection LM (`evolve_skill.py`): `request_timeout=300, num_retries=2`
+- Pinned dep ranges verified against `pyproject.toml`. Direct deps include `numpy>=1.24` and `pyyaml>=6.0`.
+- 282 tests collected (`pytest tests/ -q` inside venv).
+- `generate_report.py` is a renderer that takes `--run output/<skill>/<ts>/ --prose reports/<phase>_prose.yaml --out reports/<phase>_validation_report.pdf`. Numbers come from the run dir's `gate_decision.json` + `metrics.json` + `run.log`; editorial prose + tables come from the YAML; the title-page logo is `assets/dna.png`.
 
 ## Minor inconsistencies in the codebase (worth tracking, not blockers)
 
@@ -50,13 +51,13 @@ The fallback chain is implemented but the "when does GEPA underperform / when do
 ## Recommended documentation maintenance
 
 1. **Re-verify defaults on every release.** `EvolutionConfig` defaults are tuned often; doc table in `data_models.md` will drift.
-2. **Re-collect test count when refactoring.** Currently 262; bump if tests are added/removed.
+2. **Re-collect test count when refactoring.** Currently 282; bump if tests are added/removed.
 3. **Update `gate_decision.json` schema docs on every schema bump.** When `schema_version` increments, both `data_models.md` and `interfaces.md` (test surfaces) need to mention the new fields.
 4. **Verify mermaid diagrams render.** GitHub renders mermaid in markdown; if a diagram breaks during edits, the rest of the page still renders, so silent breakage is possible. Spot-check on github.com after pushing.
 
 ## What's NOT documented (intentionally)
 
-- **Per-PR rationale.** That's `git log --oneline` + PR descriptions.
+- **Per-PR rationale or change log.** That's `git log` + PR descriptions — not duplicated here.
 - **Bug-fix recipes.** The fix is in the code; the commit message has the context.
 - **Debugging output samples.** Run logs and `gate_decision.json` snapshots are user-specific and rot fast.
 - **Style preferences.** Lives in `AGENTS.md`.

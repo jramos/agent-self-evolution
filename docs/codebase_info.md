@@ -24,9 +24,10 @@ graph TD
     A --> D[datasets/<br/>generated + golden eval data]
     A --> E[experiments/<br/>spike writeups]
     A --> F[output/<br/>per-run artifacts]
-    A --> G[reports/<br/>validation PDFs]
+    A --> G[reports/<br/>validation PDFs + prose YAML]
     A --> H[docs/<br/>this knowledge base]
-    A --> I[generate_report.py<br/>standalone PDF builder]
+    A --> I[generate_report.py<br/>renderer: run dir + YAML → PDF]
+    A --> L[assets/<br/>logo PNGs for the report]
     A --> J[PLAN.md<br/>full project roadmap]
     A --> K[README.md<br/>quick start]
 ```
@@ -45,7 +46,7 @@ evolution/
 │   ├── dataset_builder.py               # synthetic + golden dataset loaders
 │   ├── external_importers.py            # session-history mining (Claude Code / Copilot / Hermes)
 │   ├── fitness.py                       # LLMJudge + GEPA-shaped metric
-│   ├── lm_timing_callback.py            # LM-call observability (PR #11)
+│   ├── lm_timing_callback.py            # LM-call observability
 │   ├── skill_sources.py                 # SkillSource protocol + 3 implementations
 │   └── stats.py                         # paired_bootstrap CI
 ├── skills/                              # Tier 1: skill-file evolution (only tier implemented)
@@ -77,7 +78,7 @@ evolution/
 | `evolution/core/stats.py` | 61 | `paired_bootstrap` helper |
 | **Total** | **~3,500** | excludes empty `__init__.py` shims |
 
-Test suite: 12 test files under `tests/core/` and `tests/skills/`. **262 tests** collected (verified 2026-04-30).
+Test suite: 12 test files under `tests/core/` and `tests/skills/`. **282 tests** collected.
 
 ## Runtime dependencies
 
@@ -89,6 +90,8 @@ Test suite: 12 test files under `tests/core/` and `tests/skills/`. **262 tests**
 | `click` | `>=8.0` | CLI option parsing |
 | `rich` | `>=13.0` | Console panels + tables |
 | `reportlab` | `>=4.0` | `generate_report.py` PDF output |
+| `pyyaml` | `>=6.0` | `generate_report.py` loading of `reports/<phase>_prose.yaml` |
+| `numpy` | `>=1.24` | `evolution/core/stats.py:paired_bootstrap` |
 
 Optional extras:
 - `[dev]` — `pytest>=7.0`, `pytest-asyncio>=0.21`

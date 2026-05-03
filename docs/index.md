@@ -65,12 +65,12 @@ The codebase is small (~3.5K LOC of source + ~12 test files) but architecturally
 
 ## Maintenance notes
 
-These docs are written for a snapshot of the codebase as of **2026-04-30**. The fast-moving parts to verify when consulting:
+The fast-moving parts to verify against source when consulting these docs:
 
 - `EvolutionConfig` defaults (especially `eval_dataset_size`, `growth_*`, `bootstrap_*`)
 - `gate_decision.json` schema_version (currently `"4"`)
 - LM model defaults in `evolve_skill.py` CLI options
-- Test count (262 as of last verification)
-- LM `request_timeout` / `num_retries` — these were added in PR #11 (`lm-call-hardening`) and may be tuned further
+- Test count (currently 282)
+- LM `request_timeout` / `num_retries` — may be tuned further
 
 When updating: edit the relevant file, then check whether the "Question routing table" above still points to the right place. The index file is loaded into AI-assistant context every conversation, so small accuracy improvements here pay off broadly.

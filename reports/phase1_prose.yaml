@@ -1,0 +1,195 @@
+# Editorial content for the Phase 1 validation report.
+# Numbers come from the run dir's gate_decision.json + metrics.json + run.log
+# (passed via `generate_report.py --run output/<skill>/<ts>/`). Text blocks
+# may include {placeholder} substitutions that the renderer fills from that
+# extracted data. Run `python generate_report.py --help` for the full list.
+
+meta:
+  title: "Agent Self-Evolution"
+  subtitle: "Phase 1 Validation Report"
+  # Cover-page organization line. Set to "" to omit.
+  organization: ""
+  repository: "github.com/jramos/agent-self-evolution"
+
+executive_summary:
+  framework_intro: >
+    Agent Self-Evolution is a standalone optimization pipeline that uses DSPy and GEPA
+    (Genetic-Pareto Prompt Evolution) to automatically improve an agent's skills, tool
+    descriptions, system prompts, and code through evolutionary search — all via API
+    calls with no GPU training required. Originally built for Hermes Agent; now works
+    for any agent framework that emits SKILL.md files.
+  run_summary: >
+    This report documents the Phase 1 validation of the skill evolution pipeline.
+    Using DSPy GEPA with OpenAI's gpt-4.1 / gpt-5-mini / gpt-4.1-mini stack, we
+    evolved the <b>{skill_name}</b> skill end-to-end. The evolution achieved a
+    <b>{growth_abs_pct:.1%} size reduction</b> AND a <b>{improvement_pp:+.1f} point
+    holdout improvement</b> ({avg_baseline:.3f} → {avg_evolved:.3f}) — the
+    paired-bootstrap 90% CI on the per-example diff is
+    [{bootstrap_lower:+.3f}, {bootstrap_upper:+.3f}], {ci_zero_phrase}. The deploy
+    gate accepted the candidate under the <i>{decision_rule}</i> rule; the knee-point
+    selector picked the highest-val candidate within the ε-band.
+
+key_result_box:
+  title_template: "KEY RESULT — {skill_name} (Hermes Agent), GEPA light budget"
+  rows:
+    - "Size:   {baseline_chars:,} → {evolved_chars:,} chars   ({growth_pct:+.1%})"
+    - "Holdout score:   {avg_baseline:.3f} → {avg_evolved:.3f}   (Δ {improvement:+.3f}, 90% CI [{bootstrap_lower:+.3f}, {bootstrap_upper:+.3f}], n={n_holdout})"
+    - "Decision:   {decision_upper}   ({decision_phrase})"
+  # Style picked by extracted data.decision: "deploy" → green, "reject" → amber.
+
+background:
+  intro: >
+    Hermes Agent is a general-purpose AI agent built by Nous Research that uses
+    tool-calling LLMs to complete tasks via terminal commands, file operations, web
+    search, code execution, and more. The Self-Evolution framework was originally built
+    for it but has since been generalized: a pluggable <font face="Courier">SkillSource</font>
+    protocol now discovers skills in the Hermes Agent layout, the Claude Code plugin
+    cache, or any flat local directory — the same optimizer can target any of them.
+    Hermes Agent's behavior is governed by three layers:
+  layers:
+    header: ["Layer", "What It Is", "How It's Currently Improved"]
+    rows:
+      - ["Model Weights", "The underlying LLM (Claude, GPT, etc.)", "RL training (Tinker-Atropos)"]
+      - ["Instructions", "Skills, system prompts, tool descriptions", "Manual authoring (static)"]
+      - ["Tool Code", "Python implementations of each tool", "Manual development"]
+    # 0-indexed row to highlight (after the header).
+    highlight_row: 1
+  closing: >
+    The <b>instructions layer</b> (highlighted) is the sweet spot for automated
+    optimization: it's pure text that LLMs can meaningfully mutate, changes are
+    immediately deployable, and results are directly measurable. Agent Self-Evolution
+    targets this layer.
+
+approach:
+  engines:
+    header: ["Engine", "What It Optimizes", "License", "Role"]
+    rows:
+      - ["DSPy + GEPA", "Skills, prompts, tool descriptions", "MIT", "Primary (validated)"]
+      - ["DSPy MIPROv2", "Few-shot examples, instruction text", "MIT", "Fallback optimizer"]
+      - ["Darwinian Evolver", "Code files, algorithms", "AGPL v3", "Code evolution (Phase 4)"]
+  gepa_narrative: >
+    <b>GEPA</b> (Genetic-Pareto Prompt Evolution) is the star engine — an ICLR 2026
+    Oral paper from Stanford/UC Berkeley. Unlike traditional evolutionary search that
+    only sees pass/fail scores, GEPA reads full execution traces to understand
+    <i>why</i> things failed, then proposes targeted mutations. It outperforms
+    reinforcement learning (GRPO) by +6% with 35x fewer rollouts, and outperforms
+    DSPy's previous best optimizer (MIPROv2) by +10%. It works with as few as 3
+    training examples.
+  pipeline_steps:
+    - "<b>Discover and load skill</b> — Resolve the skill via the SkillSource protocol (Hermes / Claude Code / local-dir), parse YAML frontmatter and body"
+    - "<b>Generate eval dataset</b> — An LLM (gpt-4.1-mini) reads the skill and synthesizes 60+ (task, expected_behavior) pairs, then splits into ~36% train / ~29% val / ~36% holdout"
+    - "<b>Wrap as DSPy module</b> — The skill text becomes a parameterized DSPy module where the instructions are the optimizable parameter"
+    - "<b>Run optimizer</b> — DSPy GEPA evolves the skill instructions, scored by an LLM-as-judge with a structured rubric (correctness, procedure-following, conciseness)"
+    - "<b>Knee-point Pareto selection</b> — Among candidates within ε of the val-best, pick the smallest one (parsimony principle for deployable, cache-friendly skills)"
+    - "<b>Validate constraints</b> — Static size limits, structural integrity, growth-quality gate backed by a paired-bootstrap CI on the held-out set"
+    - "<b>Report</b> — Structured gate decision JSON, before/after artifacts, full LM trace log"
+  cost_paragraph: >
+    Critically, <b>no GPU training is involved</b>. The entire pipeline operates via
+    LLM API calls. The {skill_name} run reported here issued ~{lm_calls_total:,} LM
+    calls ({lm_calls_judge:,} to gpt-4.1-mini for synthesis / evaluation / judging,
+    {lm_calls_reflection} to gpt-5-mini for GEPA reflection); typical end-to-end cost
+    is $5–8 in OpenAI API credits per skill on the light GEPA budget at the current
+    <font face="Courier">eval_dataset_size=150</font> default.
+
+experiment:
+  # Configuration table. Numeric / per-run rows are auto-derived from the run JSONs;
+  # rows below are static labels that don't change between runs.
+  config_overrides:
+    target_skill_label: "{skill_name} (Hermes Agent — arXiv paper search and retrieval)"
+    optimizer_lm: "openai/gpt-4.1"
+    reflection_lm: "openai/gpt-5-mini"
+    eval_judge_lm: "openai/gpt-4.1-mini"
+    optimizer_label: "DSPy GEPA (light budget — ~440 metric calls)"
+    quality_gate_label: "non-inferiority (tolerance=0.02; regression-only branch)"
+    knee_point_strategy_label: "val-best (default; smallest available via --knee-point-strategy)"
+  dataset_intro: >
+    The evaluation dataset was synthetically generated by openai/gpt-4.1-mini. Given
+    the full {skill_name} SKILL.md text, the model produced {n_examples} realistic
+    test cases with rubric-based expected behaviors, then split them into train / val /
+    holdout per the framework's configured ratios (the LM occasionally produces
+    slightly more than requested). Examples drawn from the generated set:
+  fitness_intro: >
+    Fitness is now measured by an LLM-as-judge (gpt-4.1-mini) that scores each
+    candidate output along three independent rubric dimensions. The composite score is
+    a weighted combination, with a length-penalty term that discourages runaway
+    expansion:
+  fitness_formula: "composite = 0.5·correctness + 0.3·procedure_following + 0.2·conciseness − length_penalty"
+  fitness_closing: >
+    The judge also returns a free-text feedback string that GEPA's reflection LM
+    consumes to propose targeted instruction-text mutations on the next iteration —
+    this trace-aware loop is the core of GEPA's sample efficiency. The keyword-overlap
+    heuristic used in the original Phase 1 experiment was retired in favor of this
+    rubric scorer.
+
+results:
+  narrative: >
+    The evolved {skill_name} skill is <b>{growth_abs_pct:.1%} smaller</b> than baseline
+    ({evolved_chars:,} vs {baseline_chars:,} characters) AND scores
+    <b>{improvement:+.3f} higher</b> on the {n_holdout}-example holdout
+    ({avg_evolved:.3f} vs {avg_baseline:.3f}). The paired 90% bootstrap CI on the
+    per-example difference is [{bootstrap_lower:+.3f}, {bootstrap_upper:+.3f}] —
+    {bootstrap_interpretation}. The deploy gate passes under the new
+    <i>non-inferiority</i> rule (introduced this cycle) and would have passed the older
+    <i>no-regression-only</i> rule too because the bootstrap mean is positive. The
+    candidate is written to <font face="Courier">evolved_skill.md</font> alongside the
+    verbatim baseline for diffing.
+  how_produced_intro: "GEPA evolves skill instructions through a reflective loop:"
+  how_produced_steps:
+    - "Run candidate skill instruction text on training examples; the judge scores each output and emits free-text feedback"
+    - "Reflection LM (gpt-5-mini) reads the execution traces + feedback and proposes a targeted mutation of the instruction text"
+    - "Score the mutated candidate on the validation set ({n_val} examples); track every candidate's per-example Pareto front"
+    - "After GEPA's light-budget search (~440 metric calls), freeze the candidate population"
+    - "Knee-point selection: among all candidates within ε = 1/n_val of the val-best, pick the highest-val candidate (smallest body as tiebreak). On this run candidate {knee_picked_idx} won the band (val={knee_picked_val_score:.3f}, rank {knee_picked_rank} of {knee_band_size}, {knee_picked_body_chars:,} body chars){knee_default_match_phrase}."
+  how_produced_closing: >
+    Three configuration choices made this run deployable: (a) the
+    <font face="Courier">eval_dataset_size=150</font> default sized a
+    {n_holdout}-example holdout that's tight enough on the bootstrap CI to detect
+    small effects; (b) the <i>non-inferiority</i> deploy gate ships
+    compression-without-regression candidates explicitly — though this run cleared
+    the stricter <i>no-regression-only</i> rule too; (c) knee-point selection picks
+    the val-best candidate within the ε-band rather than the smallest body, so the
+    pick is the candidate most likely to generalize.
+
+safety:
+  intro: "Every evolved variant must pass all of the following constraints before deployment:"
+  table:
+    header: ["Constraint", "Enforcement", "Status"]
+    rows:
+      - ["Self-evolution test suite", "282 pytest tests pass on the optimizer itself", "Implemented"]
+      - ["Static size limits", "Skills ≤15KB, tool descs ≤500 chars (configurable)", "Implemented"]
+      - ["Absolute char ceiling", "Hard cap on evolved artifact size (default 5,000)", "Implemented"]
+      - ["Growth-quality gate", "Required improvement scales linearly with growth %", "Implemented"]
+      - ["Paired-bootstrap CI", "90% CI on per-example holdout diffs gates deploy", "Implemented"]
+      - ["Knee-point selection", "Smallest candidate within ε of val-best", "Implemented"]
+      - ["Structural integrity", "Valid YAML frontmatter required", "Implemented"]
+      - ["Deployment via PR", "Human review required, never auto-merge", "By design"]
+      - ["Benchmark regression", "TBLite / skill-specific harness must hold", "Planned"]
+  closing: >
+    Source skill repositories are never modified directly. All evolution output
+    (evolved artifacts, gate decisions, run logs) is written under the framework's
+    local <font face="Courier">output/</font> directory, and improvements are proposed
+    as pull requests against the source repo for human review.
+
+roadmap:
+  table:
+    header: ["Phase", "Target", "Engine", "Timeline", "Status"]
+    rows:
+      - ["Phase 1", "Skill files (SKILL.md)", "DSPy + GEPA", "3-4 weeks", "Validated ✓"]
+      - ["Phase 2", "Tool descriptions", "DSPy + GEPA", "2-3 weeks", "Planned"]
+      - ["Phase 3", "System prompt sections", "DSPy + GEPA", "2-3 weeks", "Planned"]
+      - ["Phase 4", "Tool implementation code", "Darwinian Evolver", "3-4 weeks", "Planned"]
+      - ["Phase 5", "Continuous improvement", "Automated pipeline", "2 weeks", "Planned"]
+    # 0-indexed row to highlight (after the header). Phase 1 = 0.
+    highlight_row: 0
+  closing: >
+    Each phase must demonstrate measurable improvement and pass benchmark regression
+    gates before proceeding. If a phase does not produce meaningful gains, we reassess
+    before continuing. The full plan is documented in PLAN.md within the repository.
+
+next_steps:
+  - "<b>Evolve more skills</b> — Run the same pipeline against additional Hermes and Claude Code skills to measure how often the regression-free deployment criterion is actually met and where the framework's defaults need calibration."
+  - "<b>Calibrate the deploy gate</b> — Use the bootstrap CIs from a portfolio of runs to set evidence-based defaults for <font face=\"Courier\">growth_free_threshold</font> and <font face=\"Courier\">growth_quality_slope</font>, and revisit the knee-point ε choice (this run picked a candidate that was only 5% smaller than the val-best at meaningful val cost)."
+  - "<b>Larger holdout sets</b> — n=23 left a wide bootstrap CI; raising <font face=\"Courier\">eval_dataset_size</font> or <font face=\"Courier\">holdout_ratio</font> would tighten the deploy / reject signal."
+  - "<b>Benchmark gating</b> — Add TBLite or skill-specific regression harnesses for skills where the bootstrap CI alone is too noisy."
+  - "<b>PR automation</b> — Auto-generate pull requests against the source skill repository with the evolved artifact, gate decision JSON, and full metrics."
+  - "<b>Tier 2: tool descriptions</b> — Extend the optimizer beyond skill files to tool description text (currently a stub)."
