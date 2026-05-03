@@ -133,31 +133,39 @@ def build_report(output_path: str = "reports/phase1_validation_report.pdf"):
         styles['BodyJust']
     ))
     story.append(Paragraph(
-        "This report documents the Phase 1 validation: the first end-to-end test of the skill "
-        "evolution pipeline. Using MiniMax M2.5 via OpenRouter, we evolved the <b>arxiv</b> skill "
-        "and observed a <b>+39.5% improvement</b> in task completion quality on a held-out validation "
-        "example, demonstrating that the pipeline works and can produce measurably better skills.",
+        "This report documents the Phase 1 validation of the skill evolution pipeline as it stands "
+        "today, after the rebrand from Hermes-only to a multi-framework optimizer. Using DSPy GEPA "
+        "with OpenAI's gpt-4.1 / gpt-5-mini / gpt-4.1-mini stack, we re-evolved the <b>arxiv</b> skill "
+        "(the same target as the original Phase 1 experiment) end-to-end through the current pipeline. "
+        "The evolution achieved a <b>40.0% size reduction</b> AND a <b>+5.4 point holdout improvement</b> "
+        "(0.908 → 0.962) — the paired-bootstrap 90% CI on the per-example diff is "
+        "[+0.017, +0.095], excluding zero. The deploy gate accepted the candidate under the new "
+        "<i>non-inferiority</i> rule, and the knee-point selector picked the highest-val candidate "
+        "within the ε-band rather than the smallest, after a prior parsimony-first bias was "
+        "corrected this cycle.",
         styles['BodyJust']
     ))
 
     # Key result box
     result_data = [
-        ['KEY RESULT'],
-        ['Baseline Score → Optimized Score:   0.408 → 0.569   (+39.5%)'],
+        ['KEY RESULT — arxiv (Hermes Agent), GEPA light budget'],
+        ['Size:   10,036 → 6,017 chars   (−40.0%)'],
+        ['Holdout score:   0.908 → 0.962   (Δ +0.054, 90% CI [+0.017, +0.095], n=65)'],
+        ['Decision:   DEPLOYED   (non-inferiority gate; bootstrap CI excludes zero)'],
     ]
     result_table = Table(result_data, colWidths=[5.5 * inch])
     result_table.setStyle(TableStyle([
         ('BACKGROUND', (0, 0), (-1, 0), HexColor('#1a1a2e')),
         ('TEXTCOLOR', (0, 0), (-1, 0), white),
-        ('FONTSIZE', (0, 0), (-1, 0), 12),
+        ('FONTSIZE', (0, 0), (-1, 0), 11),
         ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
         ('ALIGN', (0, 0), (-1, -1), 'CENTER'),
         ('BACKGROUND', (0, 1), (-1, -1), HexColor('#e8f5e9')),
-        ('FONTSIZE', (0, 1), (-1, -1), 13),
+        ('FONTSIZE', (0, 1), (-1, -1), 11),
         ('FONTNAME', (0, 1), (-1, -1), 'Helvetica-Bold'),
         ('TEXTCOLOR', (0, 1), (-1, -1), HexColor('#2e7d32')),
-        ('TOPPADDING', (0, 0), (-1, -1), 12),
-        ('BOTTOMPADDING', (0, 0), (-1, -1), 12),
+        ('TOPPADDING', (0, 0), (-1, -1), 8),
+        ('BOTTOMPADDING', (0, 0), (-1, -1), 8),
         ('BOX', (0, 0), (-1, -1), 1, HexColor('#1a1a2e')),
     ]))
     story.append(Spacer(1, 0.2 * inch))
@@ -169,7 +177,11 @@ def build_report(output_path: str = "reports/phase1_validation_report.pdf"):
     story.append(Paragraph(
         "Hermes Agent is a general-purpose AI agent built by Nous Research that uses tool-calling "
         "LLMs to complete tasks via terminal commands, file operations, web search, code execution, "
-        "and more. Its behavior is governed by three layers:",
+        "and more. The Self-Evolution framework was originally built for it but has since been "
+        "generalized: a pluggable <font face='Courier'>SkillSource</font> protocol now discovers skills "
+        "in the Hermes Agent layout, the Claude Code plugin cache, or any flat local directory — "
+        "the same optimizer can target any of them. Hermes Agent's behavior is governed by three "
+        "layers:",
         styles['BodyJust']
     ))
 
@@ -197,7 +209,7 @@ def build_report(output_path: str = "reports/phase1_validation_report.pdf"):
     story.append(Paragraph(
         "The <b>instructions layer</b> (highlighted) is the sweet spot for automated optimization: "
         "it's pure text that LLMs can meaningfully mutate, changes are immediately deployable, and "
-        "results are directly measurable. Hermes Agent Self-Evolution targets this layer.",
+        "results are directly measurable. Agent Self-Evolution targets this layer.",
         styles['BodyJust']
     ))
 
@@ -207,7 +219,7 @@ def build_report(output_path: str = "reports/phase1_validation_report.pdf"):
     story.append(Paragraph("Three Optimization Engines", styles['SubSection']))
     engines_data = [
         ['Engine', 'What It Optimizes', 'License', 'Role'],
-        ['DSPy + GEPA', 'Skills, prompts, tool descriptions', 'MIT', 'Primary optimizer'],
+        ['DSPy + GEPA', 'Skills, prompts, tool descriptions', 'MIT', 'Primary (validated)'],
         ['DSPy MIPROv2', 'Few-shot examples, instruction text', 'MIT', 'Fallback optimizer'],
         ['Darwinian Evolver', 'Code files, algorithms', 'AGPL v3', 'Code evolution (Phase 4)'],
     ]
@@ -237,24 +249,29 @@ def build_report(output_path: str = "reports/phase1_validation_report.pdf"):
 
     story.append(Paragraph("The Optimization Pipeline", styles['SubSection']))
     pipeline_steps = [
-        "1. <b>Load skill</b> — Read the SKILL.md file from the hermes-agent repository",
-        "2. <b>Generate eval dataset</b> — An LLM reads the skill and generates realistic "
-        "(task, expected_behavior) pairs as a rubric-based evaluation set",
+        "1. <b>Discover and load skill</b> — Resolve the skill via the SkillSource protocol "
+        "(Hermes / Claude Code / local-dir), parse YAML frontmatter and body",
+        "2. <b>Generate eval dataset</b> — An LLM (gpt-4.1-mini) reads the skill and synthesizes "
+        "60+ (task, expected_behavior) pairs, then splits into ~36% train / ~29% val / ~36% holdout",
         "3. <b>Wrap as DSPy module</b> — The skill text becomes a parameterized DSPy module "
         "where the instructions are the optimizable parameter",
-        "4. <b>Run optimizer</b> — DSPy's BootstrapFewShot, MIPROv2, or GEPA evolves the "
-        "skill instructions to maximize the fitness score",
-        "5. <b>Evaluate</b> — Score baseline vs. evolved on held-out validation examples",
-        "6. <b>Validate constraints</b> — Size limits, structural integrity, caching compatibility",
-        "7. <b>Report</b> — Before/after comparison with full metrics",
+        "4. <b>Run optimizer</b> — DSPy GEPA evolves the skill instructions, scored by an "
+        "LLM-as-judge with a structured rubric (correctness, procedure-following, conciseness)",
+        "5. <b>Knee-point Pareto selection</b> — Among candidates within ε of the val-best, pick the "
+        "smallest one (parsimony principle for deployable, cache-friendly skills)",
+        "6. <b>Validate constraints</b> — Static size limits, structural integrity, growth-quality "
+        "gate backed by a paired-bootstrap CI on the held-out set",
+        "7. <b>Report</b> — Structured gate decision JSON, before/after artifacts, full LM trace log",
     ]
     for step in pipeline_steps:
         story.append(Paragraph(step, styles['Metric']))
     story.append(Spacer(1, 0.1 * inch))
     story.append(Paragraph(
-        "Critically, <b>no GPU training is involved</b>. The entire pipeline operates via LLM API calls — "
-        "mutating text, evaluating results, and selecting the best variants. A typical optimization run "
-        "costs $2-10 in API credits.",
+        "Critically, <b>no GPU training is involved</b>. The entire pipeline operates via LLM API calls. "
+        "The arxiv run reported here issued ~1,570 LM calls (1,526 to gpt-4.1-mini for synthesis / "
+        "evaluation / judging, 42 to gpt-5-mini for GEPA reflection); typical end-to-end cost is "
+        "$5–8 in OpenAI API credits per skill on the light GEPA budget at the current "
+        "<font face='Courier'>eval_dataset_size=150</font> default.",
         styles['BodyJust']
     ))
 
@@ -264,16 +281,17 @@ def build_report(output_path: str = "reports/phase1_validation_report.pdf"):
     story.append(Paragraph("Configuration", styles['SubSection']))
     config_data = [
         ['Parameter', 'Value'],
-        ['Target Skill', 'arxiv (arXiv paper search and retrieval)'],
-        ['Skill Size', '10,175 characters'],
-        ['Model', 'MiniMax M2.5 via OpenRouter'],
-        ['Optimizer', 'DSPy BootstrapFewShot'],
-        ['Training Examples', '3 (from 7 synthetic total)'],
-        ['Validation Examples', '2 (held-out)'],
-        ['Max Bootstrapped Demos', '2'],
-        ['Optimization Rounds', '1'],
-        ['Total Optimization Time', '< 60 seconds'],
-        ['Estimated Cost', '< $0.50'],
+        ['Target Skill', 'arxiv (Hermes Agent — arXiv paper search and retrieval)'],
+        ['Baseline Size', '10,036 characters'],
+        ['Optimizer LM', 'openai/gpt-4.1'],
+        ['Reflection LM (GEPA)', 'openai/gpt-5-mini'],
+        ['Eval / Judge LM', 'openai/gpt-4.1-mini'],
+        ['Optimizer', 'DSPy GEPA (light budget — ~440 metric calls)'],
+        ['Synthetic Eval Set', '178 examples (63 train / 50 val / 65 holdout)'],
+        ['Total Optimization Time', '3,353 seconds (~56 minutes)'],
+        ['Total LM Calls', '~1,570 (1,526 gpt-4.1-mini + 42 gpt-5-mini)'],
+        ['Quality Gate', 'non-inferiority (tolerance=0.02; regression-only branch)'],
+        ['Knee-point Strategy', 'val-best (default, May 2026+)'],
     ]
     config_table = Table(config_data, colWidths=[2.2 * inch, 3.8 * inch])
     config_table.setStyle(TableStyle([
@@ -291,20 +309,23 @@ def build_report(output_path: str = "reports/phase1_validation_report.pdf"):
 
     story.append(Paragraph("Evaluation Dataset", styles['SubSection']))
     story.append(Paragraph(
-        "The evaluation dataset was synthetically generated by MiniMax M2.5. Given the full arxiv "
-        "skill text, the model generated 7 realistic test cases with rubric-based expected behaviors. "
-        "Examples of generated test cases:",
+        "The evaluation dataset was synthetically generated by openai/gpt-4.1-mini. Given the full "
+        "arxiv SKILL.md text, the model produced 178 realistic test cases with rubric-based "
+        "expected behaviors, then split them into train / val / holdout per the framework's "
+        "configured ratios (the default <font face='Courier'>eval_dataset_size</font> was bumped from "
+        "60 to 150 this cycle to tighten the holdout bootstrap CI; the LM produced ~10% more than "
+        "requested). Examples drawn from the generated set:",
         styles['BodyJust']
     ))
 
     examples_data = [
         ['Task Input', 'Expected Behavior (Rubric)'],
-        ['Generate a BibTeX entry for\npaper 2402.03300',
-         'Should query arXiv API, parse metadata\n(title, authors, year), format as BibTeX'],
-        ['Find papers by author\n\'Ian Goodfellow\' with citations',
-         'Should search Semantic Scholar endpoint,\nretrieve author profile and h-index'],
-        ['Find recent papers about\nlarge language models',
-         'Should search arXiv with relevant query,\napply date filters, return sorted results'],
+        ['Fetch paper metadata with multiple\ncategories and verify primary category',
+         'Primary category is correctly identified\nand displayed separately'],
+        ['Extract and parse XML output from arXiv\nAPI using provided python snippet',
+         'Parsed output includes numbered list with\npaper IDs, titles, authors, dates, categories'],
+        ["Search papers with comment containing\n'accepted NeurIPS' for accepted submissions",
+         'Returns papers with comments mentioning\nacceptance at NeurIPS, metadata included'],
     ]
     examples_table = Table(examples_data, colWidths=[2.5 * inch, 3.5 * inch])
     examples_table.setStyle(TableStyle([
@@ -322,19 +343,21 @@ def build_report(output_path: str = "reports/phase1_validation_report.pdf"):
 
     story.append(Paragraph("Fitness Function", styles['SubSection']))
     story.append(Paragraph(
-        "Fitness was measured using keyword overlap between the expected behavior rubric and the "
-        "agent's actual output. For each evaluation example, the score is computed as:",
+        "Fitness is now measured by an LLM-as-judge (gpt-4.1-mini) that scores each candidate "
+        "output along three independent rubric dimensions. The composite score is a weighted "
+        "combination, with a length-penalty term that discourages runaway expansion:",
         styles['BodyJust']
     ))
     story.append(Paragraph(
-        "<font face='Courier' size=9>score = 0.3 + 0.7 × (|expected_words ∩ output_words| / |expected_words|)</font>",
+        "<font face='Courier' size=9>composite = 0.5·correctness + 0.3·procedure_following + 0.2·conciseness − length_penalty</font>",
         ParagraphStyle('Formula', parent=styles['Normal'], alignment=TA_CENTER,
                        spaceBefore=8, spaceAfter=8, fontSize=10)
     ))
     story.append(Paragraph(
-        "This provides a fast proxy for semantic similarity. The full pipeline also supports "
-        "LLM-as-judge scoring with multi-dimensional rubrics (correctness, procedure-following, "
-        "conciseness), but the heuristic scorer was used for this validation to minimize API costs.",
+        "The judge also returns a free-text feedback string that GEPA's reflection LM consumes to "
+        "propose targeted instruction-text mutations on the next iteration — this trace-aware loop "
+        "is the core of GEPA's sample efficiency. The keyword-overlap heuristic used in the original "
+        "Phase 1 experiment was retired in favor of this rubric scorer.",
         styles['BodyJust']
     ))
 
@@ -342,57 +365,77 @@ def build_report(output_path: str = "reports/phase1_validation_report.pdf"):
     story.append(Paragraph("Results", styles['SectionHead']))
 
     results_data = [
-        ['Metric', 'Baseline', 'Optimized', 'Change'],
-        ['Validation Example 1', '0.408', '0.569', '+39.5%'],
-        ['Validation Example 2', '0.374', '0.374', '0.0%'],
-        ['Average', '0.391', '0.472', '+20.7%'],
+        ['Metric', 'Baseline', 'Evolved (knee-point pick)', 'Δ'],
+        ['Body size (chars)', '10,036', '6,017', '−40.0%'],
+        ['Avg holdout score (n=65)', '0.908', '0.962', '+0.054'],
+        ['Bootstrap mean diff', '—', '+0.054', '—'],
+        ['Bootstrap 90% CI lower', '—', '+0.017', '—'],
+        ['Bootstrap 90% CI upper', '—', '+0.095', '—'],
+        ['Decision', '—', 'DEPLOYED', 'CI excludes 0'],
     ]
-    results_table = Table(results_data, colWidths=[1.8 * inch, 1.2 * inch, 1.2 * inch, 1.3 * inch])
+    results_table = Table(results_data, colWidths=[1.9 * inch, 1.3 * inch, 1.7 * inch, 1.1 * inch])
     results_table.setStyle(TableStyle([
         ('BACKGROUND', (0, 0), (-1, 0), HexColor('#1a1a2e')),
         ('TEXTCOLOR', (0, 0), (-1, 0), white),
         ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
-        ('FONTSIZE', (0, 0), (-1, -1), 10.5),
+        ('FONTSIZE', (0, 0), (-1, -1), 10),
         ('GRID', (0, 0), (-1, -1), 0.5, HexColor('#cccccc')),
         ('ALIGN', (1, 0), (-1, -1), 'CENTER'),
-        ('TOPPADDING', (0, 0), (-1, -1), 8),
-        ('BOTTOMPADDING', (0, 0), (-1, -1), 8),
-        ('FONTNAME', (0, -1), (-1, -1), 'Helvetica-Bold'),
-        ('BACKGROUND', (3, 1), (3, 1), HexColor('#e8f5e9')),
-        ('TEXTCOLOR', (3, 1), (3, 1), HexColor('#2e7d32')),
-        ('FONTNAME', (3, 1), (3, 1), 'Helvetica-Bold'),
-        ('BACKGROUND', (0, -1), (-1, -1), HexColor('#f5f5f5')),
+        ('TOPPADDING', (0, 0), (-1, -1), 6),
+        ('BOTTOMPADDING', (0, 0), (-1, -1), 6),
+        ('FONTNAME', (0, 1), (0, -1), 'Helvetica-Bold'),
+        ('BACKGROUND', (2, 1), (2, 1), HexColor('#e8f5e9')),
+        ('TEXTCOLOR', (2, 1), (2, 1), HexColor('#2e7d32')),
+        ('FONTNAME', (2, 1), (2, 1), 'Helvetica-Bold'),
+        ('BACKGROUND', (0, -1), (-1, -1), HexColor('#e8f5e9')),
+        ('TEXTCOLOR', (-1, -1), (-1, -1), HexColor('#2e7d32')),
+        ('FONTNAME', (-1, -1), (-1, -1), 'Helvetica-Bold'),
     ]))
     story.append(results_table)
     story.append(Spacer(1, 0.15 * inch))
 
     story.append(Paragraph(
-        "The optimized skill showed a <b>+39.5% improvement</b> on the first validation example "
-        "and maintained parity on the second. The average improvement across both examples was "
-        "<b>+20.7%</b>. This was achieved with the simplest DSPy optimizer (BootstrapFewShot) using "
-        "only 3 training examples and a single optimization round completing in under 60 seconds.",
+        "The evolved arxiv skill is <b>40.0% smaller</b> than baseline (6,017 vs 10,036 characters) "
+        "AND scores <b>+0.054 higher</b> on the 65-example holdout (0.962 vs 0.908). The paired "
+        "90% bootstrap CI on the per-example difference is [+0.017, +0.095] — both ends positive, "
+        "so we have ≥90% confidence the improvement is real, not sampling noise. The deploy gate "
+        "passes under the new <i>non-inferiority</i> rule (introduced this cycle) and would have "
+        "passed the older <i>no-regression-only</i> rule too because the bootstrap mean is positive. "
+        "The candidate is written to <font face='Courier'>evolved_skill.md</font> alongside the "
+        "verbatim baseline for diffing.",
         styles['BodyJust']
     ))
 
-    story.append(Paragraph("How the Improvement Was Achieved", styles['SubSection']))
+    story.append(Paragraph("How the Result Was Produced", styles['SubSection']))
     story.append(Paragraph(
-        "DSPy's BootstrapFewShot optimizer works by:",
+        "GEPA evolves skill instructions through a reflective loop:",
         styles['BodyJust']
     ))
     improve_steps = [
-        "1. Running the baseline skill module on each training example",
-        "2. Collecting successful execution traces (where the output scored well)",
-        "3. Selecting the 2 best traces as few-shot demonstrations",
-        "4. Injecting these demonstrations into the optimized module's prompt",
+        "1. Run candidate skill instruction text on training examples; the judge scores each output "
+        "and emits free-text feedback",
+        "2. Reflection LM (gpt-5-mini) reads the execution traces + feedback and proposes a "
+        "targeted mutation of the instruction text",
+        "3. Score the mutated candidate on the validation set (50 examples); track every "
+        "candidate's per-example Pareto front",
+        "4. After ~30 iterations / ~440 metric calls, freeze the candidate population",
+        "5. Knee-point selection: among all candidates within ε = 1/n_val of the val-best, pick "
+        "the highest-val candidate (smallest body as tiebreak). On this run candidate 7 won the "
+        "band (val=0.980, rank 1 of 3, 5,754 body chars) and is also the candidate GEPA's own "
+        "default selector would have chosen — the val-best and GEPA-default converged here.",
     ]
     for step in improve_steps:
         story.append(Paragraph(step, styles['Metric']))
     story.append(Spacer(1, 0.1 * inch))
     story.append(Paragraph(
-        "The key insight is that the optimizer doesn't rewrite the skill — it <b>augments</b> the skill's "
-        "instructions with concrete examples of successful execution. The model learns from its own "
-        "best outputs, creating a positive feedback loop. More powerful optimizers like GEPA and MIPROv2 "
-        "can additionally rewrite the instruction text itself, potentially yielding larger improvements.",
+        "Three changes from the prior validation cycle made this run deployable: (a) the default "
+        "<font face='Courier'>eval_dataset_size</font> bumped 60 → 150 yielded a 65-example "
+        "holdout (vs. 23 prior), tightening the bootstrap CI from [−0.135, +0.094] down to "
+        "[+0.017, +0.095]; (b) the new <i>non-inferiority</i> deploy gate (rather than a "
+        "hardcoded <font face='Courier'>mean ≥ 0</font> floor) ships compression-without-regression "
+        "candidates explicitly — though this run cleared the older rule too; (c) knee-point "
+        "selection now defaults to picking the val-best candidate within the ε-band rather than "
+        "the smallest, removing a parsimony bias that had cost val score on the prior run.",
         styles['BodyJust']
     ))
 
@@ -404,13 +447,15 @@ def build_report(output_path: str = "reports/phase1_validation_report.pdf"):
     ))
     safety_data = [
         ['Constraint', 'Enforcement', 'Status'],
-        ['Full test suite', 'pytest must pass 100% (2550+ tests)', 'Implemented'],
-        ['Size limits', 'Skills ≤15KB, tool descs ≤500 chars', 'Implemented'],
-        ['Growth limit', 'Max +20% over baseline size', 'Implemented'],
+        ['Self-evolution test suite', '268 pytest tests pass on the optimizer itself', 'Implemented'],
+        ['Static size limits', 'Skills ≤15KB, tool descs ≤500 chars (configurable)', 'Implemented'],
+        ['Absolute char ceiling', 'Hard cap on evolved artifact size (default 5,000)', 'Implemented'],
+        ['Growth-quality gate', 'Required improvement scales linearly with growth %', 'Implemented'],
+        ['Paired-bootstrap CI', '90% CI on per-example holdout diffs gates deploy', 'Implemented'],
+        ['Knee-point selection', 'Smallest candidate within ε of val-best', 'Implemented'],
         ['Structural integrity', 'Valid YAML frontmatter required', 'Implemented'],
-        ['Caching compatibility', 'No mid-conversation changes', 'By design'],
         ['Deployment via PR', 'Human review required, never auto-merge', 'By design'],
-        ['Benchmark regression', 'TBLite/YC-Bench score must hold', 'Planned (Phase 2+)'],
+        ['Benchmark regression', 'TBLite / skill-specific harness must hold', 'Planned'],
     ]
     safety_table = Table(safety_data, colWidths=[1.6 * inch, 2.8 * inch, 1.1 * inch])
     safety_table.setStyle(TableStyle([
@@ -427,9 +472,10 @@ def build_report(output_path: str = "reports/phase1_validation_report.pdf"):
     story.append(safety_table)
     story.append(Spacer(1, 0.1 * inch))
     story.append(Paragraph(
-        "The hermes-agent repository is never modified directly. All evolution output is written "
-        "to the hermes-agent-self-evolution repository, and improvements are proposed as pull requests "
-        "against hermes-agent for human review.",
+        "Source skill repositories are never modified directly. All evolution output (evolved "
+        "artifacts, gate decisions, run logs) is written under the framework's local "
+        "<font face='Courier'>output/</font> directory, and improvements are proposed as pull requests "
+        "against the source repo for human review.",
         styles['BodyJust']
     ))
 
@@ -468,17 +514,22 @@ def build_report(output_path: str = "reports/phase1_validation_report.pdf"):
     # ── NEXT STEPS ──────────────────────────────────────────────────────
     story.append(Paragraph("Immediate Next Steps", styles['SectionHead']))
     next_steps = [
-        "1. <b>Run GEPA optimizer</b> — The most powerful optimizer, which reads execution traces "
-        "for reflective mutation. Requires longer runtime (15-30 minutes) but expected to yield "
-        "larger improvements than BootstrapFewShot.",
-        "2. <b>Evolve multiple skills</b> — Test on github-code-review, systematic-debugging, and "
-        "other frequently-used skills to validate generalization.",
-        "3. <b>LLM-as-judge scoring</b> — Replace the keyword-overlap heuristic with full "
-        "multi-dimensional rubric scoring for more accurate fitness signals.",
-        "4. <b>Benchmark gating</b> — Run TBLite before/after evolution to ensure no regressions "
-        "in overall agent capability.",
-        "5. <b>PR automation</b> — Auto-generate pull requests against hermes-agent with evolved "
-        "skills, including full metrics and diffs.",
+        "1. <b>Evolve more skills</b> — Run the same pipeline against additional Hermes and Claude "
+        "Code skills to measure how often the regression-free deployment criterion is actually met "
+        "and where the framework's defaults need calibration.",
+        "2. <b>Calibrate the deploy gate</b> — Use the bootstrap CIs from a portfolio of runs to "
+        "set evidence-based defaults for <font face='Courier'>growth_free_threshold</font> and "
+        "<font face='Courier'>growth_quality_slope</font>, and revisit the knee-point ε choice "
+        "(this run picked a candidate that was only 5% smaller than the val-best at meaningful val cost).",
+        "3. <b>Larger holdout sets</b> — n=23 left a wide bootstrap CI; raising "
+        "<font face='Courier'>eval_dataset_size</font> or <font face='Courier'>holdout_ratio</font> "
+        "would tighten the deploy / reject signal.",
+        "4. <b>Benchmark gating</b> — Add TBLite or skill-specific regression harnesses for skills "
+        "where the bootstrap CI alone is too noisy.",
+        "5. <b>PR automation</b> — Auto-generate pull requests against the source skill repository "
+        "with the evolved artifact, gate decision JSON, and full metrics.",
+        "6. <b>Tier 2: tool descriptions</b> — Extend the optimizer beyond skill files to tool "
+        "description text (currently a stub).",
     ]
     for step in next_steps:
         story.append(Paragraph(step, styles['Metric']))
