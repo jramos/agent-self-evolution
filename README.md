@@ -24,6 +24,16 @@ flowchart LR
 
 GEPA reads execution traces to understand *why* things fail (not just that they failed), then proposes targeted improvements. ICLR 2026 Oral, MIT licensed.
 
+## Why this isn't just DSPy + GEPA
+
+DSPy + GEPA is the optimizer underneath, but raw GEPA is tuned for benchmarks with hundreds of validation examples per task. SKILL.md evolution lives at N=20-60, where the standard error of an aggregate validation score swamps the typical gap between rank-1 and rank-2 candidates — argmax-on-val becomes a coin flip. This framework adds three layers on top of stock GEPA so the candidate that ships is statistically defensible, not just argmax-of-noise:
+
+- **Knee-point Pareto selection** — picks from candidates within an ε-band of the best validation score instead of GEPA's raw argmax, breaking ties on body size. Avoids "won by 1 example out of 30" coin flips.
+- **Paired-bootstrap deploy gate** — a candidate must beat baseline on a held-out split with a paired-bootstrap CI before it ships, with three selectable rules including a Decagon-style non-inferiority option. Stops cosmetic regressions from shipping.
+- **Composite LLM-as-judge fitness** — correctness, procedure, and conciseness scored separately with a length penalty, instead of one binary score. Gives GEPA's reflection step useful gradient.
+
+If you're optimizing on N≥300 with crisp programmatic metrics, raw GEPA is fine and you don't need the extra machinery. For the small-N skill-evolution regime — see [docs/framework_advantages.md](docs/framework_advantages.md) for the full argument with citations.
+
 ## Quick Start
 
 ```bash

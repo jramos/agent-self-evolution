@@ -26,6 +26,7 @@ The codebase is small (~3.5K LOC of source + ~12 test files) but architecturally
 | **What's tested vs. not** | `interfaces.md` (test surfaces locked by tests) → `workflows.md` (Workflow 8) |
 | **What dependencies are pinned and why** | `dependencies.md` |
 | **What's planned but not built** | `codebase_info.md` (implementation status table) → `PLAN.md` |
+| **Why use this over raw DSPy + GEPA** | `framework_advantages.md` |
 | **What changed recently / project history** | `git log --oneline` |
 | **Style / convention questions** | `AGENTS.md` (repo root) |
 
@@ -46,6 +47,7 @@ The codebase is small (~3.5K LOC of source + ~12 test files) but architecturally
 | [`data_models.md`](data_models.md) | All dataclasses, on-disk formats, full `gate_decision.json` schema with worked examples | ~220 lines |
 | [`workflows.md`](workflows.md) | 8 step-by-step workflows with mermaid sequence diagrams: deploy path (split into 4 phases), two reject paths, GEPA→MIPROv2 fallback, sessiondb mining, etc. | ~280 lines |
 | [`dependencies.md`](dependencies.md) | Each external package — what it's used for, why it's pinned, what we don't depend on | ~180 lines |
+| [`framework_advantages.md`](framework_advantages.md) | User-facing explainer of how this framework's selection layer, deploy gate, proposer, and composite fitness differ from raw DSPy + GEPA — and when raw GEPA is the right choice | ~110 lines |
 | [`review_notes.md`](review_notes.md) | Consistency + completeness gaps found during this docs pass | ~50 lines |
 
 ## Documents elsewhere worth knowing about

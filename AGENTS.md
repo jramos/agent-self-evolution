@@ -27,6 +27,8 @@ Project-specific context for AI coding assistants. Read this first when picking 
 
 Framework-agnostic at the optimizer layer: any agent that emits SKILL.md files (Hermes Agent, Claude Code skills, custom local layouts) is supported via the `SkillSource` Protocol in `evolution/core/skill_sources.py`.
 
+For *why this differs from raw DSPy + GEPA* (the small-N selection layer, the paired-bootstrap deploy gate, the composite judge fitness) see [docs/framework_advantages.md](docs/framework_advantages.md).
+
 Only **Tier 1 (skill files)** is implemented. Tiers 2-5 (tool descriptions, prompt sections, code, continuous loop) exist as empty package stubs. See `PLAN.md`.
 
 ## Repo layout at a glance
@@ -68,7 +70,7 @@ The `evolution/<tier>/` directories form **a clean layering**: `evolution/core/`
 1. CLI resolves `--skill <name>` to a `SKILL.md` via the `SkillSource` walk.
 2. Eval dataset is built (synthetic LM gen / golden file / sessiondb mining).
 3. Skill body wrapped as `dspy.Module`; GEPA optimizes it with `BudgetAwareProposer` injecting a char budget into the reflection prompt.
-4. Knee-point Pareto selection walks the candidates within ε of the best valset score in `--knee-point-strategy` order (default `val-best`: highest val first, smallest body as tiebreak). The pre-May-2026 default was `smallest` (greedy parsimony), still available via the flag for users explicitly chasing compression.
+4. Knee-point Pareto selection walks the candidates within ε of the best valset score in `--knee-point-strategy` order. Default `val-best`: highest val first, smallest body as tiebreak. `smallest` (greedy parsimony) is available via the flag for users explicitly chasing compression.
 5. Static constraints + paired-bootstrap growth-quality gate decide deploy vs. reject; both outcomes write `gate_decision.json`. The default rule is `no_regression` (`mean >= 0`); `--quality-gate non-inferiority` switches to `lower_bound > -inferiority_tolerance` (recommended for compression-focused runs at small N where the bootstrap CI swamps tiny effects).
 
 ## What lives where
@@ -264,4 +266,5 @@ Open questions deferred to future PRs (per `experiments/` writeups + `PLAN.md`):
 | What are the documented flow paths? | [docs/workflows.md](docs/workflows.md) |
 | Where am I supposed to put new tests? | This file (Testing section) |
 | What does the long-term roadmap look like? | [PLAN.md](PLAN.md) |
+| Why use this over raw DSPy + GEPA? | [docs/framework_advantages.md](docs/framework_advantages.md) |
 | Recent project state / commit history | `git log --oneline` |
