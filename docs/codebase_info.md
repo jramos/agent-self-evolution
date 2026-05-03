@@ -24,9 +24,10 @@ graph TD
     A --> D[datasets/<br/>generated + golden eval data]
     A --> E[experiments/<br/>spike writeups]
     A --> F[output/<br/>per-run artifacts]
-    A --> G[reports/<br/>validation PDFs]
+    A --> G[reports/<br/>validation PDFs + prose YAML]
     A --> H[docs/<br/>this knowledge base]
-    A --> I[generate_report.py<br/>standalone PDF builder]
+    A --> I[generate_report.py<br/>renderer: run dir + YAML → PDF]
+    A --> L[assets/<br/>logo PNGs for the report]
     A --> J[PLAN.md<br/>full project roadmap]
     A --> K[README.md<br/>quick start]
 ```
@@ -77,7 +78,7 @@ evolution/
 | `evolution/core/stats.py` | 61 | `paired_bootstrap` helper |
 | **Total** | **~3,500** | excludes empty `__init__.py` shims |
 
-Test suite: 12 test files under `tests/core/` and `tests/skills/`. **262 tests** collected (verified 2026-04-30).
+Test suite: 12 test files under `tests/core/` and `tests/skills/`. **282 tests** collected (verified 2026-05-03 after R1+R3+R4).
 
 ## Runtime dependencies
 
@@ -89,6 +90,8 @@ Test suite: 12 test files under `tests/core/` and `tests/skills/`. **262 tests**
 | `click` | `>=8.0` | CLI option parsing |
 | `rich` | `>=13.0` | Console panels + tables |
 | `reportlab` | `>=4.0` | `generate_report.py` PDF output |
+| `pyyaml` | `>=6.0` | `generate_report.py` loading of `reports/<phase>_prose.yaml` |
+| `numpy` | `>=1.24` | `evolution/core/stats.py:paired_bootstrap` |
 
 Optional extras:
 - `[dev]` — `pytest>=7.0`, `pytest-asyncio>=0.21`

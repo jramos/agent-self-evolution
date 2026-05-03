@@ -62,11 +62,15 @@ Terminal UI. Two surfaces:
 
 ### `reportlab>=4.0`
 
-Used only by `generate_report.py` (top-level, not part of `evolution/`) to build `reports/phase1_validation_report.pdf`. Not exercised by the optimization pipeline.
+Used only by `generate_report.py` (top-level, not part of `evolution/`) to render `reports/phase1_validation_report.pdf` from `reports/phase1_prose.yaml` plus the per-run `output/<skill>/<ts>/{gate_decision.json,metrics.json,run.log}` artifacts. Not exercised by the optimization pipeline.
 
 ### `numpy>=1.24`
 
 Used by `evolution/core/stats.py:paired_bootstrap` for the resample matrix and percentile computation (`np.array`, `np.percentile`, `np.random`). Floor 1.24 predates the 2.0 ABI break and stays compatible with both numpy 1.x and 2.x. No upper bound — only stable APIs are touched.
+
+### `pyyaml>=6.0`
+
+Used only by `generate_report.py` to load `reports/<phase>_prose.yaml` (editorial content for the validation report). Not exercised by the optimization pipeline. Was previously a transitive dep through dspy/litellm; promoted to a direct dep when the report became data-driven.
 
 ## Optional extras
 

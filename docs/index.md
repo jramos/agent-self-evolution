@@ -47,6 +47,7 @@ The codebase is small (~3.5K LOC of source + ~12 test files) but architecturally
 | [`workflows.md`](workflows.md) | 8 step-by-step workflows with mermaid sequence diagrams: deploy path (split into 4 phases), two reject paths, GEPA→MIPROv2 fallback, sessiondb mining, etc. | ~280 lines |
 | [`dependencies.md`](dependencies.md) | Each external package — what it's used for, why it's pinned, what we don't depend on | ~180 lines |
 | [`review_notes.md`](review_notes.md) | Consistency + completeness gaps found during this docs pass | ~50 lines |
+| [`recent_changes.md`](recent_changes.md) | Change log between the prior knowledge-base refresh (PR #13, 2026-04-30) and the current snapshot (2026-05-03): PR #14 cleanup, PR #15 R1+R3+R4, report-renderer refactor | ~50 lines |
 
 ## Documents elsewhere worth knowing about
 
@@ -65,7 +66,7 @@ The codebase is small (~3.5K LOC of source + ~12 test files) but architecturally
 
 ## Maintenance notes
 
-These docs are written for a snapshot of the codebase as of **2026-04-30**. The fast-moving parts to verify when consulting:
+These docs are written for a snapshot of the codebase as of **2026-05-03** (post PR #15 + post report-renderer refactor; see `recent_changes.md` for the change log since the prior 2026-04-30 snapshot). The fast-moving parts to verify when consulting:
 
 - `EvolutionConfig` defaults (especially `eval_dataset_size`, `growth_*`, `bootstrap_*`)
 - `gate_decision.json` schema_version (currently `"4"`)

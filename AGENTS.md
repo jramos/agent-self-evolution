@@ -50,8 +50,10 @@ agent-self-evolution/
 │   └── tools/           # empty (planned)
 ├── output/<skill>/<ts>/ # per-run artifacts (git-ignored)
 ├── experiments/         # spike writeups (markdown)
-├── reports/             # validation PDFs
+├── reports/             # validation PDFs + reports/<phase>_prose.yaml
+├── assets/              # logo PNGs used by the report (e.g. dna.png)
 ├── docs/                # the knowledge base — start at docs/index.md
+├── generate_report.py   # renderer: --run output/<skill>/<ts>/ --prose reports/<phase>_prose.yaml --out reports/<phase>_validation_report.pdf
 ├── PLAN.md              # full roadmap
 ├── README.md            # quick start
 └── AGENTS.md            # you are here
@@ -210,6 +212,7 @@ Per-run dir: `output/<skill>/<YYYYMMDD_HHMMSS>/`. Contents vary by outcome:
 - **`SkillModule.TaskWithSkill` docstring is a placeholder** — `__init__` overwrites the signature instructions per-instance via `with_instructions(skill_text)`. Don't rely on the class-level docstring.
 - **`reassemble_skill` strips a leading `---` block** — defensive against the reflection LM mimicking YAML frontmatter (would otherwise produce a double-frontmatter file). Logged at WARNING when it fires; see if the prompt needs tightening.
 - **Test uses both `~/.hermes/skills/` and `~/.hermes/hermes-agent/skills/`** — `external_importers._load_skill_text` (standalone CLI only) reads the former; `HermesSkillSource` (the optimizer's path) reads the latter. Same prefix, different paths.
+- **`generate_report.py` is a renderer, not a content-store.** Numbers come from a run dir's `gate_decision.json` + `metrics.json` + `run.log` (auto-extracted); editorial prose + table contents come from `reports/<phase>_prose.yaml`; the title-page logo is `assets/dna.png` (Twemoji 14.0). Updating the report after a run is `python generate_report.py --run output/<skill>/<new-ts>/` — no script edit needed unless the prose itself changes. Run.log only carries `lm_timing_callback` lines; `dspy.teleprompt.gepa` "Iteration N" lines are not in the per-run artifact (they're stdout-only) so the report's pipeline-step text doesn't reference an iteration count.
 
 ## PR / commit conventions
 
