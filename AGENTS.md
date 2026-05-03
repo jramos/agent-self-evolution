@@ -66,8 +66,8 @@ The `evolution/<tier>/` directories form **a clean layering**: `evolution/core/`
 1. CLI resolves `--skill <name>` to a `SKILL.md` via the `SkillSource` walk.
 2. Eval dataset is built (synthetic LM gen / golden file / sessiondb mining).
 3. Skill body wrapped as `dspy.Module`; GEPA optimizes it with `BudgetAwareProposer` injecting a char budget into the reflection prompt.
-4. Knee-point Pareto selection picks the most parsimonious candidate within ε of the best valset score (instead of GEPA's "best by valset score" default which overfits on small N).
-5. Static constraints + paired-bootstrap growth-quality gate decide deploy vs. reject; both outcomes write `gate_decision.json`.
+4. Knee-point Pareto selection walks the candidates within ε of the best valset score in `--knee-point-strategy` order (default `val-best`: highest val first, smallest body as tiebreak). The pre-May-2026 default was `smallest` (greedy parsimony), still available via the flag for users explicitly chasing compression.
+5. Static constraints + paired-bootstrap growth-quality gate decide deploy vs. reject; both outcomes write `gate_decision.json`. The default rule is `no_regression` (`mean >= 0`); `--quality-gate non-inferiority` switches to `lower_bound > -inferiority_tolerance` (recommended for compression-focused runs at small N where the bootstrap CI swamps tiny effects).
 
 ## What lives where
 
@@ -186,7 +186,7 @@ Per-run dir: `output/<skill>/<YYYYMMDD_HHMMSS>/`. Contents vary by outcome:
 | File | When | Purpose |
 |---|---|---|
 | `run.log` | always | Every LM call (start, end, heartbeats), every retry |
-| `gate_decision.json` | always | Structured deploy decision (schema_version `"3"`) |
+| `gate_decision.json` | always | Structured deploy decision (schema_version `"4"`) |
 | `evolved_skill.md` | deploy only | New SKILL.md ready to ship |
 | `baseline_skill.md` | deploy only | Original (for diffing) |
 | `metrics.json` | deploy only | Top-level run summary |
@@ -203,7 +203,8 @@ Per-run dir: `output/<skill>/<YYYYMMDD_HHMMSS>/`. Contents vary by outcome:
 - **Empty `evolution/{tools,prompts,code,monitor}/`** — these are stubs anchoring the planned tier 2-5 work. See [docs/codebase_info.md](docs/codebase_info.md) status table.
 - **`logging.basicConfig` at module import** — `evolve_skill.py:30-34` configures the root logger when imported. Side effect, intentional for the CLI; surprising if you `from evolution.skills.evolve_skill import evolve` in a notebook.
 - **`val_ratio + holdout_ratio + train_ratio = 1.40`** — looks like a bug; isn't. `split_examples()` normalizes the three ratios so they sum to 1; the synthetic, sessiondb, and golden paths all go through the same helper.
-- **`max_tokens=16000` on dataset gen LM** — load-bearing. At `eval_dataset_size=60` the JSON output truncates mid-string with anything lower. Locked by `TestSyntheticGeneratorLMConfig`.
+- **`max_tokens=16000` on dataset gen LM** — load-bearing. At `eval_dataset_size>=60` the JSON output truncates mid-string with anything lower; the current default `eval_dataset_size=150` makes this even more critical. Locked by `TestSyntheticGeneratorLMConfig`.
+- **Default `eval_dataset_size` was bumped from 60 → 150 in May 2026** to tighten the bootstrap CI on the holdout split. Historical experiments (notably `experiments/2026-04-30-multi-seed-noise-floor.md` and any per-skill calibration done at N=60) need re-running to re-establish the noise floor for current defaults.
 - **Reflection LM `request_timeout=300, num_retries=2`** (vs `=5` for judge) — deliberate fast-fail. A reflection-LM `TimeoutError` triggers MIPROv2 fallback rather than burning more time on a stuck call.
 - **Knee-point reads `optimized_module.detailed_results`** — only present when GEPA succeeded (and `track_stats=True`). MIPROv2 fallback path skips knee-point cleanly. `gate_decision.json.knee_point.applied=false` with `reason="no_detailed_results"` is the signal.
 - **`SkillModule.TaskWithSkill` docstring is a placeholder** — `__init__` overwrites the signature instructions per-instance via `with_instructions(skill_text)`. Don't rely on the class-level docstring.

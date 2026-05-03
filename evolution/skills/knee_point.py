@@ -45,6 +45,9 @@ class CandidatePick:
     band_roster: list[dict]       # [{"idx", "val_score", "body_chars"}, ...]
 
 
+_KNEE_POINT_STRATEGIES = ("val-best", "smallest")
+
+
 def select_knee_point(
     candidates: list[_SupportsSkillText],
     val_aggregate_scores: list[float],
@@ -52,8 +55,9 @@ def select_knee_point(
     static_validator: Callable[[str], list],
     gepa_default_idx: int,
     epsilon: Optional[float] = None,
+    strategy: str = "val-best",
 ) -> CandidatePick:
-    """Pick the most parsimonious candidate within ε of best valset score.
+    """Pick a candidate within ε of best valset score.
 
     Args:
         candidates: GEPA-built modules (DspyGEPAResult.candidates). Each
@@ -65,15 +69,21 @@ def select_knee_point(
             honest about valset resolution rather than pretending we have
             ε=0.02 precision on N=6).
         static_validator: callable(skill_text) -> list[ConstraintResult].
-            Iterating the band by ascending body_chars stops at the first
-            candidate whose every result has `.passed`. Senior critique:
-            don't fall back to GEPA default until *every* band candidate
-            fails — a more parsimonious candidate that passes static is
-            strictly better than the default by construction.
+            Iterating the band in the strategy's order stops at the first
+            candidate whose every result has `.passed`. Don't fall back to
+            GEPA default until *every* band candidate fails.
         gepa_default_idx: DspyGEPAResult.best_idx — the candidate GEPA
             would have picked. Used as the last-resort fallback if the
             entire band fails static, and recorded in telemetry regardless.
         epsilon: override the 1/n_val default. CLI flag passes this through.
+        strategy: which order to walk the band when picking.
+            "val-best" (default): highest val score first, smallest body
+                as tiebreak. Set as default May 2026 after the arxiv run
+                showed the prior parsimony-first sort sacrificed val=0.044
+                for body=240 chars (5%) — a bad trade.
+            "smallest": ascending body_chars (the prior default). Available
+                via --knee-point-strategy for users explicitly chasing
+                compression even at val cost.
 
     Returns:
         CandidatePick with the chosen module + diagnostics. fallback field
@@ -89,6 +99,11 @@ def select_knee_point(
         )
     if n_val < 1:
         raise ValueError(f"select_knee_point: n_val must be >= 1, got {n_val}")
+    if strategy not in _KNEE_POINT_STRATEGIES:
+        raise ValueError(
+            f"select_knee_point: strategy must be one of {_KNEE_POINT_STRATEGIES}, "
+            f"got {strategy!r}"
+        )
 
     eps = float(epsilon) if epsilon is not None else 1.0 / n_val
 
@@ -119,14 +134,28 @@ def select_knee_point(
         for i in band_roster_by_score
     ]
 
-    sorted_for_pick = sorted(
-        band_indices,
-        key=lambda i: (
-            body_chars_by_idx[i],
-            -val_aggregate_scores[i],
-            i,
-        ),
-    )
+    if strategy == "smallest":
+        # Greedy parsimony: smallest body wins; val score is just a tiebreak.
+        sorted_for_pick = sorted(
+            band_indices,
+            key=lambda i: (
+                body_chars_by_idx[i],
+                -val_aggregate_scores[i],
+                i,
+            ),
+        )
+    else:  # "val-best"
+        # Highest val wins; smallest body is the tiebreak. This is the
+        # default — within the ε-band the algorithm prefers the candidate
+        # most likely to generalize, with parsimony only mattering on ties.
+        sorted_for_pick = sorted(
+            band_indices,
+            key=lambda i: (
+                -val_aggregate_scores[i],
+                body_chars_by_idx[i],
+                i,
+            ),
+        )
 
     gepa_default_chars = len(candidates[gepa_default_idx].skill_text)
 

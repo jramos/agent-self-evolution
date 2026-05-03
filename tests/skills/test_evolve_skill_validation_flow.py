@@ -119,7 +119,7 @@ class TestStaticValidationShortCircuitsBeforeHoldout:
         # Manual reproduction of the static-failure branch's payload —
         # locks the schema so a future refactor can't silently drop fields.
         payload = {
-            "schema_version": "3",
+            "schema_version": "4",
             "decision": "reject",
             "reason": "static_constraint_failure",
             "failed_constraints": ["non_empty"],
@@ -128,7 +128,7 @@ class TestStaticValidationShortCircuitsBeforeHoldout:
         }
         path = _write_gate_decision(tmp_path, payload)
         loaded = json.loads(path.read_text())
-        assert loaded["schema_version"] == "3"
+        assert loaded["schema_version"] == "4"
         assert loaded["reason"] == "static_constraint_failure"
         assert "non_empty" in loaded["failed_constraints"]
         assert "knee_point" in loaded
@@ -142,10 +142,12 @@ class TestGrowthGateDecisionSchema:
 
     def test_required_fields_present(self, tmp_path: Path):
         payload = {
-            "schema_version": "3",
+            "schema_version": "4",
             "decision": "reject",
             "reason": "growth_quality_gate",
             "decision_rule_used": "dual_check",
+            "gate_mode": "no_regression",
+            "inferiority_tolerance": 0.0,
             "growth_pct": 0.30,
             "required_improvement": 0.030,
             "baseline_chars": 1000,
@@ -184,11 +186,11 @@ class TestGrowthGateDecisionSchema:
                 ],
             },
             "dataset": {
-                "size_total": 60,
-                "size_train": 21,
-                "size_val": 17,
-                "size_holdout": 22,
-                "sources": {"synthetic": 60},
+                "size_total": 150,
+                "size_train": 54,
+                "size_val": 43,
+                "size_holdout": 53,
+                "sources": {"synthetic": 150},
             },
         }
         path = _write_gate_decision(tmp_path, payload)
@@ -197,13 +199,14 @@ class TestGrowthGateDecisionSchema:
         # Calibration script will rely on these keys.
         for required in (
             "schema_version", "decision", "decision_rule_used",
+            "gate_mode", "inferiority_tolerance",
             "growth_pct", "required_improvement",
             "baseline_chars", "evolved_chars",
             "growth_free_threshold", "growth_quality_slope",
             "bootstrap", "knee_point", "dataset",
         ):
             assert required in loaded, f"missing {required}"
-        assert loaded["schema_version"] == "3"
+        assert loaded["schema_version"] == "4"
         for required_in_bootstrap in (
             "mean", "lower_bound", "upper_bound", "n_examples",
             "n_resamples", "confidence",
@@ -282,16 +285,21 @@ class TestDatasetPayloadHelper:
         )
 
     def test_records_split_sizes(self):
+        # Use realistic counts that match the current N=150 default split
+        # (~54/43/53). This test isn't asserting on EvolutionConfig behavior
+        # — it locks the payload helper's faithful reporting of arbitrary
+        # input sizes. Numbers here track the documented defaults so future
+        # readers don't have to triangulate against a stale fixture.
         ds = EvalDataset(
-            train=[self._ex("synthetic")] * 21,
-            val=[self._ex("synthetic")] * 17,
-            holdout=[self._ex("synthetic")] * 22,
+            train=[self._ex("synthetic")] * 54,
+            val=[self._ex("synthetic")] * 43,
+            holdout=[self._ex("synthetic")] * 53,
         )
         payload = _dataset_payload(ds)
-        assert payload["size_total"] == 60
-        assert payload["size_train"] == 21
-        assert payload["size_val"] == 17
-        assert payload["size_holdout"] == 22
+        assert payload["size_total"] == 150
+        assert payload["size_train"] == 54
+        assert payload["size_val"] == 43
+        assert payload["size_holdout"] == 53
 
     def test_buckets_per_source(self):
         ds = EvalDataset(

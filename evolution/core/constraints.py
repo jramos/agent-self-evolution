@@ -21,6 +21,24 @@ class ConstraintResult:
     details: Optional[str] = None
 
 
+def resolve_decision_rule(config: EvolutionConfig, growth_pct: float) -> str:
+    """Single source of truth for which gate decision rule applies.
+
+    Both ``_check_growth_with_quality_gate`` and ``evolve_skill._write_gate_decision``
+    must agree on the rule name; computing it in one place avoids the float-equality
+    drift that otherwise creeps in between the constraint and the payload writer.
+    """
+    required = max(
+        0.0,
+        config.growth_quality_slope * (growth_pct - config.growth_free_threshold),
+    )
+    if required > 0.0:
+        return "dual_check"
+    if config.gate_mode == "non_inferiority":
+        return "non_inferiority"
+    return "no_regression_only"
+
+
 class ConstraintValidator:
     """Validates evolved artifacts against hard constraints."""
 
@@ -142,30 +160,54 @@ class ConstraintValidator:
         threshold:
             required_improvement(growth) = max(0, slope * (growth - growth_free))
 
-        Decision rule:
-          - When required > 0: pass when both the sample mean meets the
-            requirement AND the bootstrap lower bound is positive
+        Three decision rules (resolved by ``resolve_decision_rule``):
+          - ``dual_check`` (required > 0): pass when both the sample mean
+            meets the requirement AND the bootstrap lower bound is positive
             (Statsig "guardrail" pattern: effect size + no-regression).
-          - When required == 0 (growth ≤ free threshold): pass on
-            mean ≥ 0 alone. The optimizer doesn't need to justify a
-            decrease in length, only that the candidate doesn't regress.
+          - ``no_regression_only`` (required == 0, gate_mode="no_regression"):
+            pass on mean ≥ 0 alone. The optimizer doesn't need to justify a
+            decrease in length, only that the candidate doesn't regress on
+            average.
+          - ``non_inferiority`` (required == 0, gate_mode="non_inferiority"):
+            pass when bootstrap.lower_bound > -inferiority_tolerance — i.e.
+            we have ``confidence`` confidence the evolved isn't worse than
+            baseline by more than ``inferiority_tolerance``. Necessary at
+            small N where the bootstrap CI swamps tiny effects.
 
-        Negative growth (the LM produced a shorter artifact) always
-        falls into the required==0 branch.
+        Negative growth (the LM produced a shorter artifact) always falls
+        into the required==0 branch.
         """
         baseline_len = len(baseline)
         growth = (len(text) - baseline_len) / baseline_len if baseline_len else 0.0
 
-        free = self.config.growth_free_threshold
-        slope = self.config.growth_quality_slope
-        required = max(0.0, slope * (growth - free))
+        rule = resolve_decision_rule(self.config, growth)
 
         mean = bootstrap_result["mean"]
         lower = bootstrap_result["lower_bound"]
         n = bootstrap_result["n_examples"]
         conf = bootstrap_result["confidence"]
 
-        if required == 0.0:
+        if rule == "non_inferiority":
+            tol = self.config.inferiority_tolerance
+            if lower >= -tol:
+                return ConstraintResult(
+                    passed=True,
+                    constraint_name="growth_quality_gate",
+                    message=(
+                        f"Growth {growth:+.1%}: non-inferior — lower-bound "
+                        f"{lower:+.3f} ≥ -{tol:.3f} tolerance (n={n}, conf={conf:.2f})"
+                    ),
+                )
+            return ConstraintResult(
+                passed=False,
+                constraint_name="growth_quality_gate",
+                message=(
+                    f"Growth {growth:+.1%}: lower-bound {lower:+.3f} < "
+                    f"-{tol:.3f} tolerance (n={n}, conf={conf:.2f})"
+                ),
+            )
+
+        if rule == "no_regression_only":
             if mean >= 0.0:
                 return ConstraintResult(
                     passed=True,
@@ -183,6 +225,11 @@ class ConstraintValidator:
                 ),
             )
 
+        # rule == "dual_check"
+        required = max(
+            0.0,
+            self.config.growth_quality_slope * (growth - self.config.growth_free_threshold),
+        )
         mean_ok = mean >= required
         lower_ok = lower > 0.0
 

@@ -36,13 +36,15 @@ The primary user-facing interface.
 ### Quality gate
 | Flag | Default | Notes |
 |---|---|---|
-| `--quality-gate {strict,default,lenient,off}` | `default` | Preset bundling free threshold + slope + abs ceiling. |
+| `--quality-gate {strict,default,lenient,off,non-inferiority}` | `default` | Preset bundling free threshold + slope + abs ceiling + gate mode. `non-inferiority` ships variants statistically not-worse-than-baseline by more than `--inferiority-tolerance` (recommended for compression runs). `off` is misnamed — it disables the slope/ceiling but still enforces `mean >= 0`; emits a warning and recommends `non-inferiority` instead. |
+| `--inferiority-tolerance <float>` | (preset; `0.02` for `non-inferiority`) | Tolerance for the non-inferiority gate: pass when `bootstrap.lower_bound > -tolerance`. Only meaningful with `--quality-gate non-inferiority`. |
 | `--growth-free-threshold <float>` | (preset) | Override growth % below which no improvement justification required. |
 | `--growth-quality-slope <float>` | (preset) | Override linear coefficient on required improvement. |
 | `--max-absolute-chars <int>` | (preset) | Override absolute char ceiling. |
 | `--bootstrap-confidence <float>` | `0.90` | Two-sided CI confidence for the holdout improvement bootstrap. |
 | `--bootstrap-resamples <int>` | `2000` | Bootstrap iterations. |
 | `--knee-point-epsilon <float>` | `1/n_val` | ε for knee-point Pareto band. Override only with calibrated reason. |
+| `--knee-point-strategy {val-best,smallest}` | `val-best` | Within the ε-band, which candidate to pick. `val-best` (default): highest val score wins, smallest body as tiebreak. `smallest`: greedy parsimony (the prior default before May 2026), available for users explicitly chasing compression. |
 
 ### Misc
 | Flag | Default | Notes |
@@ -91,13 +93,15 @@ evolve(
     seed=42,
     budget=None,                    # "light" | "medium" | "heavy"
     no_fallback=False,
-    quality_gate="default",         # "strict" | "default" | "lenient" | "off"
+    quality_gate="default",         # "strict" | "default" | "lenient" | "off" | "non-inferiority"
     growth_free_threshold=None,
     growth_quality_slope=None,
     max_absolute_chars=None,
+    inferiority_tolerance=None,     # float, only meaningful with quality_gate="non-inferiority"
     bootstrap_confidence=None,
     bootstrap_n_resamples=None,
     knee_point_epsilon=None,
+    knee_point_strategy="val-best", # "val-best" | "smallest"
 )
 ```
 
@@ -156,7 +160,7 @@ Per-run directory: `output/<skill_name>/<YYYYMMDD_HHMMSS>/`. Contents vary by ou
 These are technically internal but tested directly because downstream calibration scripts depend on them:
 
 - `_write_gate_decision(output_dir, payload) -> Path` — keep filename `gate_decision.json`.
-- `gate_decision.json` schema fields — `tests/skills/test_evolve_skill_validation_flow.py:TestGrowthGateDecisionSchema` and `TestStaticValidationShortCircuitsBeforeHoldout` lock `schema_version="3"` plus the full key list. See [data_models.md](data_models.md).
+- `gate_decision.json` schema fields — `tests/skills/test_evolve_skill_validation_flow.py:TestGrowthGateDecisionSchema` and `TestStaticValidationShortCircuitsBeforeHoldout` lock `schema_version="4"` plus the full key list. See [data_models.md](data_models.md).
 - `_dataset_payload(dataset)` — `size_total`, `size_train`, `size_val`, `size_holdout`, `sources` (per-source counter; "unknown" bucket for `source=""`). Locked by `TestDatasetPayloadHelper`.
 - `_knee_point_payload(pick)` — applied/skipped shapes both locked by `TestKneePointPayloadHelper`.
 - `paired_bootstrap()` return shape — `mean`, `lower_bound`, `upper_bound`, `n_examples`, `n_resamples`, `confidence`. Calibration scripts depend on these key names.

@@ -74,11 +74,16 @@ class TestEpsilon:
         assert pick.band_size == 1
 
 
-class TestParsimonyPick:
-    def test_picks_smallest_in_band(self):
-        # Per the plan's verification example.
+class TestValBestStrategy:
+    """Default strategy (May 2026+): pick the highest-val candidate within
+    the ε-band. The arxiv run motivated this change — the prior parsimony-
+    first sort sacrificed val=0.044 for body=240 chars (5%), a bad trade.
+    """
+
+    def test_default_picks_val_best_in_band(self):
+        # Same fixture as the prior smallest-in-band test, flipped pick.
         candidates = [
-            _FakeModule("x" * 1572),  # idx 0, val 0.997 — best, in band
+            _FakeModule("x" * 1572),  # idx 0, val 0.997 — best val, in band
             _FakeModule("x" * 412),   # idx 1, val 0.95  — in band
             _FakeModule("x" * 800),   # idx 2, val 0.95  — in band
             _FakeModule("x" * 1100),  # idx 3, val 0.93  — in band
@@ -89,8 +94,9 @@ class TestParsimonyPick:
             candidates, scores, n_val=6,
             static_validator=_all_pass, gepa_default_idx=0,
         )
-        assert pick.picked_idx == 1
-        assert pick.body_chars == 412
+        # Default strategy = val-best; idx 0 has highest val in band.
+        assert pick.picked_idx == 0
+        assert pick.body_chars == 1572
         assert pick.fallback == "knee"
         assert pick.band_size == 4
 
@@ -106,36 +112,104 @@ class TestParsimonyPick:
         assert pick.picked_idx == 0
         assert pick.fallback == "knee"
 
-    def test_deterministic_tiebreak_by_val_then_idx(self):
-        # Two candidates with identical body_chars: higher val_score wins;
-        # if val also tied, lower idx wins.
+    def test_tiebreak_by_smallest_body_then_idx(self):
+        # Equal val scores → smaller body wins; equal body → lower idx wins.
+        candidates = [
+            _FakeModule("x" * 200),  # idx 0, val 0.95 — equal val, larger body
+            _FakeModule("x" * 100),  # idx 1, val 0.95 — equal val, smaller body
+            _FakeModule("x" * 100),  # idx 2, val 0.95 — ties idx 1 on val+body
+        ]
+        scores = [0.95, 0.95, 0.95]
+        pick = select_knee_point(
+            candidates, scores, n_val=6,
+            static_validator=_all_pass, gepa_default_idx=0,
+        )
+        # idx 1 wins: same val as 0 but smaller body; same as idx 2 but lower idx.
+        assert pick.picked_idx == 1
+
+
+class TestSmallestStrategy:
+    """Pre-May-2026 default, kept available via --knee-point-strategy
+    smallest for users explicitly chasing compression even at val cost.
+    """
+
+    def test_smallest_picks_smallest_in_band(self):
+        candidates = [
+            _FakeModule("x" * 1572),  # idx 0, val 0.997
+            _FakeModule("x" * 412),   # idx 1, val 0.95  — smallest in band
+            _FakeModule("x" * 800),   # idx 2, val 0.95
+            _FakeModule("x" * 1100),  # idx 3, val 0.93
+            _FakeModule("x" * 200),   # idx 4, val 0.80  — outside band
+        ]
+        scores = [0.997, 0.95, 0.95, 0.93, 0.80]
+        pick = select_knee_point(
+            candidates, scores, n_val=6,
+            static_validator=_all_pass, gepa_default_idx=0,
+            strategy="smallest",
+        )
+        assert pick.picked_idx == 1
+        assert pick.body_chars == 412
+        assert pick.fallback == "knee"
+
+    def test_smallest_tiebreak_by_val_then_idx(self):
+        # Equal body → highest val wins; equal val + body → lower idx wins.
         candidates = [
             _FakeModule("x" * 100),  # idx 0, val 0.90
             _FakeModule("x" * 100),  # idx 1, val 0.95
-            _FakeModule("x" * 100),  # idx 2, val 0.95 (ties idx 1 on val + chars)
+            _FakeModule("x" * 100),  # idx 2, val 0.95
         ]
         scores = [0.90, 0.95, 0.95]
         pick = select_knee_point(
             candidates, scores, n_val=6,
             static_validator=_all_pass, gepa_default_idx=0,
+            strategy="smallest",
         )
-        # idx 1 wins: same chars + higher val than 0; same as idx 2 but lower idx.
         assert pick.picked_idx == 1
 
 
+class TestStrategyValidation:
+    def test_unknown_strategy_raises(self):
+        candidates = [_FakeModule("x" * 100)]
+        with pytest.raises(ValueError, match="strategy must be one of"):
+            select_knee_point(
+                candidates, [1.0], n_val=6,
+                static_validator=_all_pass, gepa_default_idx=0,
+                strategy="random",
+            )
+
+
 class TestStaticFallback:
-    def test_skips_static_failures_in_band(self):
-        # Smallest candidate fails static; next-smallest wins.
+    def test_val_best_skips_static_failures_in_band(self):
+        # Default strategy walks val-best first; when the val-best fails
+        # static, the next val-best in band is tried.
         candidates = [
             _FakeModule("x" * 50),    # idx 0, val 1.0 — too short, fails static
             _FakeModule("x" * 200),   # idx 1, val 0.95 — passes
-            _FakeModule("x" * 1000),  # idx 2, val 0.99 — best val, passes
+            _FakeModule("x" * 1000),  # idx 2, val 0.99 — passes
         ]
         scores = [1.0, 0.95, 0.99]
         pick = select_knee_point(
             candidates, scores, n_val=6,
             static_validator=_fail_when_short(threshold=100),
             gepa_default_idx=0,
+        )
+        # val-best in band is idx 0 (1.0, fails), then idx 2 (0.99, passes).
+        assert pick.picked_idx == 2
+        assert pick.fallback == "knee"
+
+    def test_smallest_skips_static_failures_in_band(self):
+        # Old behavior preserved under explicit strategy="smallest".
+        candidates = [
+            _FakeModule("x" * 50),    # idx 0, val 1.0 — too short, fails static
+            _FakeModule("x" * 200),   # idx 1, val 0.95 — smallest passing
+            _FakeModule("x" * 1000),  # idx 2, val 0.99 — also passes
+        ]
+        scores = [1.0, 0.95, 0.99]
+        pick = select_knee_point(
+            candidates, scores, n_val=6,
+            static_validator=_fail_when_short(threshold=100),
+            gepa_default_idx=0,
+            strategy="smallest",
         )
         assert pick.picked_idx == 1
         assert pick.fallback == "knee"
@@ -185,9 +259,9 @@ class TestRosterAndRank:
             candidates, scores, n_val=6,
             static_validator=_all_pass, gepa_default_idx=0,
         )
-        # picked = idx 1 (smallest body); val 0.95 is rank 3 of 3 in band.
-        assert pick.picked_idx == 1
-        assert pick.val_rank_in_band == 3
+        # Default strategy = val-best; picked idx 0 (val 0.997, rank 1 of 3).
+        assert pick.picked_idx == 0
+        assert pick.val_rank_in_band == 1
 
     def test_telemetry_records_gepa_default(self):
         candidates = [_FakeModule("x" * 1572), _FakeModule("x" * 412)]

@@ -167,12 +167,14 @@ The framework's deploy decisions rest on three calibrated knobs in `EvolutionCon
 | `max_absolute_chars` | 5000 | Hard ceiling regardless of growth — backstops short baselines |
 | `bootstrap_confidence` | 0.90 | Two-sided confidence on the per-example improvement CI |
 | `bootstrap_n_resamples` | 2000 | Bootstrap iterations |
-| `eval_dataset_size` | 60 | Total synthetic examples (≈ 21 train / 17 val / 22 holdout) |
+| `eval_dataset_size` | 150 | Total synthetic examples (≈ 54 train / 43 val / 53 holdout) |
 | `min_holdout_size` | 10 | Hard refuse-to-gate threshold |
+| `gate_mode` | `"no_regression"` | Decision rule for the required==0 branch. `"non_inferiority"` switches to `lower_bound > -inferiority_tolerance`. |
+| `inferiority_tolerance` | 0.0 | Tolerance for the non-inferiority gate; only meaningful when `gate_mode == "non_inferiority"`. |
 
-The N=60 default was set after a multi-seed spike on `obsidian` (4/5 deploys, mean +0.027, std 0.038). At N=30 the bootstrap CI swamped real lift and almost every evolution was rejected regardless of quality.
+The N=60 → 150 bump (May 2026) followed back-to-back rejected runs on `codebase-summary` and `arxiv` where the n=18-23 holdout produced bootstrap CIs too wide to detect small effects. At N=150 the holdout sits ~53 examples — still well under the GEPA paper's n=300 but enough that ±2% effects are detectable. (Historical baseline: the prior multi-seed spike on `obsidian` at N=60 produced 4/5 deploys, mean +0.027, std 0.038. That noise floor is no longer authoritative for current defaults.)
 
-Three named presets (`strict`, `default`, `lenient`, `off`) bundle the curve parameters together and are exposed via `--quality-gate`. Individual params can still be overridden via `--growth-free-threshold` etc.
+Five named presets (`strict`, `default`, `lenient`, `off`, `non-inferiority`) bundle the curve parameters together and are exposed via `--quality-gate`. The `off` preset is misleadingly named — it disables the slope/ceiling but still enforces `mean >= 0`; use `non-inferiority` for true compression-without-regression semantics. Individual params can still be overridden via `--growth-free-threshold`, `--inferiority-tolerance`, etc.
 
 ## Architectural decisions worth knowing
 

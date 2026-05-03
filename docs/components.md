@@ -102,7 +102,7 @@ Reference of the major modules in `evolution/`. Each entry: what it owns, the pu
 - `max_tokens=16000` on the judge LM. Bumped from 4000 after `eval_dataset_size=60` truncated JSON output mid-string. Without this: JSONDecodeError → process exit.
 - `request_timeout=120, num_retries=5` — dataset gen is a single bursty call; 5×120s = 10min worst case.
 
-**Split logic** (synthetic): ratios from `EvolutionConfig.train_ratio` / `val_ratio` / `holdout_ratio` are normalized to actually sum to 1; holdout is no longer just "whatever's left." Default ratios `0.5/0.40/0.50` normalize to ≈ 0.36/0.29/0.36 of N=60.
+**Split logic** (synthetic): ratios from `EvolutionConfig.train_ratio` / `val_ratio` / `holdout_ratio` are normalized to actually sum to 1; holdout is no longer just "whatever's left." Default ratios `0.5/0.40/0.50` normalize to ≈ 0.36/0.29/0.36 of N (≈ 54/43/53 at the current `eval_dataset_size=150` default).
 
 ## evolution/core/external_importers.py — session-history mining
 
