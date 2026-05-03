@@ -145,9 +145,10 @@ class TestSplitConsistencyAcrossPaths:
 
 
 class TestSyntheticGeneratorLMConfig:
-    """At eval_dataset_size=60 the synthetic generator's JSON output runs
+    """At eval_dataset_size>=60 the synthetic generator's JSON output runs
     past the prior 4000-token ceiling and silently truncates → JSONDecodeError
-    → process exit. Lock the bumped 16000-token budget.
+    → process exit. Lock the bumped 16000-token budget. (At the current
+    default N=150 the truncation pressure is even higher.)
     """
 
     def test_lm_constructed_with_bumped_max_tokens(self):

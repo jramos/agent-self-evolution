@@ -36,7 +36,7 @@ class EvolutionConfig:
     bootstrap_n_resamples: int = 2000
 
     # Eval dataset
-    eval_dataset_size: int = 60
+    eval_dataset_size: int = 150            # bumped from 60 in May 2026; see config.py for rationale
     train_ratio: float = 0.5
     val_ratio: float = 0.40
     holdout_ratio: float = 0.50
@@ -57,7 +57,7 @@ class EvolutionConfig:
 
 `skill_sources` runs `discover_skill_sources()` at construction time. Tests use a `_skill_source_env` autouse fixture to point this at a fake repo so they don't pick up real `~/.hermes` or `~/.claude` installations.
 
-`val_ratio + holdout_ratio + train_ratio` is **deliberately not 1.0** — the synthetic builder normalizes them to sum to 1, so changing any one shifts the others proportionally. Default normalizes to ≈ 0.36/0.29/0.36 of N.
+`val_ratio + holdout_ratio + train_ratio` is **deliberately not 1.0** — the synthetic builder normalizes them to sum to 1, so changing any one shifts the others proportionally. Default normalizes to ≈ 0.36/0.29/0.36 of N (≈ 54 train / 43 val / 53 holdout at the default `eval_dataset_size=150`).
 
 ## EvalExample (`evolution/core/dataset_builder.py:21`)
 

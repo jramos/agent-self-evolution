@@ -186,11 +186,11 @@ class TestGrowthGateDecisionSchema:
                 ],
             },
             "dataset": {
-                "size_total": 60,
-                "size_train": 21,
-                "size_val": 17,
-                "size_holdout": 22,
-                "sources": {"synthetic": 60},
+                "size_total": 150,
+                "size_train": 54,
+                "size_val": 43,
+                "size_holdout": 53,
+                "sources": {"synthetic": 150},
             },
         }
         path = _write_gate_decision(tmp_path, payload)
@@ -285,16 +285,21 @@ class TestDatasetPayloadHelper:
         )
 
     def test_records_split_sizes(self):
+        # Use realistic counts that match the current N=150 default split
+        # (~54/43/53). This test isn't asserting on EvolutionConfig behavior
+        # — it locks the payload helper's faithful reporting of arbitrary
+        # input sizes. Numbers here track the documented defaults so future
+        # readers don't have to triangulate against a stale fixture.
         ds = EvalDataset(
-            train=[self._ex("synthetic")] * 21,
-            val=[self._ex("synthetic")] * 17,
-            holdout=[self._ex("synthetic")] * 22,
+            train=[self._ex("synthetic")] * 54,
+            val=[self._ex("synthetic")] * 43,
+            holdout=[self._ex("synthetic")] * 53,
         )
         payload = _dataset_payload(ds)
-        assert payload["size_total"] == 60
-        assert payload["size_train"] == 21
-        assert payload["size_val"] == 17
-        assert payload["size_holdout"] == 22
+        assert payload["size_total"] == 150
+        assert payload["size_train"] == 54
+        assert payload["size_val"] == 43
+        assert payload["size_holdout"] == 53
 
     def test_buckets_per_source(self):
         ds = EvalDataset(
