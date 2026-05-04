@@ -60,7 +60,7 @@ Sources whose roots don't exist on disk are skipped automatically.
 ```bash
 export SKILL_SOURCES_HERMES_REPO=~/.hermes/hermes-agent
 
-python -m evolution.skills.evolve_skill \
+uv run python -m evolution.skills.evolve_skill \
     --skill github-code-review \
     --iterations 10 \
     --eval-source synthetic
@@ -70,7 +70,7 @@ python -m evolution.skills.evolve_skill \
 
 ```bash
 # No env var needed if you have Claude Code installed
-python -m evolution.skills.evolve_skill \
+uv run python -m evolution.skills.evolve_skill \
     --skill writing-skills \
     --iterations 10 \
     --eval-source synthetic
@@ -79,7 +79,7 @@ python -m evolution.skills.evolve_skill \
 ### Evolve a skill from any custom layout
 
 ```bash
-python -m evolution.skills.evolve_skill \
+uv run python -m evolution.skills.evolve_skill \
     --skill my-skill \
     --skill-source-dir ~/path/to/my-skills \
     --iterations 10 \
@@ -89,7 +89,7 @@ python -m evolution.skills.evolve_skill \
 ### Mine real session history for evals
 
 ```bash
-python -m evolution.skills.evolve_skill \
+uv run python -m evolution.skills.evolve_skill \
     --skill github-code-review \
     --iterations 10 \
     --eval-source sessiondb
