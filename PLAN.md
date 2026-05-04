@@ -173,7 +173,7 @@ hermes-agent-self-evolution/             # Standalone repo
 # Clone and install
 git clone https://github.com/jramos/agent-self-evolution.git
 cd agent-self-evolution
-pip install -e ".[dev]"
+uv sync
 
 # Point at hermes-agent repo (auto-detected from ~/.hermes/hermes-agent or env var)
 export HERMES_AGENT_REPO=~/.hermes/hermes-agent
@@ -748,7 +748,7 @@ See the **Constraints & Guardrails** section above for the full enforcement list
 
 ### Licensing
 - DSPy: MIT ✓ (can import and integrate freely)
-- GEPA: MIT ✓ (integrated into DSPy, also standalone `pip install gepa`)
+- GEPA: MIT ✓ (integrated into DSPy, also standalone `uv pip install gepa`)
 - Darwinian Evolver: AGPL v3 ⚠️ (external CLI only, no Python imports)
 - All Hermes-native code: MIT ✓
 

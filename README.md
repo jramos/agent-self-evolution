@@ -40,8 +40,10 @@ If you're optimizing on N≥300 with crisp programmatic metrics, raw GEPA is fin
 # Install
 git clone https://github.com/jramos/agent-self-evolution.git
 cd agent-self-evolution
-pip install -e ".[dev]"
+uv sync
 ```
+
+`uv sync` creates `.venv/`, installs the project in editable mode, and pulls in the `dev` group (pytest). Run project commands via `uv run` (e.g. `uv run pytest`, `uv run python -m evolution.skills.evolve_skill ...`) — no manual `source .venv/bin/activate` required.
 
 ### Skill discovery
 

@@ -37,7 +37,7 @@ Only **Tier 1 (skill files)** is implemented. Tiers 2-5 (tool descriptions, prom
 
 ```
 agent-self-evolution/
-├── evolution/           # the package (only thing pip-installed)
+├── evolution/           # the package (only thing installed into the venv)
 │   ├── core/            # framework-agnostic infrastructure
 │   ├── skills/          # Tier 1 — skill-file evolution (only tier built)
 │   ├── prompts/         # Tier 3 stub
@@ -162,15 +162,14 @@ Inferred from the existing source — follow these unless you have a specific re
 `[meta:local-dev]` Cross-ref: [README.md](README.md), [docs/interfaces.md](docs/interfaces.md)
 
 ```bash
-# install
-source .venv/bin/activate
-pip install -e ".[dev]"
+# install (creates .venv, installs project + dev group from uv.lock)
+uv sync
 
 # fast smoke test (no real LM calls)
-python -m evolution.skills.evolve_skill --skill <name> --dry-run
+uv run python -m evolution.skills.evolve_skill --skill <name> --dry-run
 
 # real run (uses OpenAI by default; need OPENAI_API_KEY)
-python -m evolution.skills.evolve_skill \
+uv run python -m evolution.skills.evolve_skill \
     --skill <name> \
     --budget light \
     --eval-source synthetic

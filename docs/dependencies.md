@@ -72,25 +72,25 @@ Used by `evolution/core/stats.py:paired_bootstrap` for the resample matrix and p
 
 Used only by `generate_report.py` to load `reports/<phase>_prose.yaml` (editorial content for the validation report). Not exercised by the optimization pipeline. Was previously a transitive dep through dspy/litellm; promoted to a direct dep when the report became data-driven.
 
-## Optional extras
+## Dev dependency group — `pytest>=7.0`, `pytest-asyncio>=0.21`
 
-### `[dev]` — `pytest>=7.0`, `pytest-asyncio>=0.21`
+Declared under `[dependency-groups].dev` (PEP 735), so it stays out of the published package's extras. `uv sync` installs it by default; `uv sync --no-dev` skips it.
 
 `pytest-asyncio` is declared but not currently exercised by the test suite (no `@pytest.mark.asyncio` tests). Reserved for future async work.
+
+## Optional extras
 
 ### `[miprov2]` — `dspy[optuna]>=3.2.0,<3.3`
 
 Required only when GEPA fails and the MIPROv2 fallback fires. The import is lazy inside `_default_mipro_runner()` — install on demand:
 
 ```bash
-pip install agent-self-evolution[miprov2]
+uv pip install "agent-self-evolution[miprov2]"
 ```
 
 If missing, the fallback raises `ImportError` (re-raised with the GEPA failure preserved as `__cause__` so the user sees both).
 
-### `[darwinian]` — `darwinian-evolver`
-
-Reserved for the planned Tier 4 (code-evolution) work. The `evolution/code/` package is empty; this dependency will be wired when that tier is implemented.
+> Tier 4 (code-evolution) will introduce a `darwinian-evolver` dependency when that tier is built. Not declared in `pyproject.toml` until the package is published and `evolution/code/` actually imports it.
 
 ## Implicit dependencies (not in pyproject.toml)
 
@@ -176,5 +176,5 @@ Worth noting because they often appear in similar projects:
 - **No FastAPI / Flask / web framework.** CLI-only.
 - **No database.** All state is files (`output/`, `datasets/`, `~/.claude/history.jsonl`, etc.).
 - **No async runtime.** `dspy.Evaluate(num_threads=4)` uses threads, not asyncio. `pytest-asyncio` is declared but unused.
-- **No Docker / container scaffolding.** Plain `pip install -e ".[dev]"` workflow.
+- **No Docker / container scaffolding.** Plain `uv sync` workflow.
 - **No CI config in repo.** Tests are run locally via `pytest`.

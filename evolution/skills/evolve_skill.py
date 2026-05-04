@@ -327,7 +327,7 @@ def _build_optimizer_and_compile(
         except ImportError as ie:
             console.print(
                 "[red]✗ MIPROv2 fallback requires the [miprov2] extra. "
-                "Install with: pip install agent-self-evolution[miprov2][/red]"
+                "Install with: uv pip install 'agent-self-evolution[miprov2]'[/red]"
             )
             raise ie from gepa_exc
 
