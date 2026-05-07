@@ -19,6 +19,7 @@ from click.testing import CliRunner
 
 from evolution.skills.evolve_skill import (
     _dataset_payload,
+    _evaluate_band_on_holdout,
     _holdout_evaluate_with_metric,
     _knee_point_payload,
     _resolve_bap_safety_margin,
@@ -333,6 +334,110 @@ class TestDatasetPayloadHelper:
             holdout=[self._ex("synthetic")] * 1,
         )
         json.dumps(_dataset_payload(ds))
+
+
+class TestEvaluateBandOnHoldout:
+    """The band-holdout hook iterates `details.candidates[idx]` for each
+    band entry and runs the holdout metric. Cannot be a post-run script —
+    GEPA's candidate programs aren't persisted, so this has to capture
+    them while `details` is still in scope inside `evolve()`."""
+
+    def _make_pick(self, band_roster):
+        return CandidatePick(
+            module=SimpleNamespace(skill_text="picked"),
+            skill_text="picked",
+            body_chars=100,
+            val_score=0.95,
+            val_rank_in_band=1,
+            band_size=len(band_roster),
+            epsilon=0.0167,
+            fallback="knee",
+            picked_idx=band_roster[0]["idx"],
+            gepa_default_idx=0,
+            gepa_default_body_chars=200,
+            band_roster=band_roster,
+        )
+
+    def test_writes_one_entry_per_band_candidate(self, tmp_path: Path):
+        roster = [
+            {"idx": 5, "val_score": 0.95, "body_chars": 412},
+            {"idx": 12, "val_score": 0.93, "body_chars": 380},
+        ]
+        knee_pick = self._make_pick(roster)
+        candidates = {
+            5: SimpleNamespace(skill_text="cand-5"),
+            12: SimpleNamespace(skill_text="cand-12"),
+        }
+        holdout = ["ex1", "ex2", "ex3"]
+
+        scores_by_idx = {5: (0.80, [0.7, 0.9, 0.8]), 12: (0.65, [0.6, 0.7, 0.65])}
+
+        def fake_eval(module, examples, metric, lm):
+            for idx, cand in candidates.items():
+                if cand is module:
+                    return scores_by_idx[idx]
+            raise AssertionError(f"unexpected module {module}")
+
+        with patch(
+            "evolution.skills.evolve_skill._holdout_evaluate_with_metric",
+            side_effect=fake_eval,
+        ):
+            path = _evaluate_band_on_holdout(
+                knee_pick=knee_pick,
+                candidates=candidates,
+                holdout_examples=holdout,
+                metric=MagicMock(),
+                lm=MagicMock(),
+                output_dir=tmp_path,
+                seed=42,
+            )
+
+        payload = json.loads(path.read_text())
+        assert path.name == "band_holdout.json"
+        assert payload["epsilon"] == knee_pick.epsilon
+        assert payload["holdout_subsample_size"] == len(holdout)
+        assert len(payload["candidates"]) == 2
+        cand5 = next(c for c in payload["candidates"] if c["idx"] == 5)
+        assert cand5["val_score"] == 0.95
+        assert cand5["body_chars"] == 412
+        assert cand5["holdout_score"] == 0.80
+        assert cand5["holdout_per_example"] == [0.7, 0.9, 0.8]
+
+    def test_subsamples_when_holdout_exceeds_cap(self, tmp_path: Path):
+        roster = [{"idx": 0, "val_score": 0.95, "body_chars": 100}]
+        knee_pick = self._make_pick(roster)
+        candidates = {0: SimpleNamespace(skill_text="cand-0")}
+        holdout = [f"ex{i}" for i in range(150)]
+        seen_examples: list[list] = []
+
+        def fake_eval(module, examples, metric, lm):
+            seen_examples.append(list(examples))
+            return (0.5, [0.5] * len(examples))
+
+        with patch(
+            "evolution.skills.evolve_skill._holdout_evaluate_with_metric",
+            side_effect=fake_eval,
+        ):
+            path = _evaluate_band_on_holdout(
+                knee_pick=knee_pick,
+                candidates=candidates,
+                holdout_examples=holdout,
+                metric=MagicMock(),
+                lm=MagicMock(),
+                output_dir=tmp_path,
+                seed=42,
+                subsample_cap=10,
+            )
+
+        payload = json.loads(path.read_text())
+        assert payload["holdout_subsample_size"] == 10
+        assert len(seen_examples[0]) == 10
+        # Deterministic via the seed parameter — same seed must produce
+        # the same subsample so each band candidate is scored on the same
+        # examples.
+        rng = __import__("random").Random(42)
+        expected = rng.sample(holdout, 10)
+        assert seen_examples[0] == expected
 
 
 class TestResolveBapSafetyMargin:

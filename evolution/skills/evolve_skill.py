@@ -7,6 +7,7 @@ Usage:
 
 import json
 import logging
+import random
 import sys
 import time
 import traceback
@@ -180,6 +181,63 @@ def _holdout_evaluate_with_metric(module, holdout_examples, metric, lm) -> tuple
     mean = float(result.score) / 100.0
     per_example = [float(s) for _, _, s in result.results]
     return mean, per_example
+
+
+_BAND_HOLDOUT_SUBSAMPLE_CAP = 100
+
+
+def _evaluate_band_on_holdout(
+    *,
+    knee_pick: CandidatePick,
+    candidates: list,
+    holdout_examples: list,
+    metric: Any,
+    lm: Any,
+    output_dir: Path,
+    seed: int,
+    subsample_cap: int = _BAND_HOLDOUT_SUBSAMPLE_CAP,
+) -> Path:
+    """Re-evaluate every candidate in the knee-point band on the holdout.
+
+    Inline because GEPA's candidate programs are not persisted: a true
+    post-run script can read `band_roster` from `gate_decision.json` but
+    cannot reach the candidate programs once `evolve()` returns. This
+    runs while the GEPA `details.candidates` list is still alive.
+
+    Caps the holdout slice at `subsample_cap` examples (deterministic via
+    `seed`) to bound cost when callers crank `--eval-dataset-size` to 400.
+    Each candidate sees the same subsample so per-candidate scores are
+    directly comparable.
+    """
+    if len(holdout_examples) > subsample_cap:
+        rng = random.Random(seed)
+        eval_examples = rng.sample(holdout_examples, subsample_cap)
+    else:
+        eval_examples = holdout_examples
+
+    candidate_results: list[dict[str, Any]] = []
+    for entry in knee_pick.band_roster:
+        idx = entry["idx"]
+        candidate_module = candidates[idx]
+        holdout_score, holdout_per_example = _holdout_evaluate_with_metric(
+            candidate_module, eval_examples, metric, lm,
+        )
+        candidate_results.append({
+            "idx": idx,
+            "val_score": entry["val_score"],
+            "body_chars": entry["body_chars"],
+            "holdout_score": holdout_score,
+            "holdout_per_example": holdout_per_example,
+        })
+
+    payload = {
+        "epsilon": knee_pick.epsilon,
+        "holdout_subsample_size": len(eval_examples),
+        "candidates": candidate_results,
+    }
+    path = output_dir / "band_holdout.json"
+    path.write_text(json.dumps(payload, indent=2))
+    return path
 
 
 def _resolve_budget(iterations: int, budget: Optional[str]) -> str:
@@ -371,6 +429,7 @@ def evolve(
     bap_safety_margin: Optional[float] = None,
     eval_dataset_size: Optional[int] = None,
     holdout_ratio: Optional[float] = None,
+    evaluate_band_on_holdout: bool = False,
 ):
     """Main evolution function — orchestrates the full optimization loop."""
 
@@ -673,6 +732,22 @@ def evolve(
     )
     improvement = avg_evolved - avg_baseline
 
+    if evaluate_band_on_holdout and knee_pick is not None:
+        console.print(
+            f"\n[bold]Re-evaluating {knee_pick.band_size} band candidate(s) on holdout[/bold] "
+            "[dim](calibration telemetry; only enabled with --evaluate-band-on-holdout)[/dim]"
+        )
+        band_path = _evaluate_band_on_holdout(
+            knee_pick=knee_pick,
+            candidates=details.candidates,
+            holdout_examples=holdout_examples,
+            metric=metric,
+            lm=lm,
+            output_dir=output_dir,
+            seed=config.seed,
+        )
+        console.print(f"  Wrote {band_path.name}")
+
     console.print(f"\n[bold]Validating growth against holdout improvement[/bold]")
     bootstrap = paired_bootstrap(
         baseline_per_example,
@@ -935,13 +1010,21 @@ def evolve(
     "Fraction of the dataset reserved for the deploy-gate's holdout "
     "evaluation, after train/val are taken.",
 )
+@click.option(
+    "--evaluate-band-on-holdout/--no-evaluate-band-on-holdout",
+    default=False,
+    help="Calibration telemetry: after the picked candidate is selected, "
+    "re-evaluate every candidate in the knee-point band on the holdout "
+    "and write band_holdout.json. Off by default — adds judge calls "
+    "proportional to band size × holdout examples (capped at 100).",
+)
 def main(skill, iterations, eval_source, dataset_path, optimizer_model, reflection_model,
          eval_model, skill_source_dir, run_tests, dry_run, seed, budget, no_fallback,
          quality_gate, growth_free_threshold,
          growth_quality_slope, max_absolute_chars, inferiority_tolerance,
          bootstrap_confidence, bootstrap_resamples, knee_point_epsilon,
          knee_point_strategy, bap_safety_margin, eval_dataset_size,
-         holdout_ratio):
+         holdout_ratio, evaluate_band_on_holdout):
     """Evolve an agent skill using DSPy + GEPA optimization."""
     evolve(
         skill_name=skill,
@@ -969,6 +1052,7 @@ def main(skill, iterations, eval_source, dataset_path, optimizer_model, reflecti
         bap_safety_margin=bap_safety_margin,
         eval_dataset_size=eval_dataset_size,
         holdout_ratio=holdout_ratio,
+        evaluate_band_on_holdout=evaluate_band_on_holdout,
     )
 
 
