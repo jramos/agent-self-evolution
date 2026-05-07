@@ -332,6 +332,19 @@ def _build_optimizer_and_compile(
             raise ie from gepa_exc
 
 
+_BAP_SAFETY_MARGIN_DEFAULT = 0.10
+
+
+def _resolve_bap_safety_margin(value: Optional[float]) -> float:
+    """Resolve `--bap-safety-margin` to BudgetAwareProposer's `safety_margin`.
+
+    `None` (sentinel: "user didn't set the flag") maps to the documented
+    default. A user-provided `0.0` is preserved verbatim — without this
+    helper the constructor's own default would silently re-apply 0.10.
+    """
+    return _BAP_SAFETY_MARGIN_DEFAULT if value is None else value
+
+
 def evolve(
     skill_name: str,
     iterations: int = 10,
@@ -355,6 +368,9 @@ def evolve(
     bootstrap_n_resamples: Optional[int] = None,
     knee_point_epsilon: Optional[float] = None,
     knee_point_strategy: str = "val-best",
+    bap_safety_margin: Optional[float] = None,
+    eval_dataset_size: Optional[int] = None,
+    holdout_ratio: Optional[float] = None,
 ):
     """Main evolution function — orchestrates the full optimization loop."""
 
@@ -393,6 +409,10 @@ def evolve(
         config_kwargs["bootstrap_confidence"] = bootstrap_confidence
     if bootstrap_n_resamples is not None:
         config_kwargs["bootstrap_n_resamples"] = bootstrap_n_resamples
+    if eval_dataset_size is not None:
+        config_kwargs["eval_dataset_size"] = eval_dataset_size
+    if holdout_ratio is not None:
+        config_kwargs["holdout_ratio"] = holdout_ratio
     config = EvolutionConfig(**config_kwargs)
     explicit_dirs = [Path(d) for d in (skill_source_dirs or [])]
     if explicit_dirs:
@@ -554,6 +574,7 @@ def evolve(
     proposer = BudgetAwareProposer(
         baseline_chars=len(skill["body"]),
         max_growth=config.growth_free_threshold,
+        safety_margin=_resolve_bap_safety_margin(bap_safety_margin),
     )
 
     optimized_module, optimizer_name = _build_optimizer_and_compile(
@@ -888,12 +909,39 @@ def evolve(
     "parsimony — picks the smallest body regardless of val cost; "
     "available for users explicitly chasing compression.",
 )
+@click.option(
+    "--bap-safety-margin",
+    default=None,
+    type=float,
+    help="Advanced: override BudgetAwareProposer's safety_margin (default "
+    "0.10). The proposer asks the reflection LM for a target tighter than "
+    "the validator's bar to absorb the LM's observed +8-9% overshoot. "
+    "Setting to 0.0 disables the cushion — useful for calibration runs that "
+    "want the LM to push toward the actual gate.",
+)
+@click.option(
+    "--eval-dataset-size",
+    default=None,
+    type=int,
+    help="Advanced: override EvolutionConfig.eval_dataset_size (default "
+    "150). Total examples generated; train/val/holdout splits are derived "
+    "via the configured ratios.",
+)
+@click.option(
+    "--holdout-ratio",
+    default=None,
+    type=float,
+    help="Advanced: override EvolutionConfig.holdout_ratio (default 0.50). "
+    "Fraction of the dataset reserved for the deploy-gate's holdout "
+    "evaluation, after train/val are taken.",
+)
 def main(skill, iterations, eval_source, dataset_path, optimizer_model, reflection_model,
          eval_model, skill_source_dir, run_tests, dry_run, seed, budget, no_fallback,
          quality_gate, growth_free_threshold,
          growth_quality_slope, max_absolute_chars, inferiority_tolerance,
          bootstrap_confidence, bootstrap_resamples, knee_point_epsilon,
-         knee_point_strategy):
+         knee_point_strategy, bap_safety_margin, eval_dataset_size,
+         holdout_ratio):
     """Evolve an agent skill using DSPy + GEPA optimization."""
     evolve(
         skill_name=skill,
@@ -918,6 +966,9 @@ def main(skill, iterations, eval_source, dataset_path, optimizer_model, reflecti
         bootstrap_n_resamples=bootstrap_resamples,
         knee_point_epsilon=knee_point_epsilon,
         knee_point_strategy=knee_point_strategy,
+        bap_safety_margin=bap_safety_margin,
+        eval_dataset_size=eval_dataset_size,
+        holdout_ratio=holdout_ratio,
     )
 
 

@@ -15,11 +15,15 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
+from click.testing import CliRunner
+
 from evolution.skills.evolve_skill import (
     _dataset_payload,
     _holdout_evaluate_with_metric,
     _knee_point_payload,
+    _resolve_bap_safety_margin,
     _write_gate_decision,
+    main as evolve_skill_cli,
 )
 from evolution.core.dataset_builder import EvalDataset, EvalExample
 from evolution.skills.knee_point import CandidatePick
@@ -329,3 +333,101 @@ class TestDatasetPayloadHelper:
             holdout=[self._ex("synthetic")] * 1,
         )
         json.dumps(_dataset_payload(ds))
+
+
+class TestResolveBapSafetyMargin:
+    """`--bap-safety-margin 0.0` must reach BudgetAwareProposer as 0.0, not
+    the constructor's own default of 0.10. The resolver is the one place
+    that distinguishes 'user did not set the flag' (None) from 'user set
+    it to zero' (0.0)."""
+
+    def test_none_resolves_to_default(self):
+        assert _resolve_bap_safety_margin(None) == 0.10
+
+    def test_explicit_zero_is_preserved(self):
+        assert _resolve_bap_safety_margin(0.0) == 0.0
+
+    def test_explicit_nonzero_is_preserved(self):
+        assert _resolve_bap_safety_margin(0.05) == 0.05
+
+
+class TestCliFlagPropagationToConfig:
+    """The new `--eval-dataset-size` and `--holdout-ratio` flags must reach
+    EvolutionConfig with the user-provided values. Uses --dry-run to short-
+    circuit before any LM calls fire."""
+
+    def _seed_skill(self, tmp_path: Path) -> None:
+        skill_dir = tmp_path / "skills" / "test-skill"
+        skill_dir.mkdir(parents=True)
+        (skill_dir / "SKILL.md").write_text(
+            "---\nname: test-skill\ndescription: a test skill for CLI propagation\n---\n"
+            "Body content for evolution testing."
+        )
+        os.environ["SKILL_SOURCES_HERMES_REPO"] = str(tmp_path)
+
+    def test_eval_dataset_size_lands_on_config(self, tmp_path: Path):
+        self._seed_skill(tmp_path)
+        captured = {}
+        from evolution.skills import evolve_skill as module
+
+        original_config_cls = module.EvolutionConfig
+
+        def capturing_config(**kwargs):
+            captured.update(kwargs)
+            return original_config_cls(**kwargs)
+
+        with patch.object(module, "EvolutionConfig", side_effect=capturing_config):
+            runner = CliRunner()
+            result = runner.invoke(
+                evolve_skill_cli,
+                ["--skill", "test-skill", "--dry-run", "--eval-dataset-size", "250"],
+                catch_exceptions=False,
+            )
+        assert result.exit_code == 0, result.output
+        assert captured.get("eval_dataset_size") == 250
+
+    def test_holdout_ratio_lands_on_config(self, tmp_path: Path):
+        self._seed_skill(tmp_path)
+        captured = {}
+        from evolution.skills import evolve_skill as module
+
+        original_config_cls = module.EvolutionConfig
+
+        def capturing_config(**kwargs):
+            captured.update(kwargs)
+            return original_config_cls(**kwargs)
+
+        with patch.object(module, "EvolutionConfig", side_effect=capturing_config):
+            runner = CliRunner()
+            result = runner.invoke(
+                evolve_skill_cli,
+                ["--skill", "test-skill", "--dry-run", "--holdout-ratio", "0.4"],
+                catch_exceptions=False,
+            )
+        assert result.exit_code == 0, result.output
+        assert captured.get("holdout_ratio") == 0.4
+
+    def test_unset_flags_do_not_appear_in_config_kwargs(self, tmp_path: Path):
+        """When the user omits the flags, the keys must not be inserted —
+        EvolutionConfig's own defaults apply. Guards against regressions
+        that always-set the keys to None and trip the dataclass."""
+        self._seed_skill(tmp_path)
+        captured = {}
+        from evolution.skills import evolve_skill as module
+
+        original_config_cls = module.EvolutionConfig
+
+        def capturing_config(**kwargs):
+            captured.update(kwargs)
+            return original_config_cls(**kwargs)
+
+        with patch.object(module, "EvolutionConfig", side_effect=capturing_config):
+            runner = CliRunner()
+            result = runner.invoke(
+                evolve_skill_cli,
+                ["--skill", "test-skill", "--dry-run"],
+                catch_exceptions=False,
+            )
+        assert result.exit_code == 0, result.output
+        assert "eval_dataset_size" not in captured
+        assert "holdout_ratio" not in captured
