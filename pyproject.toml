@@ -36,6 +36,12 @@ dependencies = [
 miprov2 = [
     "dspy[optuna]>=3.2.0,<3.3",
 ]
+# Optional extra used by scripts/analysis/* — campaign analysis scripts
+# emit PNG plots (CI vs N, ROC) as readable summaries of the calibration
+# data. Not required for the core evolve() flow.
+analysis = [
+    "matplotlib>=3.7",
+]
 
 [dependency-groups]
 dev = [
