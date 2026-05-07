@@ -37,7 +37,9 @@ from evolution.core.stats import paired_bootstrap
 from evolution.core.fitness import LLMJudge, make_skill_fitness_metric
 from evolution.core.constraints import ConstraintValidator, resolve_decision_rule
 from evolution.core.lm_timing_callback import (
+    COST_LEDGER,
     LMTimingCallback,
+    register_litellm_cost_callback,
     register_litellm_failure_callback,
 )
 from evolution.skills.budget_aware_proposer import BudgetAwareProposer
@@ -521,6 +523,10 @@ def evolve(
     ))
     logging.getLogger().addHandler(file_handler)
     register_litellm_failure_callback()
+    register_litellm_cost_callback()
+    # Module-level singleton: reset between runs so metrics.json reflects
+    # this run only, not whatever previous evolve() call(s) accumulated.
+    COST_LEDGER.reset()
     console.print(f"  Run log: {run_log_path}")
 
     console.print(f"\n[bold]Building evaluation dataset[/bold] (source: {eval_source})")
@@ -851,6 +857,7 @@ def evolve(
         "holdout_examples": len(dataset.holdout),
         "elapsed_seconds": elapsed,
         "constraints_passed": all_pass,
+        "cost": COST_LEDGER.summary(),
     }
     (output_dir / "metrics.json").write_text(json.dumps(metrics, indent=2))
 
