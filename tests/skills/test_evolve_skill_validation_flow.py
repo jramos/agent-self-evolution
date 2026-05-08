@@ -372,7 +372,7 @@ class TestEvaluateBandOnHoldout:
 
         scores_by_idx = {5: (0.80, [0.7, 0.9, 0.8]), 12: (0.65, [0.6, 0.7, 0.65])}
 
-        def fake_eval(module, examples, metric, lm):
+        def fake_eval(module, examples, metric, lm, **kwargs):
             for idx, cand in candidates.items():
                 if cand is module:
                     return scores_by_idx[idx]
@@ -410,7 +410,7 @@ class TestEvaluateBandOnHoldout:
         holdout = [f"ex{i}" for i in range(150)]
         seen_examples: list[list] = []
 
-        def fake_eval(module, examples, metric, lm):
+        def fake_eval(module, examples, metric, lm, **kwargs):
             seen_examples.append(list(examples))
             return (0.5, [0.5] * len(examples))
 

@@ -155,7 +155,9 @@ def _knee_point_payload(knee_pick: Optional[CandidatePick]) -> dict[str, Any]:
     }
 
 
-def _holdout_evaluate_with_metric(module, holdout_examples, metric, lm) -> tuple[float, list[float]]:
+def _holdout_evaluate_with_metric(
+    module, holdout_examples, metric, lm, num_threads: int = 4,
+) -> tuple[float, list[float]]:
     """Score `module` on the holdout via dspy.Evaluate.
 
     The GEPA-shaped metric takes 5 positional args; dspy.Evaluate calls
@@ -163,6 +165,11 @@ def _holdout_evaluate_with_metric(module, holdout_examples, metric, lm) -> tuple
 
     Returns (mean_score, per_example_scores). Per-example scores feed
     the bootstrap CI in the deploy gate.
+
+    `num_threads` is overridable so the band-holdout hook can dial it
+    down (each thread holds asyncio event loops that Python 3.13 +
+    litellm leak on cleanup; over many sequential calls those leaks
+    aggregate into EMFILE).
     """
     def two_arg_metric(example, prediction, *_args, **_kwargs):
         result = metric(example, prediction)
@@ -171,7 +178,7 @@ def _holdout_evaluate_with_metric(module, holdout_examples, metric, lm) -> tuple
     evaluator = dspy.Evaluate(
         devset=holdout_examples,
         metric=two_arg_metric,
-        num_threads=4,
+        num_threads=num_threads,
         provide_traceback=True,
         max_errors=len(holdout_examples) * 100,
     )
@@ -198,6 +205,7 @@ def _evaluate_band_on_holdout(
     output_dir: Path,
     seed: int,
     subsample_cap: int = _BAND_HOLDOUT_SUBSAMPLE_CAP,
+    num_threads: int = 2,
 ) -> Path:
     """Re-evaluate every candidate in the knee-point band on the holdout.
 
@@ -210,6 +218,12 @@ def _evaluate_band_on_holdout(
     `seed`) to bound cost when callers crank `--eval-dataset-size` to 400.
     Each candidate sees the same subsample so per-candidate scores are
     directly comparable.
+
+    `num_threads` defaults to 2 (vs the 4 used in the gate's primary
+    holdout eval). Lower threads reduce the asyncio-event-loop leak rate
+    that Python 3.13 + litellm exhibit on cleanup; over a band of 10
+    candidates with the gate's 4 threads we observed EMFILE crashes.
+    `gc.collect()` between candidates forces leaked loops to finalize.
     """
     if len(holdout_examples) > subsample_cap:
         rng = random.Random(seed)
@@ -217,12 +231,15 @@ def _evaluate_band_on_holdout(
     else:
         eval_examples = holdout_examples
 
+    import gc
+
     candidate_results: list[dict[str, Any]] = []
     for entry in knee_pick.band_roster:
         idx = entry["idx"]
         candidate_module = candidates[idx]
         holdout_score, holdout_per_example = _holdout_evaluate_with_metric(
             candidate_module, eval_examples, metric, lm,
+            num_threads=num_threads,
         )
         candidate_results.append({
             "idx": idx,
@@ -231,6 +248,10 @@ def _evaluate_band_on_holdout(
             "holdout_score": holdout_score,
             "holdout_per_example": holdout_per_example,
         })
+        # Drop refs to thread-pool / asyncio-loop objects between
+        # candidates so leaked event loops finalize before the next
+        # iteration accumulates more.
+        gc.collect()
 
     payload = {
         "epsilon": knee_pick.epsilon,
@@ -738,22 +759,6 @@ def evolve(
     )
     improvement = avg_evolved - avg_baseline
 
-    if evaluate_band_on_holdout and knee_pick is not None:
-        console.print(
-            f"\n[bold]Re-evaluating {knee_pick.band_size} band candidate(s) on holdout[/bold] "
-            "[dim](calibration telemetry; only enabled with --evaluate-band-on-holdout)[/dim]"
-        )
-        band_path = _evaluate_band_on_holdout(
-            knee_pick=knee_pick,
-            candidates=details.candidates,
-            holdout_examples=holdout_examples,
-            metric=metric,
-            lm=lm,
-            output_dir=output_dir,
-            seed=config.seed,
-        )
-        console.print(f"  Wrote {band_path.name}")
-
     console.print(f"\n[bold]Validating growth against holdout improvement[/bold]")
     bootstrap = paired_bootstrap(
         baseline_per_example,
@@ -806,6 +811,37 @@ def evolve(
     }
     gate_path = _write_gate_decision(output_dir, decision_payload)
     console.print(f"  [dim]Gate decision logged to {gate_path}[/dim]")
+
+    # Band-holdout telemetry runs AFTER the gate decision is persisted
+    # so a band-eval crash (e.g. asyncio FD leak under heavy band sizes)
+    # cannot lose the primary run output. Wrapped in try/except for the
+    # same reason: this is non-blocking diagnostics for calibration runs.
+    if evaluate_band_on_holdout and knee_pick is not None:
+        console.print(
+            f"\n[bold]Re-evaluating {knee_pick.band_size} band candidate(s) on holdout[/bold] "
+            "[dim](calibration telemetry; only enabled with --evaluate-band-on-holdout)[/dim]"
+        )
+        try:
+            band_path = _evaluate_band_on_holdout(
+                knee_pick=knee_pick,
+                candidates=details.candidates,
+                holdout_examples=holdout_examples,
+                metric=metric,
+                lm=lm,
+                output_dir=output_dir,
+                seed=config.seed,
+            )
+            console.print(f"  Wrote {band_path.name}")
+        except Exception as band_exc:  # noqa: BLE001 — never block the run
+            logging.getLogger(__name__).warning(
+                "Band-holdout evaluation failed: %s. Gate decision and "
+                "metrics are unaffected; band_holdout.json was not written.",
+                band_exc,
+            )
+            console.print(
+                f"[yellow]⚠ Band-holdout evaluation failed: {band_exc}. "
+                "Run output is intact; calibration telemetry skipped.[/yellow]"
+            )
 
     if not growth_pass:
         console.print("[red]✗ Evolved skill REJECTED by quality gate — not deploying[/red]")
