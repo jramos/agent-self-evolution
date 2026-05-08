@@ -13,6 +13,13 @@
 #     CAMPAIGN_START_TS=20260507_134805 \
 #         N_STAR=250 RATIO_STAR=0.65 \
 #         bash scripts/resume_stage5.sh
+#
+# Resume mid-array (e.g. after a JSON-parse crash on huggingface-hub):
+#     SKIP_GROWTH=4 bash scripts/resume_stage5.sh
+#         # ...skips the first 4 entries (apple-notes 42, apple-notes 7,
+#         # polymarket 42, polymarket 7) and starts at huggingface-hub 42.
+#     SKIP_CONTROLS=2 bash scripts/resume_stage5.sh
+#         # ...starts the control block at index 2.
 
 set -euo pipefail
 
@@ -54,16 +61,29 @@ declare -a CONTROL_PAIRS=(
     "huggingface-hub 42"
 )
 
+SKIP_GROWTH="${SKIP_GROWTH:-0}"
+SKIP_CONTROLS="${SKIP_CONTROLS:-0}"
+
+# Slice the arrays by SKIP offset (bash 4+ array slicing).
+REMAINING_GROWTH=("${REMAINING_GROWTH[@]:${SKIP_GROWTH}}")
+CONTROL_PAIRS=("${CONTROL_PAIRS[@]:${SKIP_CONTROLS}}")
+
 echo "=== Resume Stage 5 ==="
 echo "Campaign start:    ${CAMPAIGN_START_TS}"
 echo "N* / ratio*:       ${N_STAR} / ${RATIO_STAR}"
 echo "ulimit -n (FDs):   $(ulimit -n)"
-echo "Remaining growth:  ${#REMAINING_GROWTH[@]}"
-echo "Remaining control: ${#CONTROL_PAIRS[@]}"
+echo "SKIP_GROWTH:       ${SKIP_GROWTH}"
+echo "SKIP_CONTROLS:     ${SKIP_CONTROLS}"
+echo "Remaining growth:  ${#REMAINING_GROWTH[@]} → ${REMAINING_GROWTH[*]:-(none)}"
+echo "Remaining control: ${#CONTROL_PAIRS[@]} → ${CONTROL_PAIRS[*]:-(none)}"
 echo
 ${STATUS_CMD}
 echo
-confirm "Proceed with apple-notes seed=42 (growth, lenient + bap-safety=0.0)?"
+
+if [[ "${#REMAINING_GROWTH[@]}" -gt 0 ]]; then
+    first_growth="${REMAINING_GROWTH[0]}"
+    confirm "Proceed with ${first_growth} (growth, lenient + bap-safety=0.0)?"
+fi
 
 for entry in "${REMAINING_GROWTH[@]}"; do
     read -r skill seed <<<"${entry}"

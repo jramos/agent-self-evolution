@@ -7,6 +7,7 @@ C) Golden sets — hand-curated JSONL files
 """
 
 import json
+import logging
 import random
 from pathlib import Path
 from dataclasses import dataclass, field
@@ -15,6 +16,8 @@ from typing import Optional
 import dspy
 
 from evolution.core.config import EvolutionConfig
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -158,22 +161,46 @@ class SyntheticDatasetBuilder:
         # truncates mid-string at 4000, producing JSONDecodeError → process exit.
         lm = dspy.LM(self.config.judge_model, temperature=0.7, max_tokens=16000, request_timeout=120, num_retries=5)
 
-        with dspy.context(lm=lm):
-            result = self.generator(
-                artifact_text=artifact_text,
-                artifact_type=artifact_type,
-                num_cases=n,
+        # Retry up to 3 times on malformed JSON. dspy.LM's `num_retries`
+        # only retries network/API failures; LLM-side syntax errors
+        # (missing commas, unescaped quotes deep in a 5K-token response)
+        # need a regeneration attempt with a fresh seed. Observed once on
+        # huggingface-hub at N=250, where the LLM produced a 24KB response
+        # whose 494th line was missing a delimiter.
+        cases_raw = None
+        last_exc: Exception | None = None
+        for attempt in range(3):
+            try:
+                with dspy.context(lm=lm):
+                    result = self.generator(
+                        artifact_text=artifact_text,
+                        artifact_type=artifact_type,
+                        num_cases=n,
+                    )
+                try:
+                    cases_raw = json.loads(result.test_cases)
+                except json.JSONDecodeError:
+                    import re
+                    match = re.search(r'\[.*\]', result.test_cases, re.DOTALL)
+                    if not match:
+                        raise ValueError(
+                            f"Could not parse test cases from LLM output: "
+                            f"{result.test_cases[:200]}"
+                        )
+                    cases_raw = json.loads(match.group())
+                break
+            except (json.JSONDecodeError, ValueError) as exc:
+                last_exc = exc
+                logger.warning(
+                    "Synthetic dataset gen attempt %d/3 produced malformed "
+                    "JSON: %s. Retrying with a fresh LLM call.",
+                    attempt + 1, exc,
+                )
+        if cases_raw is None:
+            raise RuntimeError(
+                "Synthetic dataset gen failed after 3 attempts. "
+                f"Last error: {last_exc}"
             )
-
-        try:
-            cases_raw = json.loads(result.test_cases)
-        except json.JSONDecodeError:
-            import re
-            match = re.search(r'\[.*\]', result.test_cases, re.DOTALL)
-            if match:
-                cases_raw = json.loads(match.group())
-            else:
-                raise ValueError(f"Could not parse test cases from LLM output: {result.test_cases[:200]}")
 
         examples = [
             EvalExample(
