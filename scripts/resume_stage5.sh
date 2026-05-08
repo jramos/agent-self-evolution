@@ -89,7 +89,7 @@ if [[ "${#REMAINING_GROWTH[@]}" -gt 0 ]]; then
     confirm "Proceed with ${first_growth} (growth, lenient + bap-safety=0.0)?"
 fi
 
-for entry in "${REMAINING_GROWTH[@]}"; do
+for entry in "${REMAINING_GROWTH[@]:+${REMAINING_GROWTH[@]}}"; do
     read -r skill seed <<<"${entry}"
     echo
     echo ">>> GROWTH: ${skill} seed=${seed}"
@@ -104,7 +104,7 @@ done
 echo
 echo "--- Control runs (--quality-gate default, no BAP override) ---"
 confirm "Proceed with control runs?"
-for entry in "${CONTROL_PAIRS[@]}"; do
+for entry in "${CONTROL_PAIRS[@]:+${CONTROL_PAIRS[@]}}"; do
     read -r skill seed <<<"${entry}"
     echo
     echo ">>> CONTROL: ${skill} seed=${seed} (--quality-gate default)"
