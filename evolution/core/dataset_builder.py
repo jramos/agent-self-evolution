@@ -159,14 +159,27 @@ class SyntheticDatasetBuilder:
 
         # max_tokens=16000 because at eval_dataset_size=60 the JSON output
         # truncates mid-string at 4000, producing JSONDecodeError → process exit.
-        lm = dspy.LM(self.config.judge_model, temperature=0.7, max_tokens=16000, request_timeout=120, num_retries=5)
+        # cache=False because DSPy's cache is keyed on (prompt, params), so a
+        # malformed-JSON response gets stuck in the cache and every subsequent
+        # call returns the identical bad payload — defeating the retry loop
+        # below. Dataset gen runs once per skill at $0.01-0.02; the cache
+        # benefit is not worth the foot-gun.
+        lm = dspy.LM(
+            self.config.judge_model,
+            temperature=0.7,
+            max_tokens=16000,
+            request_timeout=120,
+            num_retries=5,
+            cache=False,
+        )
 
         # Retry up to 3 times on malformed JSON. dspy.LM's `num_retries`
         # only retries network/API failures; LLM-side syntax errors
         # (missing commas, unescaped quotes deep in a 5K-token response)
-        # need a regeneration attempt with a fresh seed. Observed once on
-        # huggingface-hub at N=250, where the LLM produced a 24KB response
-        # whose 494th line was missing a delimiter.
+        # need a regeneration attempt. Observed on huggingface-hub at
+        # N=250: the LLM produced a 24KB response whose 494th line was
+        # missing a delimiter, and 3 cache-hit retries returned the same
+        # bad payload.
         cases_raw = None
         last_exc: Exception | None = None
         for attempt in range(3):
