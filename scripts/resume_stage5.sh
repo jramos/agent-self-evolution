@@ -54,11 +54,15 @@ declare -a REMAINING_GROWTH=(
 
 # Control runs (1 seed each at --quality-gate default — confirms
 # BAP-off is the variable causing growth, not anything else).
+# huggingface-hub dropped from the corpus on 2026-05-08: the synthetic
+# generator hit a 92% case-filter drop rate at N=250, leaving 9 holdout
+# examples (below min_holdout_size=10). Two cache-stuck malformed-JSON
+# crashes preceded the holdout-size failure. Future campaigns should
+# either swap this skill or use a different eval source.
 declare -a CONTROL_PAIRS=(
     "nano-pdf 42"
     "apple-notes 42"
     "polymarket 42"
-    "huggingface-hub 42"
 )
 
 SKIP_GROWTH="${SKIP_GROWTH:-0}"
