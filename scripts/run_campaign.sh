@@ -45,8 +45,13 @@ SKILLS_CALIB_MED=(polymarket huggingface-hub)
 SKILLS_CALIB_LARGE=(notion spotify)
 SKILLS_CALIB_ALL=("${SKILLS_CALIB_SMALL[@]}" "${SKILLS_CALIB_MED[@]}" "${SKILLS_CALIB_LARGE[@]}")
 
-# Validation corpus (Stage 7) — must NOT appear in output/ at campaign start
-SKILLS_VALIDATION=(plan maps linear)
+# Validation corpus (Stage 7) — must NOT appear in output/ at campaign start.
+# `plan` (1981 chars) dropped on 2026-05-08: synthetic generator produced
+# only 16 valid cases → 7 holdout < min_holdout_size=10. Same failure mode
+# observed on the small-bucket calibration skills (nano-pdf 78% drop,
+# apple-notes 88%). Future campaigns should use a different judge or
+# inflate eval_dataset_size for skills under 2500 chars.
+SKILLS_VALIDATION=(maps linear)
 
 confirm() {
     local prompt="$1"
