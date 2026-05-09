@@ -187,7 +187,16 @@ if stage_active 7; then
     if [[ "${FREE_STAR}" != "KEEP_CURRENT" ]]; then
         : "${SLOPE_STAR:?}"
     fi
-    echo "--- Stage 7: Study D (12 validation runs) ---"
+    # max_absolute_chars=5000 (default preset) is out-of-scope for this
+    # calibration but bottlenecks Stage 7: maps (6643) and linear (11195)
+    # are already over the ceiling, so evolved variants get rejected on
+    # absolute_char_ceiling before the (free, slope) calibration is even
+    # exercised. Bump to 12000 for Stage 7 only — both arms use the same
+    # value so the comparison stays clean. NOT applied to calibration
+    # runs because Study C's corpus is small enough that 5000 was fine.
+    STAGE7_MAX_CHARS=12000
+
+    echo "--- Stage 7: Study D (validation runs, max_chars=${STAGE7_MAX_CHARS}) ---"
     confirm "Proceed to Stage 7?"
     for skill in "${SKILLS_VALIDATION[@]}"; do
         for seed in 42 7; do
@@ -198,17 +207,20 @@ if stage_active 7; then
             echo ">>> VALIDATION current: ${skill} seed=${seed}"
             ${EVOLVE} \
                 --skill "${skill}" --seed "${seed}" \
-                --quality-gate default
+                --quality-gate default \
+                --max-absolute-chars "${STAGE7_MAX_CHARS}"
             echo ">>> VALIDATION proposed: ${skill} seed=${seed}"
             if [[ "${FREE_STAR}" == "KEEP_CURRENT" ]]; then
                 ${EVOLVE} \
                     --skill "${skill}" --seed "${seed}" \
                     --quality-gate default \
+                    --max-absolute-chars "${STAGE7_MAX_CHARS}" \
                     --eval-dataset-size "${N_STAR}" --holdout-ratio "${RATIO_STAR}"
             else
                 ${EVOLVE} \
                     --skill "${skill}" --seed "${seed}" \
                     --quality-gate default \
+                    --max-absolute-chars "${STAGE7_MAX_CHARS}" \
                     --growth-free-threshold "${FREE_STAR}" \
                     --growth-quality-slope "${SLOPE_STAR}" \
                     --eval-dataset-size "${N_STAR}" --holdout-ratio "${RATIO_STAR}"
