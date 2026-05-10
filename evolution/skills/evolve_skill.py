@@ -654,10 +654,14 @@ def evolve(
     # but gepa.api rejects it whenever DspyAdapter (always) provides its
     # own propose_new_texts (gepa/api.py:317-321). instruction_proposer
     # is DSPy's documented extension point.
+    resolved_bap_max_growth = _resolve_bap_max_growth(
+        bap_max_growth, config.growth_free_threshold,
+    )
+    resolved_bap_safety_margin = _resolve_bap_safety_margin(bap_safety_margin)
     proposer = BudgetAwareProposer(
         baseline_chars=len(skill["body"]),
-        max_growth=_resolve_bap_max_growth(bap_max_growth, config.growth_free_threshold),
-        safety_margin=_resolve_bap_safety_margin(bap_safety_margin),
+        max_growth=resolved_bap_max_growth,
+        safety_margin=resolved_bap_safety_margin,
     )
 
     optimized_module, optimizer_name = _build_optimizer_and_compile(
@@ -815,6 +819,8 @@ def evolve(
         ),
         "growth_free_threshold": config.growth_free_threshold,
         "growth_quality_slope": config.growth_quality_slope,
+        "bap_max_growth": resolved_bap_max_growth,
+        "bap_safety_margin": resolved_bap_safety_margin,
         "baseline_per_example": baseline_per_example,
         "evolved_per_example": evolved_per_example,
         "avg_baseline": avg_baseline,
