@@ -39,13 +39,6 @@ class EvolutionConfig:
     # required(growth) = max(0, slope * (growth - free)).
     growth_free_threshold: float = 0.20
     growth_quality_slope: float = 0.30
-    # BudgetAwareProposer's prompt target for the reflection LM.
-    # Decoupled from `growth_free_threshold` — the previous behavior
-    # (max_growth = growth_free_threshold) made the gate parameter do
-    # double duty as a proposer parameter, so calibrating one
-    # inadvertently changed the other. Default 0.20 matches today's
-    # most common effective behavior (default preset's free threshold).
-    # Override via `--bap-max-growth` for sweep calibration runs.
     bap_max_growth: float = 0.20
     # Backstop for short baselines that legitimately need expansion —
     # a 200-char baseline growing to 1500 is +650% but only 1500 absolute.
