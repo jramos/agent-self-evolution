@@ -89,13 +89,7 @@ _QUALITY_GATE_PRESETS: dict[str, dict[str, Any]] = {
         "growth_quality_slope": 0.0,
         "max_absolute_chars": 100_000,
         "gate_mode": "non_inferiority",
-        # 0.05 chosen via gate-rule replay across 17 instrumented runs
-        # (Stage 5 + Stage 7 of the 2026-05 calibration campaign).
-        # tolerance=0.02 left every campaign rejection unchanged
-        # (lower-bounds were all far below -0.02); 0.05 recovers the one
-        # genuinely noise-level rejection (polymarket: mean=-0.005,
-        # lower=-0.05) without flipping any working run the wrong way.
-        # See reports/calibration_findings.md for the full sweep.
+        # See reports/calibration_findings.md for the tolerance sweep.
         "inferiority_tolerance": 0.05,
     },
 }

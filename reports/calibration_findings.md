@@ -1,6 +1,6 @@
 # Deploy-gate calibration: findings
 
-A calibration campaign ran 24 instrumented evolve runs across nano-pdf, apple-notes, polymarket, maps, and linear (with controls). The campaign aimed to set evidence-based defaults for `growth_free_threshold`, `growth_quality_slope`, the knee-point ε, and the `eval_dataset_size`/`holdout_ratio` pair. Total OpenAI spend: $15.37 against a $200 cap.
+A calibration campaign ran 24 instrumented evolve runs across nano-pdf, apple-notes, polymarket, maps, and linear (with controls). The campaign aimed to set evidence-based defaults for `growth_free_threshold`, `growth_quality_slope`, the knee-point ε, and the `eval_dataset_size`/`holdout_ratio` pair.
 
 **Verdict on the proposed `(free, slope) = (0.10, 0.50)` defaults: rejected.** The current defaults `(0.20, 0.30)` outperformed the proposed values on held-out skills (3.3× higher mean lift on deployed variants). The current defaults remain unchanged.
 
