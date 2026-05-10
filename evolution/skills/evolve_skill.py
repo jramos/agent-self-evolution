@@ -738,6 +738,17 @@ def evolve(
             "messages": [c.message for c in static_constraints if not c.passed],
             "knee_point": _knee_point_payload(knee_pick),
             "dataset": _dataset_payload(dataset),
+            "run_inputs": {
+                "seed": config.seed,
+                "iterations": iterations,
+                "optimizer_model": optimizer_model,
+                "reflection_model": config.reflection_model,
+                "eval_model": config.eval_model,
+                "eval_dataset_size": config.eval_dataset_size,
+                "holdout_ratio": config.holdout_ratio,
+                "quality_gate_preset": quality_gate,
+                "eval_source": eval_source,
+            },
         })
         console.print(f"  Saved failed variant to {failed_path}")
         return
@@ -829,6 +840,17 @@ def evolve(
         "messages": [c.message for c in growth_constraints if not c.passed],
         "knee_point": _knee_point_payload(knee_pick),
         "dataset": _dataset_payload(dataset),
+        "run_inputs": {
+            "seed": config.seed,
+            "iterations": iterations,
+            "optimizer_model": optimizer_model,
+            "reflection_model": config.reflection_model,
+            "eval_model": config.eval_model,
+            "eval_dataset_size": config.eval_dataset_size,
+            "holdout_ratio": config.holdout_ratio,
+            "quality_gate_preset": quality_gate,
+            "eval_source": eval_source,
+        },
     }
     gate_path = _write_gate_decision(output_dir, decision_payload)
     console.print(f"  [dim]Gate decision logged to {gate_path}[/dim]")

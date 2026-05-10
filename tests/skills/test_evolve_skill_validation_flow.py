@@ -201,6 +201,17 @@ class TestGrowthGateDecisionSchema:
                 "size_holdout": 53,
                 "sources": {"synthetic": 150},
             },
+            "run_inputs": {
+                "seed": 42,
+                "iterations": 10,
+                "optimizer_model": "openai/gpt-4.1",
+                "reflection_model": None,
+                "eval_model": "openai/gpt-4.1-mini",
+                "eval_dataset_size": 150,
+                "holdout_ratio": 0.5,
+                "quality_gate_preset": "default",
+                "eval_source": "synthetic",
+            },
         }
         path = _write_gate_decision(tmp_path, payload)
         loaded = json.loads(path.read_text())
@@ -238,6 +249,49 @@ class TestGrowthGateDecisionSchema:
             assert required_in_dataset in loaded["dataset"], (
                 f"missing dataset.{required_in_dataset}"
             )
+
+
+class TestRunInputsBlock:
+    """The `run_inputs` block records the inputs that produced the run so a
+    third party with the gate_decision.json artifact alone can reproduce
+    the result. Lock the shape so future refactors can't silently drop a key.
+    """
+
+    def test_run_inputs_present_in_decision(self, tmp_path: Path):
+        payload = {
+            "schema_version": "4",
+            "decision": "deploy",
+            "run_inputs": {
+                "seed": 42,
+                "iterations": 10,
+                "optimizer_model": "openai/gpt-4.1",
+                "reflection_model": "openai/gpt-4.1",
+                "eval_model": "openai/gpt-4.1-mini",
+                "eval_dataset_size": 150,
+                "holdout_ratio": 0.5,
+                "quality_gate_preset": "default",
+                "eval_source": "synthetic",
+            },
+        }
+        path = _write_gate_decision(tmp_path, payload)
+        loaded = json.loads(path.read_text())
+
+        assert "run_inputs" in loaded
+        for required in (
+            "seed",
+            "iterations",
+            "optimizer_model",
+            "reflection_model",
+            "eval_model",
+            "eval_dataset_size",
+            "holdout_ratio",
+            "quality_gate_preset",
+            "eval_source",
+        ):
+            assert required in loaded["run_inputs"], (
+                f"missing run_inputs.{required}"
+            )
+        assert len(loaded["run_inputs"]) == 9
 
 
 class TestKneePointPayloadHelper:
