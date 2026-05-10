@@ -47,8 +47,6 @@ cd agent-self-evolution
 uv sync
 ```
 
-`uv sync` creates `.venv/`, installs the project in editable mode, and pulls in the `dev` group (pytest). Run project commands via `uv run` (e.g. `uv run pytest`, `uv run python -m evolution.skills.evolve_skill ...`) — no manual `source .venv/bin/activate` required.
-
 ### Skill discovery
 
 Skills are resolved by walking a list of `SkillSource` adapters in priority order:
