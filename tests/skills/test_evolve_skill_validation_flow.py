@@ -159,6 +159,7 @@ class TestGrowthGateDecisionSchema:
             "baseline_chars": 1000,
             "evolved_chars": 1300,
             "absolute_char_ceiling": 5000,
+            "effective_absolute_char_ceiling": 5000,
             "growth_free_threshold": 0.20,
             "growth_quality_slope": 0.30,
             "baseline_per_example": [0.5, 0.6, 0.7],

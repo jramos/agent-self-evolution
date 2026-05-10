@@ -35,7 +35,11 @@ from evolution.core.dataset_builder import SyntheticDatasetBuilder, EvalDataset,
 from evolution.core.external_importers import build_dataset_from_external
 from evolution.core.stats import paired_bootstrap
 from evolution.core.fitness import LLMJudge, make_skill_fitness_metric
-from evolution.core.constraints import ConstraintValidator, resolve_decision_rule
+from evolution.core.constraints import (
+    ConstraintValidator,
+    effective_absolute_char_ceiling,
+    resolve_decision_rule,
+)
 from evolution.core.lm_timing_callback import (
     COST_LEDGER,
     LMTimingCallback,
@@ -806,6 +810,9 @@ def evolve(
         "baseline_chars": len(skill["raw"]),
         "evolved_chars": len(evolved_full),
         "absolute_char_ceiling": config.max_absolute_chars,
+        "effective_absolute_char_ceiling": effective_absolute_char_ceiling(
+            config.max_absolute_chars, len(skill["raw"]),
+        ),
         "growth_free_threshold": config.growth_free_threshold,
         "growth_quality_slope": config.growth_quality_slope,
         "baseline_per_example": baseline_per_example,
