@@ -406,6 +406,18 @@ def _resolve_bap_safety_margin(value: Optional[float]) -> float:
     return _BAP_SAFETY_MARGIN_DEFAULT if value is None else value
 
 
+def _resolve_bap_max_growth(value: Optional[float], fallback: float) -> float:
+    """Resolve `--bap-max-growth` to BudgetAwareProposer's `max_growth`.
+
+    `None` falls back to the per-config value (currently
+    `growth_free_threshold`, preserving today's coupled behavior across
+    all `--quality-gate` presets). A user-provided `0.0` is preserved —
+    it's a legitimate "no headroom" target; the proposer's
+    `prompt_growth = max(0.0, max_growth - safety_margin)` handles it.
+    """
+    return fallback if value is None else value
+
+
 def evolve(
     skill_name: str,
     iterations: int = 10,
@@ -430,6 +442,7 @@ def evolve(
     knee_point_epsilon: Optional[float] = None,
     knee_point_strategy: str = "val-best",
     bap_safety_margin: Optional[float] = None,
+    bap_max_growth: Optional[float] = None,
     eval_dataset_size: Optional[int] = None,
     holdout_ratio: Optional[float] = None,
     evaluate_band_on_holdout: bool = False,
@@ -639,7 +652,7 @@ def evolve(
     # is DSPy's documented extension point.
     proposer = BudgetAwareProposer(
         baseline_chars=len(skill["body"]),
-        max_growth=config.growth_free_threshold,
+        max_growth=_resolve_bap_max_growth(bap_max_growth, config.growth_free_threshold),
         safety_margin=_resolve_bap_safety_margin(bap_safety_margin),
     )
 
@@ -1003,6 +1016,16 @@ def evolve(
     "want the LM to push toward the actual gate.",
 )
 @click.option(
+    "--bap-max-growth",
+    default=None,
+    type=float,
+    help="Advanced: override BudgetAwareProposer's max_growth — the growth "
+    "target the proposer prompts the reflection LM toward. Decoupled from "
+    "the gate's growth_free_threshold so calibration runs can test proposer "
+    "behavior independently. Default (None): falls back to "
+    "growth_free_threshold for backward compatibility.",
+)
+@click.option(
     "--eval-dataset-size",
     default=None,
     type=int,
@@ -1031,8 +1054,8 @@ def main(skill, iterations, eval_source, dataset_path, optimizer_model, reflecti
          quality_gate, growth_free_threshold,
          growth_quality_slope, max_absolute_chars, inferiority_tolerance,
          bootstrap_confidence, bootstrap_resamples, knee_point_epsilon,
-         knee_point_strategy, bap_safety_margin, eval_dataset_size,
-         holdout_ratio, evaluate_band_on_holdout):
+         knee_point_strategy, bap_safety_margin, bap_max_growth,
+         eval_dataset_size, holdout_ratio, evaluate_band_on_holdout):
     """Evolve an agent skill using DSPy + GEPA optimization."""
     evolve(
         skill_name=skill,
@@ -1058,6 +1081,7 @@ def main(skill, iterations, eval_source, dataset_path, optimizer_model, reflecti
         knee_point_epsilon=knee_point_epsilon,
         knee_point_strategy=knee_point_strategy,
         bap_safety_margin=bap_safety_margin,
+        bap_max_growth=bap_max_growth,
         eval_dataset_size=eval_dataset_size,
         holdout_ratio=holdout_ratio,
         evaluate_band_on_holdout=evaluate_band_on_holdout,
