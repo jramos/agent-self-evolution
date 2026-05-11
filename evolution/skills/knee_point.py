@@ -60,7 +60,8 @@ def select_knee_point(
 
     Args:
         candidates: GEPA-built modules (DspyGEPAResult.candidates). Each
-            must expose a `skill_text` property.
+            must expose a `skill_text` property unless `text_extractor` is
+            provided.
         val_aggregate_scores: one float per candidate (DspyGEPAResult
             .val_aggregate_scores).
         n_val: size of the valset that produced those scores. Used for the
