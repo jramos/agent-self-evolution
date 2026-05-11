@@ -74,7 +74,12 @@ def _description_from_predictor(predictor: Any, target_tool_name: str) -> str:
     instructions = predictor.signature.instructions or ""
     try:
         return _extract_description_from_sentinels(instructions, target_tool_name)
-    except Exception:
+    except SentinelParseError as e:
+        logger.warning(
+            "could not extract description from predictor instructions "
+            "for target %r: %s; reporting empty for budget/parsimony purposes",
+            target_tool_name, e,
+        )
         return ""
 
 
@@ -400,7 +405,7 @@ def evolve(
     trainset = _build_examples(dataset.train, for_module=True)
     valset = _build_examples(dataset.val, for_module=True)
 
-    console.print(f"\n[bold cyan]Running GEPA optimization (auto={iterations} iterations)[/bold cyan]\n")
+    console.print(f"\n[bold cyan]Running GEPA optimization (max_full_evals={iterations})[/bold cyan]\n")
     start_time = time.time()
 
     reflection_lm = dspy.LM(
