@@ -13,6 +13,7 @@ import json
 import logging
 import os
 import re
+import shutil
 import tempfile
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -245,6 +246,9 @@ class MCPManifestSource:
         try:
             with os.fdopen(fd, "w", encoding="utf-8") as fh:
                 fh.write(new_text)
+            # mkstemp creates files with mode 0600; copy the original mode
+            # so atomic replace doesn't clobber the source file's perms.
+            shutil.copymode(source_path, tmp_path)
             os.replace(tmp_path, source_path)
         except BaseException:
             tmp_path.unlink(missing_ok=True)

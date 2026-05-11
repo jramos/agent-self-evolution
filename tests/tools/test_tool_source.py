@@ -217,6 +217,34 @@ class TestMCPManifestSourceApplyEvolved:
         assert dst.read_bytes() == original_bytes
         assert set(tmp_path.iterdir()) == files_before
 
+    def test_apply_evolved_preserves_file_permissions(self, tmp_path: Path):
+        """The original file's mode must be preserved across apply_evolved.
+        mkstemp creates files with 0600; without copymode, os.replace would
+        clobber a 0644 source manifest.
+        """
+        import stat
+
+        src = FIXTURES / "multiple_tools.json"
+        dst = tmp_path / "manifest.json"
+        dst.write_text(src.read_text())
+        dst.chmod(0o644)
+        original_mode = stat.S_IMODE(dst.stat().st_mode)
+        assert original_mode == 0o644
+
+        source = MCPManifestSource(tmp_path)
+        manifest = source.find_manifest(dst)
+        source.apply_evolved(
+            source_path=dst,
+            evolved_manifest=manifest,
+            target_tool="search_files",
+            new_description="Replacement.",
+        )
+
+        new_mode = stat.S_IMODE(dst.stat().st_mode)
+        assert new_mode == original_mode, (
+            f"permissions clobbered: was {oct(original_mode)}, became {oct(new_mode)}"
+        )
+
 
 class TestResolveSourceDispatch:
     def test_resolve_source_picks_mcp_for_json_file(self):

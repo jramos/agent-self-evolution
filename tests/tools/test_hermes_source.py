@@ -47,9 +47,10 @@ class TestFindManifestReadAll:
             "name_ref_tool",
             "f_string_tool",
             "multi_line_concat",
+            "nonascii_tool",
         }
         assert names == expected
-        assert len(manifest.tools) == 8
+        assert len(manifest.tools) == 9
 
     def test_tools_are_sorted_by_name(self, manifest: ToolManifest):
         names = [t.name for t in manifest.tools]
@@ -154,11 +155,11 @@ def _bytes_at(file_path: Path, source_location: tuple) -> bytes:
     """Return the raw byte slice covered by ``source_location`` in ``file_path``."""
     from evolution.tools.hermes_source import _compute_byte_offset
 
-    text = file_path.read_text(encoding="utf-8")
+    data = file_path.read_bytes()
     _, lineno, col_offset, end_lineno, end_col_offset = source_location
-    start = _compute_byte_offset(text, lineno, col_offset)
-    end = _compute_byte_offset(text, end_lineno, end_col_offset)
-    return text[start:end].encode("utf-8")
+    start = _compute_byte_offset(data, lineno, col_offset)
+    end = _compute_byte_offset(data, end_lineno, end_col_offset)
+    return data[start:end]
 
 
 class TestApplyEvolved:
@@ -208,7 +209,7 @@ class TestApplyEvolved:
         assert _bytes_at(a_loc_after[0], a_loc_after) == a_bytes_before
         assert _bytes_at(c_loc_after[0], c_loc_after) == c_bytes_before
 
-    def test_apply_evolved_collapses_multi_line_concat_to_triple_quoted(
+    def test_apply_evolved_collapses_multi_line_concat_to_single_literal(
         self, hermes_fixture_copy: Path
     ):
         source = HermesToolSource(hermes_fixture_copy)
@@ -227,8 +228,8 @@ class TestApplyEvolved:
         # quoted line — the old shape had three adjacent string literals).
         assert "First line of the description" not in file_text
         assert "Second paragraph with **markdown**" not in file_text
-        # Triple-quoted string with the new content is present.
-        assert '"""' in file_text
+        # The repr() form produces a one-line string literal containing the
+        # new content verbatim.
         assert new_desc in file_text
 
         # Re-parse and verify the description.
@@ -383,6 +384,114 @@ class TestApplyEvolved:
         # past the original end.
         original_suffix = original_text[end_byte:]
         assert new_text.endswith(original_suffix)
+
+    def test_apply_evolved_handles_nonascii_in_original_description(
+        self, hermes_fixture_copy: Path
+    ):
+        """Em-dashes (or any multi-byte UTF-8) in the original description must
+        not skew the splice. col_offset is byte-based; treating it as char-based
+        eats trailing bytes after the closing quote.
+        """
+        import ast as _ast
+
+        source = HermesToolSource(hermes_fixture_copy)
+        manifest = source.find_manifest(hermes_fixture_copy)
+
+        source.apply_evolved(
+            source_path=hermes_fixture_copy,
+            evolved_manifest=manifest,
+            target_tool="nonascii_tool",
+            new_description="New ASCII-only replacement description.",
+        )
+
+        # File must still parse cleanly.
+        file_path = hermes_fixture_copy / "nonascii_tool.py"
+        _ast.parse(file_path.read_bytes())  # raises SyntaxError if splice corrupted
+
+        # Re-extract description.
+        new_manifest = source.find_manifest(hermes_fixture_copy)
+        new_entry = new_manifest.find_tool("nonascii_tool")
+        assert new_entry.description == "New ASCII-only replacement description."
+
+    def test_apply_evolved_byte_equivalence_with_nonascii_neighbors(
+        self, hermes_fixture_copy: Path
+    ):
+        """Modifying one tool with non-ASCII content elsewhere in the file
+        must leave the non-ASCII bytes unchanged.
+        """
+        source = HermesToolSource(hermes_fixture_copy)
+        manifest = source.find_manifest(hermes_fixture_copy)
+
+        # Capture the nonascii fixture's bytes before we touch a sibling.
+        nonascii_path = hermes_fixture_copy / "nonascii_tool.py"
+        original_nonascii_bytes = nonascii_path.read_bytes()
+        # Confirm the fixture actually contains the multi-byte em-dash.
+        assert "\xe2\x80\x94".encode("latin-1") in original_nonascii_bytes
+
+        source.apply_evolved(
+            source_path=hermes_fixture_copy,
+            evolved_manifest=manifest,
+            target_tool="simple_tool",
+            new_description="Replacement that has nothing to do with nonascii_tool.",
+        )
+
+        assert nonascii_path.read_bytes() == original_nonascii_bytes
+
+    def test_apply_evolved_preserves_multi_line_content_verbatim(
+        self, hermes_fixture_copy: Path
+    ):
+        """A new description containing newlines must round-trip byte-equal as a
+        value after apply_evolved. The replacement is allowed to escape newlines
+        as ``\\n`` in the source representation.
+        """
+        source = HermesToolSource(hermes_fixture_copy)
+        manifest = source.find_manifest(hermes_fixture_copy)
+
+        multi_line_desc = (
+            "Paragraph one with content.\n\n"
+            "Paragraph two follows.\n\n"
+            "Third paragraph."
+        )
+        source.apply_evolved(
+            source_path=hermes_fixture_copy,
+            evolved_manifest=manifest,
+            target_tool="simple_tool",
+            new_description=multi_line_desc,
+        )
+
+        new_manifest = source.find_manifest(hermes_fixture_copy)
+        new_entry = new_manifest.find_tool("simple_tool")
+        assert new_entry.description == multi_line_desc, (
+            f"description corrupted: expected {multi_line_desc!r}, "
+            f"got {new_entry.description!r}"
+        )
+
+    def test_apply_evolved_preserves_file_permissions(self, hermes_fixture_copy: Path):
+        """The original file's mode must be preserved across apply_evolved.
+        Without copymode, mkstemp's 0600 default would clobber 0644 source files.
+        """
+        import stat
+
+        source = HermesToolSource(hermes_fixture_copy)
+        manifest = source.find_manifest(hermes_fixture_copy)
+
+        file_path = hermes_fixture_copy / "simple_tool.py"
+        # Set a deliberate mode that mkstemp's default (0600) would clobber.
+        file_path.chmod(0o644)
+        original_mode = stat.S_IMODE(file_path.stat().st_mode)
+        assert original_mode == 0o644
+
+        source.apply_evolved(
+            source_path=hermes_fixture_copy,
+            evolved_manifest=manifest,
+            target_tool="simple_tool",
+            new_description="new description",
+        )
+
+        new_mode = stat.S_IMODE(file_path.stat().st_mode)
+        assert new_mode == original_mode, (
+            f"permissions clobbered: was {oct(original_mode)}, became {oct(new_mode)}"
+        )
 
 
 class TestSidecarMetadata:

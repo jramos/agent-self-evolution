@@ -22,6 +22,7 @@ import json
 import logging
 import os
 import re
+import shutil
 import tempfile
 from pathlib import Path
 
@@ -167,30 +168,27 @@ class HermesToolSource:
             )
 
         file_path, lineno, col_offset, end_lineno, end_col_offset = entry.source_location
-        text = file_path.read_text(encoding="utf-8")
+        data = file_path.read_bytes()
 
-        # AST line/col offsets address bytes in the encoded source. For pure
-        # ASCII source — the common case for tool description literals —
-        # byte offsets and str-index offsets coincide. Multi-byte chars in
-        # the description body itself would skew col_offset; we accept that
-        # limitation rather than re-decoding around every splice.
-        start_offset = _compute_byte_offset(text, lineno, col_offset)
-        end_offset = _compute_byte_offset(text, end_lineno, end_col_offset)
+        # CPython documents ast.col_offset as a byte offset into the UTF-8
+        # encoded source. Splicing on raw bytes throughout — rather than on
+        # decoded str chars — keeps the boundaries correct when the body
+        # contains multi-byte chars (em-dashes, smart quotes, etc.).
+        start_offset = _compute_byte_offset(data, lineno, col_offset)
+        end_offset = _compute_byte_offset(data, end_lineno, end_col_offset)
 
-        multi_line = lineno != end_lineno
-        replacement = _format_replacement(
-            new_description,
-            multi_line=multi_line,
-            indent=col_offset,
-        )
-        new_text = text[:start_offset] + replacement + text[end_offset:]
+        replacement = _format_replacement(new_description).encode("utf-8")
+        new_bytes = data[:start_offset] + replacement + data[end_offset:]
 
         # Atomic write: temp file in the same dir, then os.replace.
         fd, tmp_name = tempfile.mkstemp(dir=file_path.parent, suffix=file_path.suffix)
         tmp_path = Path(tmp_name)
         try:
-            with os.fdopen(fd, "w", encoding="utf-8") as fh:
-                fh.write(new_text)
+            with os.fdopen(fd, "wb") as fh:
+                fh.write(new_bytes)
+            # mkstemp creates files with mode 0600; copy the original mode
+            # so atomic replace doesn't clobber the source file's perms.
+            shutil.copymode(file_path, tmp_path)
             os.replace(tmp_path, file_path)
         except BaseException:
             tmp_path.unlink(missing_ok=True)
@@ -268,43 +266,36 @@ class HermesToolSource:
         )
 
 
-def _compute_byte_offset(text: str, lineno: int, col_offset: int) -> int:
+def _compute_byte_offset(data: bytes, lineno: int, col_offset: int) -> int:
     """Convert AST ``(lineno, col_offset)`` (1-based line, 0-based col) to a
-    str-index offset into ``text``.
+    byte offset into ``data``.
 
-    AST col_offset is technically in bytes per CPython, but for Python source
-    that is pure ASCII (or has no multi-byte chars in the columns we splice
-    around), the byte count equals the str length. The description body
-    itself may contain non-ASCII, but the *boundaries* — the quote chars at
-    start/end — are ASCII, so the resulting offsets are accurate.
+    CPython documents ``ast.AST.col_offset`` as a byte offset into the
+    UTF-8-encoded source. This helper operates on the file's raw bytes so
+    multi-byte chars (em-dashes, smart quotes, etc.) anywhere in the file
+    don't skew the splice boundaries.
     """
-    lines = text.splitlines(keepends=True)
+    lines = data.splitlines(keepends=True)
     if lineno < 1 or lineno > len(lines):
         raise ValueError(f"lineno {lineno} out of range [1, {len(lines)}]")
     return sum(len(line) for line in lines[: lineno - 1]) + col_offset
 
 
-def _format_replacement(new_description: str, *, multi_line: bool, indent: int) -> str:
-    """Build the source-literal replacement for ``new_description``.
+def _format_replacement(new_description: str) -> str:
+    """Return a Python source representation of ``new_description``.
 
-    For single-line spans we emit ``repr(new_description)`` — Python's repr
-    always produces a valid string literal with correct escaping, at the
-    cost of losing the original quote style. For multi-line spans we emit a
-    triple-double-quoted string and re-indent continuation lines so the
-    closing ``\"\"\"`` lines up with the original column.
+    Uses ``repr()`` to produce a one-line escaped string literal. This
+    guarantees:
+      - exactly one parseable Python string literal,
+      - byte-equal round-trip of the *value* on re-parse (no content drift
+        from formatting tricks like injected indent),
+      - safe splicing at any indentation, since the literal contains no
+        embedded newlines.
+
+    Multi-line descriptions come out as ``'line 1\\nline 2'`` — less pretty
+    than triple-quoted but guaranteed to round-trip correctly.
     """
-    if not multi_line:
-        return repr(new_description)
-    # Triple-quoted block. Escape any embedded triple-double-quote.
-    body = new_description.replace('"""', '\\"\\"\\"')
-    if indent > 0:
-        pad = " " * indent
-        # The opening triple-quote begins at col_offset; subsequent lines of
-        # the body need pad so the block reads naturally at that indent.
-        lines = body.split("\n")
-        body = ("\n" + pad).join(lines)
-        return f'"""{body}"""'
-    return f'"""{body}"""'
+    return repr(new_description)
 
 
 def _collect_name_constants(tree: ast.Module) -> dict[str, ast.Constant]:
