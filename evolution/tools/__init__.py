@@ -4,6 +4,10 @@ from evolution.tools.tool_module import (
     ToolModule,
     ToolSelectionSignature,
 )
+from evolution.tools.tool_proposer import (
+    BudgetAwareToolProposer,
+    extract_and_rebuild,
+)
 from evolution.tools.tool_source import (
     MCPManifestSource,
     SentinelParseError,
@@ -14,6 +18,7 @@ from evolution.tools.tool_source import (
 )
 
 __all__ = [
+    "BudgetAwareToolProposer",
     "MCPManifestSource",
     "SentinelParseError",
     "ToolEntry",
@@ -22,4 +27,5 @@ __all__ = [
     "ToolSelectionSignature",
     "ToolSource",
     "discover_tool_sources",
+    "extract_and_rebuild",
 ]
