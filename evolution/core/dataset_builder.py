@@ -9,6 +9,7 @@ C) Golden sets — hand-curated JSONL files
 import json
 import logging
 import random
+import re
 from pathlib import Path
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any, Optional
@@ -376,19 +377,31 @@ class SyntheticDatasetBuilder:
         tasks: list[dict],
         manifest: "ToolManifest",
     ) -> list[dict]:
-        """Drop tasks whose lowercase task text names any tool from the manifest."""
+        """Drop tasks whose text names any tool from the manifest.
+
+        Both sides are normalized symmetrically before comparison: lowercased and
+        with ``-`` replaced by ``_``. So ``read_file`` in the manifest matches a
+        task that says ``read-file`` and vice versa.
+
+        Matching uses word boundaries so the plural form (``read_files``) and the
+        compound form (``read_filemap``) are NOT flagged as containing the tool
+        name — only standalone occurrences are.
+        """
         from evolution.tools.tool_source import _normalize_tool_name
 
-        forbidden_substrings: set[str] = set()
+        forbidden_names: set[str] = set()
         for t in manifest.tools:
-            forbidden_substrings.add(t.name.lower())
-            forbidden_substrings.add(_normalize_tool_name(t.name).lower())
-        forbidden_substrings.discard("")
+            forbidden_names.add(_normalize_tool_name(t.name).lower())
+        forbidden_names.discard("")
+
+        # Pre-compile word-boundary patterns once per call.
+        patterns = [re.compile(rf"\b{re.escape(name)}\b") for name in forbidden_names]
 
         kept = []
         for task in tasks:
-            text = task.get("task", "").lower()
-            if any(s in text for s in forbidden_substrings):
+            raw_text = task.get("task", "")
+            normalized_text = raw_text.lower().replace("-", "_")
+            if any(p.search(normalized_text) for p in patterns):
                 continue
             kept.append(task)
         return kept

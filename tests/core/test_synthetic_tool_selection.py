@@ -119,3 +119,38 @@ class TestGenerateToolSelectionDegenerate:
                 builder.generate_tool_selection(
                     manifest=manifest, target_tool="search_files", num_cases=10,
                 )
+
+
+class TestFilterTrivialTasks:
+    """Direct coverage for the symmetric-normalization + word-boundary filter."""
+
+    def test_plural_form_of_tool_name_is_kept(self):
+        """A task using the plural form (read_files) should NOT be filtered —
+        read_file appears as a sub-word, not as the tool reference itself.
+        """
+        manifest = ToolManifest.from_json_file(FIXTURES / "multiple_tools.json")
+        tasks = [{"task": "I have read_files in the folder", "correct_tool": "list_directory"}]
+        kept = SyntheticDatasetBuilder._filter_trivial_tasks(tasks, manifest)
+        assert kept == tasks, "plural form read_files should not match read_file with word boundaries"
+
+    def test_hyphenated_form_of_tool_name_is_dropped(self):
+        """A task that writes the tool name with hyphens (read-file) should BE
+        filtered — it's a typographic variant of the canonical name.
+        """
+        manifest = ToolManifest.from_json_file(FIXTURES / "multiple_tools.json")
+        tasks = [{"task": "Run read-file on config.py", "correct_tool": "read_file"}]
+        kept = SyntheticDatasetBuilder._filter_trivial_tasks(tasks, manifest)
+        assert kept == [], "hyphenated read-file should normalize to read_file and be filtered"
+
+    def test_standalone_tool_name_is_dropped(self):
+        """The canonical case: tool name appears as a standalone word."""
+        manifest = ToolManifest.from_json_file(FIXTURES / "multiple_tools.json")
+        tasks = [{"task": "Use search_files for the lookup", "correct_tool": "search_files"}]
+        kept = SyntheticDatasetBuilder._filter_trivial_tasks(tasks, manifest)
+        assert kept == []
+
+    def test_unrelated_text_is_kept(self):
+        manifest = ToolManifest.from_json_file(FIXTURES / "multiple_tools.json")
+        tasks = [{"task": "Find every Python file in the repo", "correct_tool": "search_files"}]
+        kept = SyntheticDatasetBuilder._filter_trivial_tasks(tasks, manifest)
+        assert kept == tasks
