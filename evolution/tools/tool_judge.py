@@ -113,11 +113,6 @@ def make_tool_fitness_metric(
                 ),
             )
 
-        # Note: ToolJudgeSignature is defined for future use but the metric
-        # currently routes through LLMJudge.score (which uses JudgeSignature).
-        # The agent's chosen_tool + reasoning are packed into agent_output;
-        # PR 3 will wire ToolJudgeSignature through a tool-flavored judge
-        # so expected_tool / chosen_tool / reasoning land as distinct fields.
         score = judge.score(
             task_input=gold.task_input,
             expected_behavior=gold.expected_behavior,
