@@ -1,4 +1,4 @@
-"""Tool description evolution — Phase 2 of the framework."""
+"""Tool description evolution — manifest data model, DSPy module, judge, and proposer."""
 
 from evolution.tools.tool_judge import (
     ToolJudgeSignature,
