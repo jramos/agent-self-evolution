@@ -1,11 +1,9 @@
 """Tool manifest discovery and data model.
 
-A ToolSource is the tool-pipeline analog of SkillSource. The MVP ships one
-adapter (MCPManifestSource) that reads a static JSON file in the shape an
-MCP server returns from list_tools().
-
-Live MCP transport, Hermes registry, and Anthropic/OpenAI JSON adapters all
-slot in later under the same Protocol.
+A ToolSource is the tool-pipeline analog of SkillSource: a Protocol that
+adapters implement to discover tool manifests from different backing
+stores. MCPManifestSource reads a static JSON file in the shape an MCP
+server returns from list_tools().
 """
 
 from __future__ import annotations
@@ -161,7 +159,7 @@ class MCPManifestSource:
 def discover_tool_sources(explicit_dirs: list[Path] | None = None) -> list[ToolSource]:
     """Build the priority-ordered ToolSource list.
 
-    MVP: one adapter, MCPManifestSource, one per explicit_dirs entry.
+    Returns one MCPManifestSource per explicit_dirs entry.
     """
     sources: list[ToolSource] = []
     for d in explicit_dirs or []:
