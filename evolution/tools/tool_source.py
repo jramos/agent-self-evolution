@@ -12,7 +12,7 @@ import json
 import re
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Protocol
+from typing import Any, Literal, Protocol
 
 # Conservative subset of MCP-spec-allowed tool names. The 128-char bound
 # accommodates namespaced names like Claude Code's
@@ -46,6 +46,11 @@ class ToolEntry:
     name: str
     description: str
     input_schema: dict[str, Any] = field(default_factory=dict)
+    source_kind: Literal["literal", "name_ref", "joined_str"] | None = None
+    # source_location is (file_path, lineno, col_offset, end_lineno, end_col_offset)
+    # of the description string node (for name_ref, points at the resolved
+    # constant's location). None for non-source-backed manifests like JSON.
+    source_location: tuple[Path, int, int, int, int] | None = None
 
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> "ToolEntry":
@@ -78,6 +83,10 @@ class ToolManifest:
     """
     tools: tuple[ToolEntry, ...]
     confusable_neighbors: dict[str, str] = field(default_factory=dict)
+    # (tool_name_hint, reason) for tools the adapter saw but couldn't parse.
+    # Empty for JSON manifests; populated by source-walking adapters that may
+    # legitimately skip schemas they can't statically resolve.
+    dropped_tools: tuple[tuple[str, str], ...] = ()
 
     def __post_init__(self):
         if not self.tools:
@@ -124,10 +133,16 @@ class ToolManifest:
                 name=t.name,
                 description=new_description if t.name == tool_name else t.description,
                 input_schema=t.input_schema,
+                source_kind=t.source_kind,
+                source_location=t.source_location,
             )
             for t in self.tools
         )
-        return ToolManifest(tools=new_tools, confusable_neighbors=self.confusable_neighbors)
+        return ToolManifest(
+            tools=new_tools,
+            confusable_neighbors=self.confusable_neighbors,
+            dropped_tools=self.dropped_tools,
+        )
 
 
 class ToolSource(Protocol):
