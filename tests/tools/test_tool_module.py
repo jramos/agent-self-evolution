@@ -17,7 +17,7 @@ FIXTURES = Path(__file__).parent.parent / "fixtures" / "tool_manifests"
 
 class TestRenderManifestForPrompt:
     def test_renders_tools_alphabetically(self):
-        manifest = ToolManifest.from_json_file(FIXTURES / "seven_tools.json")
+        manifest = ToolManifest.from_json_file(FIXTURES / "multiple_tools.json")
         rendered = _render_manifest_for_prompt(manifest, "search_files", "Find things.")
         positions = {
             name: rendered.find(f"## {name}\n")
@@ -29,12 +29,12 @@ class TestRenderManifestForPrompt:
         assert [name for name, _ in sorted_by_position] == sorted(positions.keys())
 
     def test_target_description_is_sentinel_wrapped(self):
-        manifest = ToolManifest.from_json_file(FIXTURES / "seven_tools.json")
+        manifest = ToolManifest.from_json_file(FIXTURES / "multiple_tools.json")
         rendered = _render_manifest_for_prompt(manifest, "search_files", "Find files by pattern.")
         assert "<!-- TARGET:search_files -->Find files by pattern.<!-- /TARGET:search_files -->" in rendered
 
     def test_non_target_tools_have_no_sentinels(self):
-        manifest = ToolManifest.from_json_file(FIXTURES / "seven_tools.json")
+        manifest = ToolManifest.from_json_file(FIXTURES / "multiple_tools.json")
         rendered = _render_manifest_for_prompt(manifest, "search_files", "X")
         assert rendered.count("<!-- TARGET:") == 1
         assert rendered.count("<!-- /TARGET:") == 1
@@ -43,7 +43,7 @@ class TestRenderManifestForPrompt:
         """Byte-identity contract on the renderer: changing the target's text
         leaves every other tool's rendered block bit-for-bit identical.
         """
-        manifest = ToolManifest.from_json_file(FIXTURES / "seven_tools.json")
+        manifest = ToolManifest.from_json_file(FIXTURES / "multiple_tools.json")
         rendered_a = _render_manifest_for_prompt(manifest, "search_files", "Description A")
         rendered_b = _render_manifest_for_prompt(manifest, "search_files", "Description B")
 
@@ -57,7 +57,7 @@ class TestRenderManifestForPrompt:
 
 class TestExtractDescriptionFromSentinels:
     def test_round_trip(self):
-        manifest = ToolManifest.from_json_file(FIXTURES / "seven_tools.json")
+        manifest = ToolManifest.from_json_file(FIXTURES / "multiple_tools.json")
         original = "Find files in the repo by name pattern."
         rendered = _render_manifest_for_prompt(manifest, "search_files", original)
         extracted = _extract_description_from_sentinels(rendered, "search_files")
@@ -89,31 +89,31 @@ class TestExtractDescriptionFromSentinels:
 
 class TestToolModule:
     def test_construction(self):
-        manifest = ToolManifest.from_json_file(FIXTURES / "seven_tools.json")
+        manifest = ToolManifest.from_json_file(FIXTURES / "multiple_tools.json")
         module = ToolModule("search_files", manifest, "Find files by pattern.")
         assert module is not None
 
     def test_named_predictors_returns_one_entry(self):
-        manifest = ToolManifest.from_json_file(FIXTURES / "seven_tools.json")
+        manifest = ToolManifest.from_json_file(FIXTURES / "multiple_tools.json")
         module = ToolModule("search_files", manifest, "Find files by pattern.")
         predictors = list(module.named_predictors())
         assert len(predictors) == 1
 
     def test_signature_instructions_contain_sentinel_wrapped_description(self):
-        manifest = ToolManifest.from_json_file(FIXTURES / "seven_tools.json")
+        manifest = ToolManifest.from_json_file(FIXTURES / "multiple_tools.json")
         module = ToolModule("search_files", manifest, "Find files by pattern.")
         _, predictor = next(iter(module.named_predictors()))
         instructions = predictor.signature.instructions
         assert "<!-- TARGET:search_files -->Find files by pattern.<!-- /TARGET:search_files -->" in instructions
 
     def test_description_text_property_returns_extracted_region(self):
-        manifest = ToolManifest.from_json_file(FIXTURES / "seven_tools.json")
+        manifest = ToolManifest.from_json_file(FIXTURES / "multiple_tools.json")
         module = ToolModule("search_files", manifest, "Find files by pattern.")
         assert module.description_text == "Find files by pattern."
 
     def test_description_text_reflects_updated_instructions(self):
         """After GEPA mutates the instructions, description_text reads from the new region."""
-        manifest = ToolManifest.from_json_file(FIXTURES / "seven_tools.json")
+        manifest = ToolManifest.from_json_file(FIXTURES / "multiple_tools.json")
         module = ToolModule("search_files", manifest, "Find files by pattern.")
         _, predictor = next(iter(module.named_predictors()))
         new_rendered = _render_manifest_for_prompt(manifest, "search_files", "Updated description.")

@@ -21,7 +21,7 @@ FIXTURES = Path(__file__).parent.parent / "fixtures" / "tool_manifests"
 
 class TestExtractAndRebuild:
     def test_preserved_sentinels_returns_rebuilt_full_instructions(self):
-        manifest = ToolManifest.from_json_file(FIXTURES / "seven_tools.json")
+        manifest = ToolManifest.from_json_file(FIXTURES / "multiple_tools.json")
         candidate = _render_manifest_for_prompt(
             manifest, "search_files", "A new description for searching files."
         )
@@ -32,28 +32,28 @@ class TestExtractAndRebuild:
         assert rebuilt == expected
 
     def test_stripped_open_sentinel_raises(self):
-        manifest = ToolManifest.from_json_file(FIXTURES / "seven_tools.json")
+        manifest = ToolManifest.from_json_file(FIXTURES / "multiple_tools.json")
         candidate = _render_manifest_for_prompt(manifest, "search_files", "X")
         candidate = candidate.replace("<!-- TARGET:search_files -->", "")
         with pytest.raises(SentinelParseError, match="opening sentinel"):
             extract_and_rebuild(candidate, manifest, "search_files")
 
     def test_stripped_close_sentinel_raises(self):
-        manifest = ToolManifest.from_json_file(FIXTURES / "seven_tools.json")
+        manifest = ToolManifest.from_json_file(FIXTURES / "multiple_tools.json")
         candidate = _render_manifest_for_prompt(manifest, "search_files", "X")
         candidate = candidate.replace("<!-- /TARGET:search_files -->", "")
         with pytest.raises(SentinelParseError, match="closing sentinel"):
             extract_and_rebuild(candidate, manifest, "search_files")
 
     def test_duplicated_sentinels_raise(self):
-        manifest = ToolManifest.from_json_file(FIXTURES / "seven_tools.json")
+        manifest = ToolManifest.from_json_file(FIXTURES / "multiple_tools.json")
         candidate = _render_manifest_for_prompt(manifest, "search_files", "X")
         candidate += "\n<!-- TARGET:search_files -->Y<!-- /TARGET:search_files -->"
         with pytest.raises(SentinelParseError, match="multiple"):
             extract_and_rebuild(candidate, manifest, "search_files")
 
     def test_wrong_target_name_in_marker_raises(self):
-        manifest = ToolManifest.from_json_file(FIXTURES / "seven_tools.json")
+        manifest = ToolManifest.from_json_file(FIXTURES / "multiple_tools.json")
         candidate = "<!-- TARGET:wrong_name -->X<!-- /TARGET:wrong_name -->"
         with pytest.raises(SentinelParseError, match="opening sentinel"):
             extract_and_rebuild(candidate, manifest, "search_files")
@@ -61,7 +61,7 @@ class TestExtractAndRebuild:
 
 class TestBudgetAwareToolProposerErrorHandling:
     def test_sentinel_parse_failure_increments_counter_and_reraises(self, monkeypatch):
-        manifest = ToolManifest.from_json_file(FIXTURES / "seven_tools.json")
+        manifest = ToolManifest.from_json_file(FIXTURES / "multiple_tools.json")
         proposer = BudgetAwareToolProposer(
             target_tool_name="search_files",
             manifest=manifest,
@@ -87,7 +87,7 @@ class TestBudgetAwareToolProposerErrorHandling:
         assert proposer.sentinel_failures == 1
 
     def test_successful_candidate_returns_rebuilt_instructions(self, monkeypatch):
-        manifest = ToolManifest.from_json_file(FIXTURES / "seven_tools.json")
+        manifest = ToolManifest.from_json_file(FIXTURES / "multiple_tools.json")
         proposer = BudgetAwareToolProposer(
             target_tool_name="search_files",
             manifest=manifest,
@@ -122,7 +122,7 @@ class TestBudgetAwareToolProposerErrorHandling:
 
 class TestBudgetAwareToolProposerTemplate:
     def test_template_includes_sentinel_preservation_rule(self):
-        manifest = ToolManifest.from_json_file(FIXTURES / "seven_tools.json")
+        manifest = ToolManifest.from_json_file(FIXTURES / "multiple_tools.json")
         proposer = BudgetAwareToolProposer(
             target_tool_name="search_files",
             manifest=manifest,
@@ -135,7 +135,7 @@ class TestBudgetAwareToolProposerTemplate:
         assert "<!-- /TARGET:" in template
 
     def test_template_carries_forward_decision_rubric(self):
-        manifest = ToolManifest.from_json_file(FIXTURES / "seven_tools.json")
+        manifest = ToolManifest.from_json_file(FIXTURES / "multiple_tools.json")
         proposer = BudgetAwareToolProposer(
             target_tool_name="search_files",
             manifest=manifest,
@@ -148,7 +148,7 @@ class TestBudgetAwareToolProposerTemplate:
         assert "(c)" in template
 
     def test_template_includes_grounding_citation_requirement(self):
-        manifest = ToolManifest.from_json_file(FIXTURES / "seven_tools.json")
+        manifest = ToolManifest.from_json_file(FIXTURES / "multiple_tools.json")
         proposer = BudgetAwareToolProposer(
             target_tool_name="search_files",
             manifest=manifest,
@@ -163,7 +163,7 @@ class TestBudgetAwareToolProposerTemplate:
         the rendered manifest's size (~1000+ chars). A common confusion mode for
         budget-aware proposers is to anchor the budget on the full instructions.
         """
-        manifest = ToolManifest.from_json_file(FIXTURES / "seven_tools.json")
+        manifest = ToolManifest.from_json_file(FIXTURES / "multiple_tools.json")
         baseline = "Find things."
         proposer = BudgetAwareToolProposer(
             target_tool_name="search_files",
@@ -190,7 +190,7 @@ class TestBudgetAwareToolProposerTemplate:
         instead of degrading the proposer to a silent no-op.
         """
         from evolution.tools.tool_module import ToolModule
-        manifest = ToolManifest.from_json_file(FIXTURES / "seven_tools.json")
+        manifest = ToolManifest.from_json_file(FIXTURES / "multiple_tools.json")
         module = ToolModule("search_files", manifest, "Find things.")
         predictor_names = {name for name, _ in module.named_predictors()}
         assert BudgetAwareToolProposer.component_name in predictor_names, (

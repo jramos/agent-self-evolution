@@ -18,41 +18,41 @@ FIXTURES = Path(__file__).parent.parent / "fixtures" / "tool_manifests"
 
 
 class TestToolManifestLoad:
-    def test_loads_seven_tools_fixture(self):
-        manifest = ToolManifest.from_json_file(FIXTURES / "seven_tools.json")
+    def test_loads_multiple_tools_fixture(self):
+        manifest = ToolManifest.from_json_file(FIXTURES / "multiple_tools.json")
         assert len(manifest.tools) == 7
         names = {t.name for t in manifest.tools}
         assert "search_files" in names
 
     def test_loads_confusable_neighbors_metadata(self):
-        manifest = ToolManifest.from_json_file(FIXTURES / "seven_tools.json")
+        manifest = ToolManifest.from_json_file(FIXTURES / "multiple_tools.json")
         assert manifest.confusable_neighbor_for("search_files") == "grep_in_terminal"
         assert manifest.confusable_neighbor_for("grep_in_terminal") == "search_files"
 
     def test_returns_none_when_no_neighbor_declared(self):
-        manifest = ToolManifest.from_json_file(FIXTURES / "seven_tools.json")
+        manifest = ToolManifest.from_json_file(FIXTURES / "multiple_tools.json")
         assert manifest.confusable_neighbor_for("compute_sha256") is None
 
     def test_find_tool_returns_entry(self):
-        manifest = ToolManifest.from_json_file(FIXTURES / "seven_tools.json")
+        manifest = ToolManifest.from_json_file(FIXTURES / "multiple_tools.json")
         entry = manifest.find_tool("search_files")
         assert isinstance(entry, ToolEntry)
         assert entry.description == "Find things."
 
     def test_find_tool_raises_with_available_names(self):
-        manifest = ToolManifest.from_json_file(FIXTURES / "seven_tools.json")
+        manifest = ToolManifest.from_json_file(FIXTURES / "multiple_tools.json")
         with pytest.raises(KeyError, match="search_files") as excinfo:
             manifest.find_tool("nonexistent_tool")
         assert "search_files" in str(excinfo.value)
 
     def test_replace_description_returns_new_manifest(self):
-        manifest = ToolManifest.from_json_file(FIXTURES / "seven_tools.json")
+        manifest = ToolManifest.from_json_file(FIXTURES / "multiple_tools.json")
         new_manifest = manifest.replace_description("search_files", "New description.")
         assert new_manifest.find_tool("search_files").description == "New description."
         assert manifest.find_tool("search_files").description == "Find things."
 
     def test_replace_description_preserves_non_target_tools(self):
-        manifest = ToolManifest.from_json_file(FIXTURES / "seven_tools.json")
+        manifest = ToolManifest.from_json_file(FIXTURES / "multiple_tools.json")
         new_manifest = manifest.replace_description("search_files", "New description.")
         for name in ("grep_in_terminal", "read_file", "cat_in_terminal", "list_directory", "ls_in_terminal", "compute_sha256"):
             assert new_manifest.find_tool(name).description == manifest.find_tool(name).description

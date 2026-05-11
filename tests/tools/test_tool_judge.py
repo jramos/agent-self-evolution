@@ -43,19 +43,19 @@ class TestNormalizeToolNameForMatch:
 
 class TestParseChosenTool:
     def test_clean_name_returns_name(self):
-        manifest = ToolManifest.from_json_file(FIXTURES / "seven_tools.json")
+        manifest = ToolManifest.from_json_file(FIXTURES / "multiple_tools.json")
         assert _parse_chosen_tool("search_files", manifest) == "search_files"
 
     def test_normalizes_case_and_quotes(self):
-        manifest = ToolManifest.from_json_file(FIXTURES / "seven_tools.json")
+        manifest = ToolManifest.from_json_file(FIXTURES / "multiple_tools.json")
         assert _parse_chosen_tool('"Search_Files"', manifest) == "search_files"
 
     def test_returns_empty_on_unrecognizable(self):
-        manifest = ToolManifest.from_json_file(FIXTURES / "seven_tools.json")
+        manifest = ToolManifest.from_json_file(FIXTURES / "multiple_tools.json")
         assert _parse_chosen_tool("this is not a tool name at all", manifest) == ""
 
     def test_returns_empty_on_blank(self):
-        manifest = ToolManifest.from_json_file(FIXTURES / "seven_tools.json")
+        manifest = ToolManifest.from_json_file(FIXTURES / "multiple_tools.json")
         assert _parse_chosen_tool("", manifest) == ""
 
 
@@ -65,7 +65,7 @@ class TestMakeToolFitnessMetric:
         metric = make_tool_fitness_metric(
             judge=judge,
             baseline_description="Find things.",
-            manifest=ToolManifest.from_json_file(FIXTURES / "seven_tools.json"),
+            manifest=ToolManifest.from_json_file(FIXTURES / "multiple_tools.json"),
             target_tool_name="search_files",
             max_growth=0.2,
         )
@@ -78,7 +78,7 @@ class TestMakeToolFitnessMetric:
         metric = make_tool_fitness_metric(
             judge=judge,
             baseline_description="Find things.",
-            manifest=ToolManifest.from_json_file(FIXTURES / "seven_tools.json"),
+            manifest=ToolManifest.from_json_file(FIXTURES / "multiple_tools.json"),
             target_tool_name="search_files",
             max_growth=0.2,
         )
@@ -91,7 +91,7 @@ class TestMakeToolFitnessMetric:
         metric = make_tool_fitness_metric(
             judge=judge,
             baseline_description="Find things.",
-            manifest=ToolManifest.from_json_file(FIXTURES / "seven_tools.json"),
+            manifest=ToolManifest.from_json_file(FIXTURES / "multiple_tools.json"),
             target_tool_name="search_files",
             max_growth=0.2,
         )
@@ -113,7 +113,7 @@ class TestMakeToolFitnessMetric:
 
     def test_nonexistent_tool_choice_scored_zero_with_listing(self):
         judge = MagicMock()
-        manifest = ToolManifest.from_json_file(FIXTURES / "seven_tools.json")
+        manifest = ToolManifest.from_json_file(FIXTURES / "multiple_tools.json")
         metric = make_tool_fitness_metric(
             judge=judge,
             baseline_description="Find things.",
