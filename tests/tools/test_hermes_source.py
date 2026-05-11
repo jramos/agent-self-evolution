@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import json
 import shutil
 from pathlib import Path
 
@@ -387,17 +386,21 @@ class TestApplyEvolved:
 
 
 class TestSidecarMetadata:
-    def test_sidecar_metadata_loads_confusable_neighbors(self, tmp_path: Path):
-        # Copy the fixture so we can drop a sidecar without polluting the
-        # checked-in tree.
+    def test_sidecar_metadata_loads_confusable_neighbors(self):
+        # The checked-in fixture ships an _evolution_metadata.json with two
+        # declared confusable pairs.
+        manifest = HermesToolSource(HERMES_SHAPE).find_manifest(HERMES_SHAPE)
+        assert manifest.confusable_neighbor_for("simple_tool") == "list_tool_a"
+        assert manifest.confusable_neighbor_for("list_tool_a") == "simple_tool"
+        assert manifest.confusable_neighbor_for("name_ref_tool") == "multi_line_concat"
+        assert manifest.confusable_neighbor_for("multi_line_concat") == "name_ref_tool"
+
+    def test_missing_sidecar_yields_empty_confusable_map(self, tmp_path: Path):
+        # Copy the fixture without the sidecar so we can verify the
+        # adapter handles a sidecar-less tree.
         copied = tmp_path / "hermes_shape"
         shutil.copytree(HERMES_SHAPE, copied)
-        sidecar = copied / "_evolution_metadata.json"
-        sidecar.write_text(json.dumps({"confusable_neighbors": {"simple_tool": "list_tool_a"}}))
+        (copied / "_evolution_metadata.json").unlink()
 
         manifest = HermesToolSource(copied).find_manifest(copied)
-        assert manifest.confusable_neighbor_for("simple_tool") == "list_tool_a"
-
-    def test_missing_sidecar_yields_empty_confusable_map(self):
-        manifest = HermesToolSource(HERMES_SHAPE).find_manifest(HERMES_SHAPE)
         assert manifest.confusable_neighbors == {}
