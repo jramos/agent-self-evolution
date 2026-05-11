@@ -18,11 +18,13 @@ Tests monkeypatch the session directory via
 from __future__ import annotations
 
 import logging
+from pathlib import Path
 from typing import Optional
 
 import dspy
 
-from evolution.core.dataset_builder import EvalExample
+from evolution.core.config import EvolutionConfig
+from evolution.core.dataset_builder import EvalDataset, EvalExample, split_examples
 from evolution.core.external_importers import (
     contains_secret,
     iter_hermes_sessions,
@@ -311,3 +313,74 @@ class ToolRelevanceFilter:
 def _render_manifest_summary(manifest: ToolManifest) -> str:
     """Render the manifest as the judge's reference list."""
     return "\n".join(f"- {t.name}: {t.description}" for t in manifest.tools)
+
+
+def build_tool_dataset_from_sessions(
+    manifest: ToolManifest,
+    target_tool: str,
+    output_path: Optional[Path],
+    model: str,
+    max_examples: int = 200,
+    seed: int = 42,
+) -> tuple[EvalDataset, dict[str, int]]:
+    """Mine Hermes sessions, re-judge against the current manifest, and split.
+
+    ``target_tool`` is informational in v1 (used for logging only) — the
+    sampling is uniform across whatever the importer surfaces. v2 may bias
+    toward examples whose ``expected_behavior == target_tool``.
+
+    Returns ``(dataset, drops)`` where ``drops`` is a flat dict combining
+    the importer-stage and judge-stage drop counters:
+
+    Importer-stage keys (set by ``HermesToolImporter``):
+      short_task, slash_command, secret, no_tool_calls, non_manifest
+
+    Judge-stage keys (set by ``ToolRelevanceFilter``):
+      judge_irrelevant, judge_error, noisy_middle, low_confidence,
+      unknown_correct_tool
+
+    Both stages contribute to the dataset audit so the operator can see
+    why N candidates became M examples. The ``non_manifest`` count
+    specifically lands in ``gate_decision.json.dataset`` as
+    ``dropped_non_manifest_count`` (the most operator-relevant figure).
+
+    Writes per-split JSONL to ``output_path`` if given.
+    """
+    candidates, importer_drops = HermesToolImporter.extract_candidates(
+        manifest, limit=max_examples * 2,
+    )
+    logger.info(
+        "tool sessiondb: target=%s — found %d candidates from Hermes sessions; "
+        "importer drops: %s",
+        target_tool, len(candidates), importer_drops,
+    )
+
+    if not candidates:
+        return EvalDataset(), dict(importer_drops)
+
+    judge = ToolRelevanceFilter(model=model, manifest=manifest, seed=seed)
+    examples, judge_drops = judge.filter_and_score(candidates, max_examples=max_examples)
+    logger.info(
+        "tool sessiondb: target=%s — judge produced %d examples; "
+        "judge drops: %s",
+        target_tool, len(examples), judge_drops,
+    )
+
+    drops = {**importer_drops, **judge_drops}
+
+    if not examples:
+        return EvalDataset(), drops
+
+    config = EvolutionConfig()
+    dataset = split_examples(
+        examples,
+        seed=seed,
+        train_ratio=config.train_ratio,
+        val_ratio=config.val_ratio,
+        holdout_ratio=config.holdout_ratio,
+    )
+
+    if output_path is not None:
+        dataset.save(output_path)
+
+    return dataset, drops
