@@ -46,6 +46,7 @@ from evolution.core.quality_gate import (
 )
 from evolution.core.stats import paired_bootstrap
 from evolution.skills.knee_point import CandidatePick, select_knee_point
+from evolution.tools.session_mining import build_tool_dataset_from_sessions
 from evolution.tools.tool_judge import ToolJudge, make_tool_fitness_metric
 from evolution.tools.tool_module import (
     ToolModule,
@@ -116,13 +117,14 @@ def _dataset_payload(
     dataset: EvalDataset,
     *,
     dropped_tools: tuple[tuple[str, str], ...] = (),
+    sessiondb_drops: Optional[dict[str, int]] = None,
 ) -> dict[str, Any]:
     sources: dict[str, int] = {}
     categories: dict[str, int] = {}
     for ex in dataset.all_examples:
         sources[ex.source] = sources.get(ex.source, 0) + 1
         categories[ex.category] = categories.get(ex.category, 0) + 1
-    return {
+    payload: dict[str, Any] = {
         "size_total": len(dataset.all_examples),
         "size_train": len(dataset.train),
         "size_val": len(dataset.val),
@@ -134,6 +136,14 @@ def _dataset_payload(
         # path. Serialized as a list of 2-lists for JSON compatibility.
         "dropped_tools": [list(pair) for pair in dropped_tools],
     }
+    if sessiondb_drops is not None:
+        # Surface session-mining drop reasons (importer + judge stages) so an
+        # auditor can see why N candidates became M examples. Pulled out as a
+        # top-level field so calibration scripts don't have to know the
+        # internal key set.
+        payload["sessiondb_drops"] = dict(sessiondb_drops)
+        payload["dropped_non_manifest_count"] = int(sessiondb_drops.get("non_manifest", 0))
+    return payload
 
 
 def _compute_win_loss(
@@ -253,9 +263,11 @@ def evolve(
     apply: bool = False,
     patch: bool = False,
     seed: int = 42,
+    eval_source: str = "synthetic",
     eval_dataset_size: int = 150,
     holdout_ratio: float = 0.5,
     enable_confusable_bucket: bool = False,
+    dry_run: bool = False,
     output_dir: Optional[Path] = None,
     optimizer_model: str = "openai/gpt-4.1",
     reflection_model: Optional[str] = "openai/gpt-5-mini",
@@ -335,24 +347,64 @@ def evolve(
         COST_LEDGER.reset()
         console.print(f"  Run log: {run_log_path}")
 
-        console.print(f"\n[bold]Building tool-selection eval dataset[/bold] (synthetic, three buckets)")
-        builder = SyntheticDatasetBuilder(config)
-        raw_examples = builder.generate_tool_selection(
-            manifest=manifest,
-            target_tool=tool_name,
-            num_cases=config.eval_dataset_size,
-        )
-        dataset = split_examples(
-            raw_examples,
-            seed=config.seed,
-            train_ratio=config.train_ratio,
-            val_ratio=config.val_ratio,
-            holdout_ratio=config.holdout_ratio,
-        )
+        sessiondb_drops: Optional[dict[str, int]] = None
+        if eval_source == "synthetic":
+            console.print(f"\n[bold]Building tool-selection eval dataset[/bold] (synthetic, three buckets)")
+            builder = SyntheticDatasetBuilder(config)
+            raw_examples = builder.generate_tool_selection(
+                manifest=manifest,
+                target_tool=tool_name,
+                num_cases=config.eval_dataset_size,
+            )
+            dataset = split_examples(
+                raw_examples,
+                seed=config.seed,
+                train_ratio=config.train_ratio,
+                val_ratio=config.val_ratio,
+                holdout_ratio=config.holdout_ratio,
+            )
+        elif eval_source == "sessiondb":
+            console.print(
+                f"\n[bold]Building tool-selection eval dataset[/bold] (sessiondb, Hermes only)"
+            )
+            console.print(
+                "  [dim]Claude Code and Copilot logs don't carry tool-call data — only Hermes "
+                "session JSON is mined.[/dim]"
+            )
+            dataset, sessiondb_drops = build_tool_dataset_from_sessions(
+                manifest=manifest,
+                target_tool=tool_name,
+                output_path=Path("datasets") / "tools" / tool_name,
+                model=eval_model,
+                max_examples=config.eval_dataset_size,
+                seed=config.seed,
+            )
+            non_manifest = sessiondb_drops.get("non_manifest", 0)
+            if non_manifest:
+                console.print(
+                    f"  [yellow]Dropped {non_manifest} session invocations of tools "
+                    f"not in this manifest.[/yellow]"
+                )
+            if not dataset.all_examples:
+                console.print(
+                    "[red]✗ Session mining produced 0 usable examples. "
+                    "Drop breakdown: " + ", ".join(f"{k}={v}" for k, v in sessiondb_drops.items() if v) +
+                    ". Try --eval-source synthetic.[/red]"
+                )
+                sys.exit(1)
+        else:
+            raise ValueError(f"unknown eval_source: {eval_source!r}")
+
         console.print(
             f"  Generated {len(dataset.all_examples)} examples — "
             f"{len(dataset.train)} train / {len(dataset.val)} val / {len(dataset.holdout)} holdout"
         )
+
+        if dry_run:
+            console.print(f"\n[bold green]DRY RUN — dataset built; skipping GEPA loop.[/bold green]")
+            if sessiondb_drops:
+                console.print(f"  Drops: {sessiondb_drops}")
+            return {"decision": "dry-run", "dataset_size": len(dataset.all_examples)}
 
         if len(dataset.holdout) < config.min_holdout_size:
             console.print(
@@ -501,7 +553,7 @@ def evolve(
                 "failed_constraints": [c.constraint_name for c in static_constraints if not c.passed],
                 "messages": [c.message for c in static_constraints if not c.passed],
                 "knee_point": _knee_point_payload(knee_pick),
-                "dataset": _dataset_payload(dataset, dropped_tools=manifest.dropped_tools),
+                "dataset": _dataset_payload(dataset, dropped_tools=manifest.dropped_tools, sessiondb_drops=sessiondb_drops),
                 "run_inputs": run_inputs,
                 **tool_payload_fields,
             })
@@ -577,7 +629,7 @@ def evolve(
             "failed_constraints": [c.constraint_name for c in growth_constraints if not c.passed],
             "messages": [c.message for c in growth_constraints if not c.passed],
             "knee_point": _knee_point_payload(knee_pick),
-            "dataset": _dataset_payload(dataset, dropped_tools=manifest.dropped_tools),
+            "dataset": _dataset_payload(dataset, dropped_tools=manifest.dropped_tools, sessiondb_drops=sessiondb_drops),
             "run_inputs": run_inputs,
             **tool_payload_fields,
         }
@@ -746,6 +798,28 @@ def evolve(
         "rolls into target_correct."
     ),
 )
+@click.option(
+    "--eval-source",
+    default="synthetic",
+    type=click.Choice(["synthetic", "sessiondb"]),
+    help=(
+        "Where the eval dataset comes from. 'synthetic' (default) generates "
+        "tasks via the three-bucket synthetic generator. 'sessiondb' mines "
+        "real Hermes session logs (~/.hermes/sessions/) for "
+        "(task, invoked_tool) pairs and re-judges each pair against the "
+        "current manifest. Claude Code and Copilot logs don't carry tool-call "
+        "data and aren't mined."
+    ),
+)
+@click.option(
+    "--dry-run",
+    is_flag=True,
+    default=False,
+    help=(
+        "Build the eval dataset and stop. Useful for confirming sessiondb "
+        "discovery before spending judge + GEPA budget on a full run."
+    ),
+)
 def main(
     tool_name: str,
     manifest_path: Path,
@@ -757,6 +831,8 @@ def main(
     apply_flag: bool,
     patch_flag: bool,
     enable_confusable_bucket: bool,
+    eval_source: str,
+    dry_run: bool,
 ) -> None:
     """Evolve one tool description in an MCP manifest using DSPy + GEPA."""
     if apply_flag and patch_flag:
@@ -772,6 +848,8 @@ def main(
         patch=patch_flag,
         seed=seed,
         enable_confusable_bucket=enable_confusable_bucket,
+        eval_source=eval_source,
+        dry_run=dry_run,
     )
 
 

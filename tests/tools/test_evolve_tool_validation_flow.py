@@ -30,7 +30,7 @@ from unittest.mock import patch
 import dspy
 import pytest
 
-from evolution.core.dataset_builder import SyntheticDatasetBuilder
+from evolution.core.dataset_builder import EvalDataset, EvalExample, SyntheticDatasetBuilder
 from evolution.core.fitness import FitnessScore
 from evolution.tools.evolve_tool import _description_from_predictor, evolve
 from evolution.tools.tool_judge import ToolJudge
@@ -531,3 +531,144 @@ class TestRelativeManifestPath:
             )
 
         assert (run_dir / "gate_decision.json").exists()
+
+
+_SESSIONDB_DATASET_SIZE = 22  # 11/11 across the two categories — holdout (12) clears min=10
+
+
+def _make_sessiondb_dataset() -> tuple[EvalDataset, dict[str, int]]:
+    """Build a small (agreed + misselection) dataset the way the real miner would.
+
+    22 examples split 30/20/50 ≈ 6 train / 4 val / 12 holdout (≥ min_holdout_size=10).
+    """
+    half = _SESSIONDB_DATASET_SIZE // 2
+    examples = []
+    for i in range(half):
+        examples.append(EvalExample(
+            task_input=f"Find Python tests example {i}",
+            expected_behavior="search_files",
+            category="agreed",
+            source="hermes",
+        ))
+    for i in range(half):
+        examples.append(EvalExample(
+            task_input=f"Locate config files example {i}",
+            expected_behavior="search_files",
+            category="misselection",
+            source="hermes",
+        ))
+    from evolution.core.dataset_builder import split_examples
+    dataset = split_examples(
+        examples,
+        seed=42,
+        train_ratio=0.3,
+        val_ratio=0.2,
+        holdout_ratio=0.5,
+    )
+    drops = {
+        "short_task": 2, "slash_command": 1, "secret": 0,
+        "no_tool_calls": 5, "non_manifest": 3,
+        "judge_irrelevant": 1, "judge_error": 0, "noisy_middle": 2,
+        "low_confidence": 1, "unknown_correct_tool": 0,
+    }
+    return dataset, drops
+
+
+class TestEvalSourceSessiondb:
+    """The --eval-source sessiondb branch — orchestrator wiring + payload threading."""
+
+    def test_sessiondb_happy_path_writes_dataset_payload(self, temp_manifest: Path, tmp_path: Path):
+        manifest = ToolManifest.from_json_file(temp_manifest)
+        run_dir = tmp_path / "run"
+        dataset, drops = _make_sessiondb_dataset()
+
+        with (
+            patch(
+                "evolution.tools.evolve_tool.build_tool_dataset_from_sessions",
+                return_value=(dataset, drops),
+            ),
+            patch(
+                "evolution.tools.evolve_tool.dspy.GEPA",
+                new=_make_fake_gepa(_build_evolved_module(manifest, EVOLVED_DESCRIPTION)),
+            ),
+            patch.object(
+                ToolJudge,
+                "score",
+                new=_scripted_judge_score(target_score=0.95, regression_score=0.0),
+            ),
+            patch.object(
+                ToolModule,
+                "forward",
+                new=_scripted_module_forward(expected_tool_for_evolved="search_files"),
+            ),
+        ):
+            evolve(
+                tool_name="search_files",
+                manifest_path=temp_manifest,
+                iterations=1,
+                eval_source="sessiondb",
+                eval_dataset_size=_SESSIONDB_DATASET_SIZE,
+                holdout_ratio=0.5,
+                quality_gate="non-inferiority",
+                output_dir=run_dir,
+            )
+
+        payload = json.loads((run_dir / "gate_decision.json").read_text())
+        assert payload["dataset"]["sources"] == {"hermes": _SESSIONDB_DATASET_SIZE}
+        # Both category buckets land in the payload — the sessiondb-only namespace.
+        assert set(payload["dataset"]["categories"]) == {"agreed", "misselection"}
+        # Drops are threaded all the way into gate_decision.json.
+        assert payload["dataset"]["sessiondb_drops"] == drops
+        assert payload["dataset"]["dropped_non_manifest_count"] == 3
+
+    def test_sessiondb_empty_result_exits(self, temp_manifest: Path, tmp_path: Path):
+        empty_drops = {
+            "short_task": 0, "slash_command": 0, "secret": 0,
+            "no_tool_calls": 100, "non_manifest": 50,
+            "judge_irrelevant": 0, "judge_error": 0, "noisy_middle": 0,
+            "low_confidence": 0, "unknown_correct_tool": 0,
+        }
+        with patch(
+            "evolution.tools.evolve_tool.build_tool_dataset_from_sessions",
+            return_value=(EvalDataset(), empty_drops),
+        ):
+            with pytest.raises(SystemExit) as exc_info:
+                evolve(
+                    tool_name="search_files",
+                    manifest_path=temp_manifest,
+                    iterations=1,
+                    eval_source="sessiondb",
+                    output_dir=tmp_path / "run",
+                )
+        assert exc_info.value.code == 1
+
+    def test_dry_run_short_circuits_before_gepa(self, temp_manifest: Path, tmp_path: Path):
+        dataset, drops = _make_sessiondb_dataset()
+        run_dir = tmp_path / "run"
+
+        # GEPA must never be called. Use a sentinel that raises if invoked.
+        class _Tripwire:
+            def __init__(self, **kwargs):
+                raise AssertionError("GEPA should not be constructed in dry-run mode")
+
+        with (
+            patch(
+                "evolution.tools.evolve_tool.build_tool_dataset_from_sessions",
+                return_value=(dataset, drops),
+            ),
+            patch("evolution.tools.evolve_tool.dspy.GEPA", new=_Tripwire),
+        ):
+            result = evolve(
+                tool_name="search_files",
+                manifest_path=temp_manifest,
+                iterations=1,
+                eval_source="sessiondb",
+                eval_dataset_size=_SESSIONDB_DATASET_SIZE,
+                holdout_ratio=0.5,
+                dry_run=True,
+                output_dir=run_dir,
+            )
+
+        assert result == {"decision": "dry-run", "dataset_size": _SESSIONDB_DATASET_SIZE}
+        # No gate_decision.json should have been written.
+        assert not (run_dir / "gate_decision.json").exists()
