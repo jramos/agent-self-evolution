@@ -159,6 +159,10 @@ class TestBudgetAwareToolProposerTemplate:
         assert "quote or paraphrase" in template
 
     def test_template_length_budget_is_against_description_not_full_manifest(self):
+        """The length budget must reflect the description's size (~12 chars), not
+        the rendered manifest's size (~1000+ chars). A common confusion mode for
+        budget-aware proposers is to anchor the budget on the full instructions.
+        """
         manifest = ToolManifest.from_json_file(FIXTURES / "seven_tools.json")
         baseline = "Find things."
         proposer = BudgetAwareToolProposer(
@@ -168,4 +172,28 @@ class TestBudgetAwareToolProposerTemplate:
             baseline_chars=len(baseline),
         )
         template = proposer.propose.signature.instructions
-        assert str(len(baseline)) in template
+        # The current description's length must be quoted on its own anchor line.
+        assert f"current description is {len(baseline)} characters" in template
+        # The full rendered manifest (which the proposer renders for evaluation) is
+        # ~1000+ chars. That number must NOT appear in the budget framing.
+        rendered = _render_manifest_for_prompt(manifest, "search_files", baseline)
+        manifest_len = len(rendered)
+        assert manifest_len > 500, "fixture sanity: manifest should be >500 chars"
+        assert str(manifest_len) not in template, (
+            "budget framing should not reference the full manifest length"
+        )
+
+    def test_component_name_matches_named_predictors(self):
+        """Cross-module invariant: BudgetAwareToolProposer.component_name must match
+        what ToolModule.named_predictors() actually exposes. If DSPy renames the
+        inner Predict attribute of ChainOfThought, this test catches it loudly
+        instead of degrading the proposer to a silent no-op.
+        """
+        from evolution.tools.tool_module import ToolModule
+        manifest = ToolManifest.from_json_file(FIXTURES / "seven_tools.json")
+        module = ToolModule("search_files", manifest, "Find things.")
+        predictor_names = {name for name, _ in module.named_predictors()}
+        assert BudgetAwareToolProposer.component_name in predictor_names, (
+            f"component_name={BudgetAwareToolProposer.component_name!r} not in "
+            f"ToolModule.named_predictors()={predictor_names}; DSPy internals may have changed"
+        )
