@@ -186,11 +186,10 @@ def make_tool_fitness_metric(
             )
 
         score = judge.score(
-            task_input=gold.task_input,
-            expected_behavior=gold.expected_behavior,
-            agent_output=f"chosen_tool: {chosen}\nreasoning: {reasoning}",
-            artifact_size=None,
-            max_size=None,
+            task=gold.task_input,
+            expected_tool=gold.expected_behavior,
+            chosen_tool=chosen,
+            reasoning=reasoning,
         )
         feedback = _augment_feedback_with_pred_trace(
             score.feedback,
