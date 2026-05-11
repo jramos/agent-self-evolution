@@ -99,13 +99,13 @@ def make_tool_fitness_metric(
                 "make_tool_fitness_metric: unparseable chosen_tool output %r for task %r",
                 raw_chosen, gold.task_input,
             )
-            return _MetricResult(
+            return dspy.Prediction(
                 score=0.0,
                 feedback="Agent did not produce a parseable tool selection.",
             )
 
         if chosen not in {t.name for t in manifest.tools}:
-            return _MetricResult(
+            return dspy.Prediction(
                 score=0.0,
                 feedback=(
                     f"Agent chose nonexistent tool {chosen!r}; "
@@ -113,6 +113,11 @@ def make_tool_fitness_metric(
                 ),
             )
 
+        # Note: ToolJudgeSignature is defined for future use but the metric
+        # currently routes through LLMJudge.score (which uses JudgeSignature).
+        # The agent's chosen_tool + reasoning are packed into agent_output;
+        # PR 3 will wire ToolJudgeSignature through a tool-flavored judge
+        # so expected_tool / chosen_tool / reasoning land as distinct fields.
         score = judge.score(
             task_input=gold.task_input,
             expected_behavior=gold.expected_behavior,
@@ -120,22 +125,6 @@ def make_tool_fitness_metric(
             artifact_size=None,
             max_size=None,
         )
-        return score
+        return dspy.Prediction(score=score.composite, feedback=score.feedback)
 
     return metric
-
-
-class _MetricResult:
-    """Mirrors the FitnessScore shape for short-circuit returns from the metric."""
-
-    def __init__(self, score: float, feedback: str):
-        self.score = score
-        self.feedback = feedback
-        self.correctness = score
-        self.procedure_following = score
-        self.conciseness = score
-        self.length_penalty = 0.0
-
-    @property
-    def composite(self) -> float:
-        return self.score
