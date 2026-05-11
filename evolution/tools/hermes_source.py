@@ -10,9 +10,11 @@ lists). Schemas whose description itself is not extractable via AST
 
 The write path (``apply_evolved``) splices the evolved description into
 the source file's bytes at the AST-derived span, then atomically
-replaces the file. Multi-line spans collapse to a single triple-quoted
-string; name_ref descriptions modify the resolved constant's assignment
-rather than the schema dict's "description" key.
+replaces the file. The replacement is always a single-line ``repr()``-
+quoted literal so it round-trips byte-equal as a value regardless of
+embedded newlines, indent, or quote style. name_ref descriptions
+modify the resolved constant's assignment rather than the schema
+dict's "description" key.
 """
 
 from __future__ import annotations
