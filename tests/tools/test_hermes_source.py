@@ -141,17 +141,249 @@ class TestFStringDescription:
         assert "{__name__}" in tool.description
 
 
-class TestApplyEvolvedStub:
-    def test_apply_evolved_raises_not_implemented(self):
-        source = HermesToolSource(HERMES_SHAPE)
-        manifest = source.find_manifest(HERMES_SHAPE)
-        with pytest.raises(NotImplementedError, match="next commit"):
+@pytest.fixture
+def hermes_fixture_copy(tmp_path: Path) -> Path:
+    """Copy the hermes_shape fixture to a temp dir so write tests don't
+    mutate the checked-in tree.
+    """
+    dst = tmp_path / "hermes_shape"
+    shutil.copytree(HERMES_SHAPE, dst)
+    return dst
+
+
+def _bytes_at(file_path: Path, source_location: tuple) -> bytes:
+    """Return the raw byte slice covered by ``source_location`` in ``file_path``."""
+    from evolution.tools.hermes_source import _compute_byte_offset
+
+    text = file_path.read_text(encoding="utf-8")
+    _, lineno, col_offset, end_lineno, end_col_offset = source_location
+    start = _compute_byte_offset(text, lineno, col_offset)
+    end = _compute_byte_offset(text, end_lineno, end_col_offset)
+    return text[start:end].encode("utf-8")
+
+
+class TestApplyEvolved:
+    def test_apply_evolved_rewrites_literal_description(self, hermes_fixture_copy: Path):
+        source = HermesToolSource(hermes_fixture_copy)
+        manifest = source.find_manifest(hermes_fixture_copy)
+        original_size = (hermes_fixture_copy / "simple_tool.py").stat().st_size
+
+        new_desc = "An entirely new description for the simple tool."
+        source.apply_evolved(
+            source_path=hermes_fixture_copy,
+            evolved_manifest=manifest,
+            target_tool="simple_tool",
+            new_description=new_desc,
+        )
+
+        # Re-parse and verify the description landed.
+        reparsed = source.find_manifest(hermes_fixture_copy)
+        assert reparsed.find_tool("simple_tool").description == new_desc
+
+        # File size delta is bounded: only the description literal changed.
+        new_size = (hermes_fixture_copy / "simple_tool.py").stat().st_size
+        # Bounded by |new_desc| - |old_desc| plus a few bytes of quoting slop.
+        assert abs(new_size - original_size) <= len(new_desc) + 20
+
+    def test_apply_evolved_preserves_other_tools_bytes(self, hermes_fixture_copy: Path):
+        source = HermesToolSource(hermes_fixture_copy)
+        manifest = source.find_manifest(hermes_fixture_copy)
+
+        # Capture byte slices for the two non-target tools BEFORE writing.
+        a_loc_before = manifest.find_tool("list_tool_a").source_location
+        c_loc_before = manifest.find_tool("list_tool_c").source_location
+        a_bytes_before = _bytes_at(a_loc_before[0], a_loc_before)
+        c_bytes_before = _bytes_at(c_loc_before[0], c_loc_before)
+
+        source.apply_evolved(
+            source_path=hermes_fixture_copy,
+            evolved_manifest=manifest,
+            target_tool="list_tool_b",
+            new_description="Rewritten middle tool description.",
+        )
+
+        # Re-parse and look up untouched tools by their fresh source_locations.
+        reparsed = source.find_manifest(hermes_fixture_copy)
+        a_loc_after = reparsed.find_tool("list_tool_a").source_location
+        c_loc_after = reparsed.find_tool("list_tool_c").source_location
+        assert _bytes_at(a_loc_after[0], a_loc_after) == a_bytes_before
+        assert _bytes_at(c_loc_after[0], c_loc_after) == c_bytes_before
+
+    def test_apply_evolved_collapses_multi_line_concat_to_triple_quoted(
+        self, hermes_fixture_copy: Path
+    ):
+        source = HermesToolSource(hermes_fixture_copy)
+        manifest = source.find_manifest(hermes_fixture_copy)
+
+        new_desc = "A single replacement string for the multi-line concat tool."
+        source.apply_evolved(
+            source_path=hermes_fixture_copy,
+            evolved_manifest=manifest,
+            target_tool="multi_line_concat",
+            new_description=new_desc,
+        )
+
+        file_text = (hermes_fixture_copy / "multi_line_concat_tool.py").read_text()
+        # Parenthesized concat is gone (no quoted line followed by another
+        # quoted line — the old shape had three adjacent string literals).
+        assert "First line of the description" not in file_text
+        assert "Second paragraph with **markdown**" not in file_text
+        # Triple-quoted string with the new content is present.
+        assert '"""' in file_text
+        assert new_desc in file_text
+
+        # Re-parse and verify the description.
+        reparsed = source.find_manifest(hermes_fixture_copy)
+        assert reparsed.find_tool("multi_line_concat").description == new_desc
+
+    def test_apply_evolved_rewrites_name_ref_constant_not_schema_dict(
+        self, hermes_fixture_copy: Path
+    ):
+        source = HermesToolSource(hermes_fixture_copy)
+        manifest = source.find_manifest(hermes_fixture_copy)
+
+        new_desc = "Replaced constant body text."
+        source.apply_evolved(
+            source_path=hermes_fixture_copy,
+            evolved_manifest=manifest,
+            target_tool="name_ref_tool",
+            new_description=new_desc,
+        )
+
+        file_text = (hermes_fixture_copy / "name_ref_tool.py").read_text()
+        # Schema dict still references the constant by name, unchanged.
+        assert '"description": NAME_REF_DESCRIPTION' in file_text
+        # Constant assignment now has the new body.
+        assert f"NAME_REF_DESCRIPTION = {new_desc!r}" in file_text
+
+        reparsed = source.find_manifest(hermes_fixture_copy)
+        assert reparsed.find_tool("name_ref_tool").description == new_desc
+
+    def test_apply_evolved_refuses_f_string_source_kind(self, hermes_fixture_copy: Path):
+        source = HermesToolSource(hermes_fixture_copy)
+        manifest = source.find_manifest(hermes_fixture_copy)
+        original_text = (hermes_fixture_copy / "f_string_tool.py").read_text()
+
+        with pytest.raises(ValueError, match="f-string"):
             source.apply_evolved(
-                source_path=HERMES_SHAPE,
+                source_path=hermes_fixture_copy,
+                evolved_manifest=manifest,
+                target_tool="f_string_tool",
+                new_description="should not be written",
+            )
+
+        assert (hermes_fixture_copy / "f_string_tool.py").read_text() == original_text
+
+    def test_apply_evolved_raises_keyerror_for_unknown_target(
+        self, hermes_fixture_copy: Path
+    ):
+        source = HermesToolSource(hermes_fixture_copy)
+        manifest = source.find_manifest(hermes_fixture_copy)
+        with pytest.raises(KeyError, match="nonexistent_tool"):
+            source.apply_evolved(
+                source_path=hermes_fixture_copy,
+                evolved_manifest=manifest,
+                target_tool="nonexistent_tool",
+                new_description="anything",
+            )
+
+    def test_apply_evolved_handles_internal_quotes_in_new_description(
+        self, hermes_fixture_copy: Path
+    ):
+        source = HermesToolSource(hermes_fixture_copy)
+        manifest = source.find_manifest(hermes_fixture_copy)
+
+        tricky = 'a "tricky" string with \'mixed\' quotes'
+        source.apply_evolved(
+            source_path=hermes_fixture_copy,
+            evolved_manifest=manifest,
+            target_tool="simple_tool",
+            new_description=tricky,
+        )
+
+        reparsed = source.find_manifest(hermes_fixture_copy)
+        assert reparsed.find_tool("simple_tool").description == tricky
+
+    def test_apply_evolved_is_atomic(self, hermes_fixture_copy: Path, monkeypatch):
+        source = HermesToolSource(hermes_fixture_copy)
+        manifest = source.find_manifest(hermes_fixture_copy)
+        target_file = hermes_fixture_copy / "simple_tool.py"
+        original_text = target_file.read_text()
+        files_before = set(hermes_fixture_copy.iterdir())
+
+        def boom(src, dst):
+            raise OSError("simulated replace failure")
+
+        monkeypatch.setattr("evolution.tools.hermes_source.os.replace", boom)
+
+        with pytest.raises(OSError, match="simulated replace failure"):
+            source.apply_evolved(
+                source_path=hermes_fixture_copy,
                 evolved_manifest=manifest,
                 target_tool="simple_tool",
-                new_description="updated",
+                new_description="never written",
             )
+
+        # Original file is untouched and no temp file leftover.
+        assert target_file.read_text() == original_text
+        assert set(hermes_fixture_copy.iterdir()) == files_before
+
+    def test_apply_evolved_writes_atomically_on_success(self, hermes_fixture_copy: Path):
+        source = HermesToolSource(hermes_fixture_copy)
+        manifest = source.find_manifest(hermes_fixture_copy)
+
+        long_desc = "Lorem ipsum dolor sit amet, consectetur adipiscing elit. " * 20
+        source.apply_evolved(
+            source_path=hermes_fixture_copy,
+            evolved_manifest=manifest,
+            target_tool="simple_tool",
+            new_description=long_desc,
+        )
+
+        # No temp files lying around.
+        for path in hermes_fixture_copy.iterdir():
+            assert path.suffix != ".tmp", f"leftover temp file: {path}"
+
+        reparsed = source.find_manifest(hermes_fixture_copy)
+        assert reparsed.find_tool("simple_tool").description == long_desc
+
+    def test_apply_evolved_byte_equivalence_full_file_outside_target(
+        self, hermes_fixture_copy: Path
+    ):
+        """The canonical regression: bytes outside the target span are identical."""
+        source = HermesToolSource(hermes_fixture_copy)
+        manifest = source.find_manifest(hermes_fixture_copy)
+
+        target_file = hermes_fixture_copy / "list_tools.py"
+        original_bytes = target_file.read_bytes()
+        target_loc = manifest.find_tool("list_tool_b").source_location
+        _, lineno, col, end_lineno, end_col = target_loc
+        from evolution.tools.hermes_source import _compute_byte_offset
+
+        original_text = original_bytes.decode("utf-8")
+        start_byte = _compute_byte_offset(original_text, lineno, col)
+        end_byte = _compute_byte_offset(original_text, end_lineno, end_col)
+
+        new_desc = "Replacement description for list_tool_b."
+        source.apply_evolved(
+            source_path=hermes_fixture_copy,
+            evolved_manifest=manifest,
+            target_tool="list_tool_b",
+            new_description=new_desc,
+        )
+
+        new_bytes = target_file.read_bytes()
+        new_text = new_bytes.decode("utf-8")
+
+        # Prefix (bytes before the target span) must match exactly.
+        assert new_bytes[:start_byte] == original_bytes[:start_byte]
+
+        # Suffix (bytes after the target span) must match exactly. The
+        # replacement may have a different length than the original span,
+        # so locate the suffix in new_text by searching for a known anchor
+        # past the original end.
+        original_suffix = original_text[end_byte:]
+        assert new_text.endswith(original_suffix)
 
 
 class TestSidecarMetadata:
