@@ -1,5 +1,6 @@
-"""Tool description evolution — manifest data model, DSPy module, judge, and proposer."""
+"""Tool description evolution — manifest data model, DSPy module, judge, proposer, and orchestrator."""
 
+from evolution.tools.evolve_tool import evolve
 from evolution.tools.tool_judge import (
     ToolJudgeSignature,
     make_tool_fitness_metric,
@@ -32,6 +33,7 @@ __all__ = [
     "ToolSelectionSignature",
     "ToolSource",
     "discover_tool_sources",
+    "evolve",
     "extract_and_rebuild",
     "make_tool_fitness_metric",
 ]
