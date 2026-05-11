@@ -16,9 +16,12 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Protocol
 
-# Conservative subset of MCP-spec-allowed tool names.
-# Names outside this set can break sentinel parsing in BudgetAwareToolProposer.
-_TOOL_NAME_RE = re.compile(r"^[a-zA-Z0-9_-]{1,64}$")
+# Conservative subset of MCP-spec-allowed tool names. The 128-char bound
+# accommodates namespaced names like Claude Code's
+# ``mcp__plugin_<server>__<tool>`` which can run 70-80 chars in practice;
+# the character set is restricted to keep sentinel parsing safe (no regex
+# metacharacters, no embedded ``-->``).
+_TOOL_NAME_RE = re.compile(r"^[a-zA-Z0-9_-]{1,128}$")
 
 
 def _normalize_tool_name(name: str) -> str:
@@ -35,7 +38,13 @@ class SentinelParseError(ValueError):
 
 @dataclass(frozen=True)
 class ToolEntry:
-    """A single tool's entry in the manifest."""
+    """A single tool's entry in the manifest.
+
+    Treat ``input_schema`` as read-only. ``frozen=True`` prevents rebinding the
+    attribute but does not deep-freeze the dict; mutating it in place corrupts
+    any other ToolEntry / ToolManifest that shares the reference (which is
+    by design — ``replace_description`` preserves the original reference).
+    """
     name: str
     description: str
     input_schema: dict[str, Any] = field(default_factory=dict)
@@ -63,7 +72,12 @@ class ToolEntry:
 
 @dataclass(frozen=True)
 class ToolManifest:
-    """A full tool manifest — the unit of work for tool description evolution."""
+    """A full tool manifest — the unit of work for tool description evolution.
+
+    Treat ``confusable_neighbors`` as read-only (same contract as
+    ``ToolEntry.input_schema`` — the dataclass is structurally frozen but the
+    inner dict is not deep-frozen).
+    """
     tools: tuple[ToolEntry, ...]
     confusable_neighbors: dict[str, str] = field(default_factory=dict)
 
