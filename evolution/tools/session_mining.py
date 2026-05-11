@@ -20,7 +20,14 @@ from __future__ import annotations
 import logging
 from typing import Optional
 
-from evolution.core.external_importers import contains_secret, iter_hermes_sessions
+import dspy
+
+from evolution.core.dataset_builder import EvalExample
+from evolution.core.external_importers import (
+    contains_secret,
+    iter_hermes_sessions,
+    parse_scoring_json,
+)
 from evolution.tools.tool_source import ToolManifest
 
 logger = logging.getLogger(__name__)
@@ -143,3 +150,164 @@ def _find_invoked_tool(messages: list[dict], start: int) -> Optional[str]:
             if name:
                 return name
     return None
+
+
+# Confidence-band thresholds for the judge's misselection label flip.
+# The judge reads the same manifest the agent saw, so it shares the
+# agent's blind spot for whatever tool is currently being evolved —
+# the high threshold is the mitigation. Drop the noisy middle entirely:
+# false-flipped labels poison GEPA's reflective feedback.
+HIGH_CONFIDENCE_THRESHOLD = 0.85
+LOW_CONFIDENCE_THRESHOLD = 0.6
+
+CATEGORY_AGREED = "agreed"
+CATEGORY_MISSELECTION = "misselection"
+
+
+class ToolRelevanceFilter:
+    """LLM-judge re-assessment of candidates against the current manifest.
+
+    For each ``(task, invoked_tool)`` candidate, the judge picks the tool
+    it would have chosen given the current manifest and reports a
+    confidence in [0, 1]. The label decision table:
+
+    ===========================  ===========================  ===========
+    Judge state                  Action                        Category
+    ===========================  ===========================  ===========
+    ``relevant=False``           drop                          —
+    agree, any confidence        keep                          ``agreed``
+    disagree, conf ≥ 0.85        keep with flipped label       ``misselection``
+    disagree, 0.6 ≤ conf < 0.85  drop (noisy middle)           —
+    disagree, conf < 0.6         drop                          —
+    ===========================  ===========================  ===========
+
+    The judge can hallucinate a ``correct_tool`` not in the manifest;
+    those disagreements are dropped with their own counter.
+    """
+
+    class ScoreToolSelection(dspy.Signature):
+        """Score whether the invoked tool was the right choice for the task.
+
+        Return JSON with:
+        - relevant: boolean (is this a realistic tool-selection task at all?)
+        - correct_tool: string (which tool from the manifest you would pick)
+        - confidence: float in [0, 1] (how confident you are in correct_tool)
+        """
+        task: str = dspy.InputField(desc="The user's task")
+        invoked_tool: str = dspy.InputField(desc="The tool the agent actually invoked")
+        manifest_summary: str = dspy.InputField(
+            desc="Current manifest: each line is '- <tool_name>: <description>'"
+        )
+        scoring: str = dspy.OutputField(
+            desc="JSON object with: relevant, correct_tool, confidence"
+        )
+
+    def __init__(self, model: str, manifest: ToolManifest, seed: int = 42):
+        self.scorer = dspy.ChainOfThought(self.ScoreToolSelection)
+        self.model = model
+        self.manifest = manifest
+        self.manifest_names = {t.name for t in manifest.tools}
+        self.seed = seed
+        self._manifest_summary = _render_manifest_summary(manifest)
+
+    def filter_and_score(
+        self,
+        candidates: list[dict],
+        max_examples: int = 200,
+    ) -> tuple[list[EvalExample], dict[str, int]]:
+        """Score candidates; emit EvalExamples per the band rule.
+
+        Cost ceiling: at most ``max_examples * 2`` judge calls. Stops
+        early once ``max_examples`` examples have been collected.
+
+        Returns ``(examples, band_drops)`` where ``band_drops`` counts
+        the reasons candidates were rejected by the judge layer.
+        """
+        examples: list[EvalExample] = []
+        band_drops = {
+            "judge_irrelevant": 0,
+            "judge_error": 0,
+            "noisy_middle": 0,
+            "low_confidence": 0,
+            "unknown_correct_tool": 0,
+        }
+
+        lm = dspy.LM(self.model, temperature=0.0, max_tokens=2000)
+        budget = candidates[: max_examples * 2]
+
+        for cand in budget:
+            scoring = self._score_one(cand, lm)
+            if scoring is None:
+                band_drops["judge_error"] += 1
+                continue
+            if not scoring.get("relevant", False):
+                band_drops["judge_irrelevant"] += 1
+                continue
+
+            correct_tool = (scoring.get("correct_tool") or "").strip()
+            try:
+                confidence = float(scoring.get("confidence", 0.0) or 0.0)
+            except (TypeError, ValueError):
+                confidence = 0.0
+
+            invoked = cand["invoked_tool"]
+            decision = self._decide(invoked, correct_tool, confidence)
+            if decision is None:
+                # Bookkeeping for the drop band.
+                if correct_tool and correct_tool != invoked and correct_tool not in self.manifest_names:
+                    band_drops["unknown_correct_tool"] += 1
+                elif confidence < LOW_CONFIDENCE_THRESHOLD:
+                    band_drops["low_confidence"] += 1
+                else:
+                    band_drops["noisy_middle"] += 1
+                continue
+
+            expected, category = decision
+            examples.append(EvalExample(
+                task_input=cand["task_input"][:2000],
+                expected_behavior=expected,
+                difficulty="medium",
+                category=category,
+                source=cand["source"],
+            ))
+
+            if len(examples) >= max_examples:
+                break
+
+        return examples, band_drops
+
+    def _score_one(self, candidate: dict, lm) -> Optional[dict]:
+        try:
+            with dspy.context(lm=lm):
+                result = self.scorer(
+                    task=candidate["task_input"][:1000],
+                    invoked_tool=candidate["invoked_tool"],
+                    manifest_summary=self._manifest_summary,
+                )
+        except Exception:
+            return None
+        return parse_scoring_json(result.scoring)
+
+    def _decide(
+        self,
+        invoked: str,
+        correct_tool: str,
+        confidence: float,
+    ) -> Optional[tuple[str, str]]:
+        """Apply the confidence-band decision table.
+
+        Returns ``(expected_behavior, category)`` if the example is kept,
+        ``None`` if dropped (the caller bookkeeps which band it fell in).
+        """
+        if correct_tool == invoked:
+            return invoked, CATEGORY_AGREED
+        if correct_tool not in self.manifest_names:
+            return None
+        if confidence >= HIGH_CONFIDENCE_THRESHOLD:
+            return correct_tool, CATEGORY_MISSELECTION
+        return None
+
+
+def _render_manifest_summary(manifest: ToolManifest) -> str:
+    """Render the manifest as the judge's reference list."""
+    return "\n".join(f"- {t.name}: {t.description}" for t in manifest.tools)

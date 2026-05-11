@@ -2,12 +2,21 @@
 
 import json
 from pathlib import Path
-from unittest.mock import patch
+from types import SimpleNamespace
+from unittest.mock import MagicMock, patch
 
 import pytest
 
 from evolution.core.external_importers import HermesSessionImporter
-from evolution.tools.session_mining import HermesToolImporter, _extract_tool_name
+from evolution.tools.session_mining import (
+    CATEGORY_AGREED,
+    CATEGORY_MISSELECTION,
+    HIGH_CONFIDENCE_THRESHOLD,
+    LOW_CONFIDENCE_THRESHOLD,
+    HermesToolImporter,
+    ToolRelevanceFilter,
+    _extract_tool_name,
+)
 from evolution.tools.tool_source import ToolManifest
 
 FIXTURES = Path(__file__).parent.parent / "fixtures" / "tool_manifests"
@@ -199,3 +208,203 @@ class TestHermesToolImporterExtraction:
             candidates, drops = HermesToolImporter.extract_candidates(manifest)
         assert candidates == []
         assert all(v == 0 for v in drops.values())
+
+
+def _make_filter_with_scorer(manifest: ToolManifest, scorer_response: str) -> ToolRelevanceFilter:
+    """Build a ToolRelevanceFilter whose scorer returns a fixed JSON response."""
+    rf = ToolRelevanceFilter.__new__(ToolRelevanceFilter)
+    rf.model = "test-model"
+    rf.manifest = manifest
+    rf.manifest_names = {t.name for t in manifest.tools}
+    rf.seed = 42
+    rf._manifest_summary = "- search_files: Find things.\n- grep_in_terminal: Grep."
+    rf.scorer = MagicMock(return_value=SimpleNamespace(scoring=scorer_response))
+    return rf
+
+
+def _make_filter_with_responses(manifest: ToolManifest, responses: list[str]) -> ToolRelevanceFilter:
+    """Build a filter whose scorer returns a different response per call."""
+    rf = _make_filter_with_scorer(manifest, scorer_response="")
+    rf.scorer = MagicMock(side_effect=[SimpleNamespace(scoring=r) for r in responses])
+    return rf
+
+
+@pytest.fixture
+def mock_dspy_for_filter():
+    """Mock dspy.LM and dspy.context for ToolRelevanceFilter tests."""
+    with patch("evolution.tools.session_mining.dspy") as mock:
+        mock.context.return_value.__enter__ = MagicMock(return_value=None)
+        mock.context.return_value.__exit__ = MagicMock(return_value=False)
+        yield mock
+
+
+class TestToolRelevanceFilterBandDecision:
+    """The confidence-band decision table — the load-bearing rule."""
+
+    def test_agreement_kept_with_agreed_category(self, manifest, mock_dspy_for_filter):
+        rf = _make_filter_with_scorer(manifest, json.dumps({
+            "relevant": True,
+            "correct_tool": "search_files",
+            "confidence": 0.5,  # confidence ignored on agreement
+        }))
+        candidates = [{"task_input": "Find Python tests", "invoked_tool": "search_files", "source": "hermes"}]
+
+        examples, drops = rf.filter_and_score(candidates, max_examples=10)
+
+        assert len(examples) == 1
+        assert examples[0].expected_behavior == "search_files"
+        assert examples[0].category == CATEGORY_AGREED
+        assert examples[0].source == "hermes"
+        assert all(v == 0 for v in drops.values())
+
+    def test_high_confidence_disagreement_flips_label(self, manifest, mock_dspy_for_filter):
+        rf = _make_filter_with_scorer(manifest, json.dumps({
+            "relevant": True,
+            "correct_tool": "search_files",
+            "confidence": 0.9,  # ≥ 0.85
+        }))
+        candidates = [{"task_input": "Find Python tests", "invoked_tool": "grep_in_terminal", "source": "hermes"}]
+
+        examples, drops = rf.filter_and_score(candidates, max_examples=10)
+
+        assert len(examples) == 1
+        assert examples[0].expected_behavior == "search_files"  # flipped
+        assert examples[0].category == CATEGORY_MISSELECTION
+        assert all(v == 0 for v in drops.values())
+
+    def test_noisy_middle_disagreement_dropped(self, manifest, mock_dspy_for_filter):
+        rf = _make_filter_with_scorer(manifest, json.dumps({
+            "relevant": True,
+            "correct_tool": "search_files",
+            "confidence": 0.7,  # 0.6 ≤ conf < 0.85
+        }))
+        candidates = [{"task_input": "Find Python tests", "invoked_tool": "grep_in_terminal", "source": "hermes"}]
+
+        examples, drops = rf.filter_and_score(candidates, max_examples=10)
+
+        assert examples == []
+        assert drops["noisy_middle"] == 1
+
+    def test_low_confidence_disagreement_dropped(self, manifest, mock_dspy_for_filter):
+        rf = _make_filter_with_scorer(manifest, json.dumps({
+            "relevant": True,
+            "correct_tool": "search_files",
+            "confidence": 0.3,  # < 0.6
+        }))
+        candidates = [{"task_input": "Find Python tests", "invoked_tool": "grep_in_terminal", "source": "hermes"}]
+
+        examples, drops = rf.filter_and_score(candidates, max_examples=10)
+
+        assert examples == []
+        assert drops["low_confidence"] == 1
+
+    def test_judge_threshold_exactly_at_high_bound_keeps(self, manifest, mock_dspy_for_filter):
+        # confidence == 0.85 → keep (boundary is inclusive at high end)
+        rf = _make_filter_with_scorer(manifest, json.dumps({
+            "relevant": True,
+            "correct_tool": "search_files",
+            "confidence": HIGH_CONFIDENCE_THRESHOLD,
+        }))
+        candidates = [{"task_input": "Find Python tests", "invoked_tool": "grep_in_terminal", "source": "hermes"}]
+
+        examples, drops = rf.filter_and_score(candidates, max_examples=10)
+
+        assert len(examples) == 1
+        assert examples[0].category == CATEGORY_MISSELECTION
+
+    def test_judge_threshold_exactly_at_low_bound_drops_as_noisy(self, manifest, mock_dspy_for_filter):
+        # confidence == 0.6 → drop into noisy_middle (boundary inclusive at low side of middle band)
+        rf = _make_filter_with_scorer(manifest, json.dumps({
+            "relevant": True,
+            "correct_tool": "search_files",
+            "confidence": LOW_CONFIDENCE_THRESHOLD,
+        }))
+        candidates = [{"task_input": "Find Python tests", "invoked_tool": "grep_in_terminal", "source": "hermes"}]
+
+        examples, drops = rf.filter_and_score(candidates, max_examples=10)
+
+        assert examples == []
+        assert drops["noisy_middle"] == 1
+
+
+class TestToolRelevanceFilterEdgeCases:
+    """Drop reasons that aren't the confidence band itself."""
+
+    def test_irrelevant_judgment_dropped(self, manifest, mock_dspy_for_filter):
+        rf = _make_filter_with_scorer(manifest, json.dumps({"relevant": False}))
+        candidates = [{"task_input": "Random text", "invoked_tool": "search_files", "source": "hermes"}]
+
+        examples, drops = rf.filter_and_score(candidates, max_examples=10)
+        assert examples == []
+        assert drops["judge_irrelevant"] == 1
+
+    def test_malformed_json_counted_as_judge_error(self, manifest, mock_dspy_for_filter):
+        rf = _make_filter_with_scorer(manifest, "the judge could not parse this task")
+        candidates = [{"task_input": "Find files", "invoked_tool": "search_files", "source": "hermes"}]
+
+        examples, drops = rf.filter_and_score(candidates, max_examples=10)
+        assert examples == []
+        assert drops["judge_error"] == 1
+
+    def test_judge_exception_counted_as_judge_error(self, manifest, mock_dspy_for_filter):
+        rf = _make_filter_with_scorer(manifest, "")
+        rf.scorer = MagicMock(side_effect=RuntimeError("judge LM timed out"))
+        candidates = [{"task_input": "Find files", "invoked_tool": "search_files", "source": "hermes"}]
+
+        examples, drops = rf.filter_and_score(candidates, max_examples=10)
+        assert examples == []
+        assert drops["judge_error"] == 1
+
+    def test_correct_tool_outside_manifest_dropped(self, manifest, mock_dspy_for_filter):
+        # The judge hallucinates a tool name not in the manifest.
+        rf = _make_filter_with_scorer(manifest, json.dumps({
+            "relevant": True,
+            "correct_tool": "imaginary_tool",
+            "confidence": 0.95,
+        }))
+        candidates = [{"task_input": "Find Python tests", "invoked_tool": "search_files", "source": "hermes"}]
+
+        examples, drops = rf.filter_and_score(candidates, max_examples=10)
+        assert examples == []
+        assert drops["unknown_correct_tool"] == 1
+
+    def test_max_examples_cap_stops_collection(self, manifest, mock_dspy_for_filter):
+        rf = _make_filter_with_scorer(manifest, json.dumps({
+            "relevant": True,
+            "correct_tool": "search_files",
+            "confidence": 0.9,
+        }))
+        candidates = [
+            {"task_input": f"Task number {i}", "invoked_tool": "search_files", "source": "hermes"}
+            for i in range(20)
+        ]
+
+        examples, _ = rf.filter_and_score(candidates, max_examples=5)
+        assert len(examples) == 5
+
+    def test_cost_ceiling_caps_judge_calls(self, manifest, mock_dspy_for_filter):
+        # All judgements come back irrelevant (so nothing is collected), but the
+        # filter should still cap LM calls at max_examples * 2.
+        rf = _make_filter_with_scorer(manifest, json.dumps({"relevant": False}))
+        candidates = [
+            {"task_input": f"Task number {i}", "invoked_tool": "search_files", "source": "hermes"}
+            for i in range(100)
+        ]
+
+        rf.filter_and_score(candidates, max_examples=10)
+        assert rf.scorer.call_count == 20  # 10 * 2
+
+    def test_garbage_confidence_treated_as_zero(self, manifest, mock_dspy_for_filter):
+        # LLM might emit "high" or null; we coerce to 0.0 and drop into low_confidence.
+        rf = _make_filter_with_responses(manifest, [
+            json.dumps({"relevant": True, "correct_tool": "search_files", "confidence": "high"}),
+            json.dumps({"relevant": True, "correct_tool": "search_files", "confidence": None}),
+        ])
+        candidates = [
+            {"task_input": "Find files", "invoked_tool": "grep_in_terminal", "source": "hermes"},
+            {"task_input": "Find more files", "invoked_tool": "grep_in_terminal", "source": "hermes"},
+        ]
+
+        examples, drops = rf.filter_and_score(candidates, max_examples=10)
+        assert examples == []
+        assert drops["low_confidence"] == 2
