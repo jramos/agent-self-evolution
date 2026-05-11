@@ -53,13 +53,15 @@ from evolution.tools.tool_module import (
     _extract_description_from_sentinels,
 )
 from evolution.tools.tool_proposer import BudgetAwareToolProposer
-from evolution.tools.tool_source import ToolManifest
+from evolution.tools.tool_source import SentinelParseError, ToolManifest
 
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s %(levelname)s %(name)s: %(message)s",
     datefmt="%Y/%m/%d %H:%M:%S",
 )
+
+logger = logging.getLogger(__name__)
 
 console = Console()
 
