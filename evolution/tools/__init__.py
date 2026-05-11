@@ -1,5 +1,9 @@
 """Tool description evolution — Phase 2 of the framework."""
 
+from evolution.tools.tool_judge import (
+    ToolJudgeSignature,
+    make_tool_fitness_metric,
+)
 from evolution.tools.tool_module import (
     ToolModule,
     ToolSelectionSignature,
@@ -22,10 +26,12 @@ __all__ = [
     "MCPManifestSource",
     "SentinelParseError",
     "ToolEntry",
+    "ToolJudgeSignature",
     "ToolManifest",
     "ToolModule",
     "ToolSelectionSignature",
     "ToolSource",
     "discover_tool_sources",
     "extract_and_rebuild",
+    "make_tool_fitness_metric",
 ]
