@@ -840,6 +840,14 @@ class TestFileHandlerLifecycle:
     def test_evolve_does_not_leak_file_handlers(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ):
+        """Drive evolve() through its exception-exit path to verify the
+        try/finally cleanup runs even when the body raises.
+
+        The skill side has no pre-existing end-to-end mocked test pattern to
+        mirror, so this exercises the exception path rather than the deploy
+        path. The exception-exit path is the more direct assertion for the
+        try/finally contract — only try/finally guarantees cleanup on raise.
+        """
         self._seed_skill(tmp_path)
         # Run evolve() from inside tmp_path so its "output/" dir doesn't
         # collide with the repo's checked-in `output/` directory.

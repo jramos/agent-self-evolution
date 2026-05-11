@@ -61,8 +61,6 @@ logging.basicConfig(
     datefmt="%Y/%m/%d %H:%M:%S",
 )
 
-logger = logging.getLogger(__name__)
-
 console = Console()
 
 
@@ -77,7 +75,7 @@ def _description_from_predictor(predictor: Any, target_tool_name: str) -> str:
     try:
         return _extract_description_from_sentinels(instructions, target_tool_name)
     except SentinelParseError as e:
-        logger.warning(
+        logging.getLogger(__name__).warning(
             "could not extract description from predictor instructions "
             "for target %r: %s; reporting empty for budget/parsimony purposes",
             target_tool_name, e,
