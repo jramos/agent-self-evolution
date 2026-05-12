@@ -16,7 +16,7 @@ from pathlib import Path
 from typing import Protocol
 
 from evolution.tools.hermes_source import HermesToolSource
-from evolution.tools.tool_source import ToolManifest
+from evolution.tools.tool_source import MCPManifestSource, ToolManifest
 
 
 class ArtifactInstaller(Protocol):
@@ -62,14 +62,13 @@ class HermesToolDescriptionInstaller:
         return Path(entry.source_location[0])
 
     def install(self, artifact_source: Path) -> str:
-        """Read ``artifact_source`` as the new full module file content,
-        splice the target tool's description from it into the installed
-        manifest's source. Returns sha256 of ``target_path``."""
-        evolved_manifest = self._read_manifest_from_file(artifact_source)
-        evolved_entry = evolved_manifest.find_tool(self.tool_name)
-        # Re-read the live manifest each install so we always splice into
-        # the current on-disk state (the validator may have just restored
-        # the baseline before this call).
+        """Splice the target tool's description from ``artifact_source`` into
+        the live install. Always splices against the LIVE manifest's
+        source_location (the live target_path), so the description from
+        the evolved artifact is the only thing carried over — the byte
+        offsets come from re-parsing the current on-disk file.
+        """
+        new_description = self._extract_description(artifact_source)
         live_manifest = self._source.find_manifest(self.hermes_repo / "tools")
         if live_manifest is None:
             raise FileNotFoundError(
@@ -77,30 +76,41 @@ class HermesToolDescriptionInstaller:
             )
         self._source.apply_evolved(
             source_path=self.target_path,
-            evolved_manifest=evolved_manifest,
+            evolved_manifest=live_manifest,
             target_tool=self.tool_name,
-            new_description=evolved_entry.description,
+            new_description=new_description,
         )
         return sha256_of(self.target_path)
 
-    def _read_manifest_from_file(self, artifact_source: Path) -> ToolManifest:
-        # The artifact source is itself a Hermes tool-module file. Parse
-        # it as a one-file manifest by giving the source a tmp root.
-        if artifact_source.parent != self.hermes_repo / "tools":
-            # Same parse logic but rooted at a tmp dir holding only the
-            # candidate file. HermesToolSource's discovery walks .py files
-            # in its root, so we materialize a single-file root.
-            with tempfile.TemporaryDirectory(prefix="cl_install_") as tmp:
-                tmp_root = Path(tmp)
-                staged = tmp_root / artifact_source.name
-                staged.write_bytes(artifact_source.read_bytes())
-                manifest = HermesToolSource(tmp_root).find_manifest(tmp_root)
-                if manifest is None:
-                    raise ValueError(
-                        f"Could not parse {artifact_source} as a Hermes tool module"
-                    )
-                return manifest
-        return self._source.find_manifest(artifact_source.parent)  # type: ignore[return-value]
+    def _extract_description(self, artifact_source: Path) -> str:
+        """Return the description string for ``self.tool_name`` from
+        ``artifact_source``. Dispatches on suffix so the installer can
+        consume either a Hermes tool-module .py file (e.g., a
+        hand-edited baseline) or an MCP-shape manifest .json (the
+        output ``evolve_tool`` produces and that ``--benchmark-cmd``
+        threads through as ``EVOLVED_PATH`` / ``BASELINE_PATH``).
+        """
+        if artifact_source.suffix == ".json":
+            manifest = MCPManifestSource(artifact_source.parent).find_manifest(artifact_source)
+            if manifest is None:
+                raise ValueError(f"Could not parse {artifact_source} as MCP manifest JSON")
+            return manifest.find_tool(self.tool_name).description
+
+        # Default: Hermes tool-module .py file. The parse uses
+        # HermesToolSource pointed at a temp-dir root holding only this
+        # file; we extract the description before the temp dir is cleaned
+        # up so source_location-bound reads against the temp dir can't
+        # happen later.
+        with tempfile.TemporaryDirectory(prefix="cl_install_") as tmp:
+            tmp_root = Path(tmp)
+            staged = tmp_root / artifact_source.name
+            staged.write_bytes(artifact_source.read_bytes())
+            manifest = HermesToolSource(tmp_root).find_manifest(tmp_root)
+            if manifest is None:
+                raise ValueError(
+                    f"Could not parse {artifact_source} as a Hermes tool module"
+                )
+            return manifest.find_tool(self.tool_name).description
 
 
 def sha256_of(path: Path) -> str:
