@@ -31,6 +31,7 @@ import dspy
 import pytest
 
 from evolution.core.dataset_builder import EvalDataset, EvalExample, SyntheticDatasetBuilder
+from evolution.core.external_importers import HermesSessionImporter
 from evolution.core.fitness import FitnessScore
 from evolution.tools.evolve_tool import _description_from_predictor, evolve
 from evolution.tools.tool_judge import ToolJudge
@@ -642,21 +643,27 @@ class TestEvalSourceSessiondb:
                 )
         assert exc_info.value.code == 1
 
-    def test_dry_run_short_circuits_before_gepa(self, temp_manifest: Path, tmp_path: Path):
-        dataset, drops = _make_sessiondb_dataset()
+    def test_sessiondb_dry_run_skips_judge_and_gepa(self, temp_manifest: Path, tmp_path: Path):
+        """Dry-run on the sessiondb path runs only the (free) importer; the
+        judge and GEPA must never be constructed. Tripwires both."""
         run_dir = tmp_path / "run"
+        sessions_dir = tmp_path / "sessions"
+        sessions_dir.mkdir()  # empty — importer returns 0 candidates cleanly
 
-        # GEPA must never be called. Use a sentinel that raises if invoked.
         class _Tripwire:
-            def __init__(self, **kwargs):
-                raise AssertionError("GEPA should not be constructed in dry-run mode")
+            def __init__(self, *args, **kwargs):
+                raise AssertionError(
+                    f"{type(self).__name__} should not be constructed in dry-run mode"
+                )
 
         with (
             patch(
                 "evolution.tools.evolve_tool.build_tool_dataset_from_sessions",
-                return_value=(dataset, drops),
+                new=_Tripwire,
             ),
+            patch("evolution.tools.session_mining.ToolRelevanceFilter", new=_Tripwire),
             patch("evolution.tools.evolve_tool.dspy.GEPA", new=_Tripwire),
+            patch.object(HermesSessionImporter, "SESSION_DIR", sessions_dir),
         ):
             result = evolve(
                 tool_name="search_files",
@@ -669,6 +676,44 @@ class TestEvalSourceSessiondb:
                 output_dir=run_dir,
             )
 
-        assert result == {"decision": "dry-run", "dataset_size": _SESSIONDB_DATASET_SIZE}
+        assert result["decision"] == "dry-run"
+        assert result["eval_source"] == "sessiondb"
+        assert result["candidate_count"] == 0
+        # All importer drop keys present even when zero candidates surfaced.
+        assert set(result["importer_drops"]) == {
+            "short_task", "slash_command", "secret", "no_tool_calls", "non_manifest",
+        }
+        assert result["invoked_tool_distribution"] == {}
         # No gate_decision.json should have been written.
+        assert not (run_dir / "gate_decision.json").exists()
+
+    def test_synthetic_dry_run_skips_dataset_gen_and_gepa(
+        self, temp_manifest: Path, tmp_path: Path
+    ):
+        """Dry-run on the synthetic path skips the LM-spending dataset
+        generator entirely; just prints what would happen."""
+        run_dir = tmp_path / "run"
+
+        class _Tripwire:
+            def __init__(self, *args, **kwargs):
+                raise AssertionError(
+                    f"{type(self).__name__} should not be constructed in dry-run mode"
+                )
+
+        with (
+            patch("evolution.tools.evolve_tool.SyntheticDatasetBuilder", new=_Tripwire),
+            patch("evolution.tools.evolve_tool.dspy.GEPA", new=_Tripwire),
+        ):
+            result = evolve(
+                tool_name="search_files",
+                manifest_path=temp_manifest,
+                iterations=1,
+                eval_source="synthetic",
+                eval_dataset_size=30,
+                holdout_ratio=0.5,
+                dry_run=True,
+                output_dir=run_dir,
+            )
+
+        assert result == {"decision": "dry-run", "eval_source": "synthetic"}
         assert not (run_dir / "gate_decision.json").exists()

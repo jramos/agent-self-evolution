@@ -46,7 +46,10 @@ from evolution.core.quality_gate import (
 )
 from evolution.core.stats import paired_bootstrap
 from evolution.skills.knee_point import CandidatePick, select_knee_point
-from evolution.tools.session_mining import build_tool_dataset_from_sessions
+from evolution.tools.session_mining import (
+    HermesToolImporter,
+    build_tool_dataset_from_sessions,
+)
 from evolution.tools.tool_judge import ToolJudge, make_tool_fitness_metric
 from evolution.tools.tool_module import (
     ToolModule,
@@ -350,6 +353,14 @@ def evolve(
         sessiondb_drops: Optional[dict[str, int]] = None
         if eval_source == "synthetic":
             console.print(f"\n[bold]Building tool-selection eval dataset[/bold] (synthetic, three buckets)")
+            if dry_run:
+                # Synthetic dataset gen is itself an LM call; --dry-run skips it.
+                # The "would generate N" line mirrors the skill-path dry-run shape.
+                console.print(
+                    f"\n[bold green]DRY RUN — would generate {config.eval_dataset_size} "
+                    f"synthetic examples; skipping LM dataset gen + GEPA.[/bold green]"
+                )
+                return {"decision": "dry-run", "eval_source": "synthetic"}
             builder = SyntheticDatasetBuilder(config)
             raw_examples = builder.generate_tool_selection(
                 manifest=manifest,
@@ -371,6 +382,32 @@ def evolve(
                 "  [dim]Claude Code and Copilot logs don't carry tool-call data — only Hermes "
                 "session JSON is mined.[/dim]"
             )
+            if dry_run:
+                # Importer is free (no LM calls); judge is the LM-spending stage.
+                # Run only the importer so the operator sees real candidate counts
+                # and the per-invoked-tool distribution before paying for the judge.
+                candidates, importer_drops = HermesToolImporter.extract_candidates(
+                    manifest=manifest,
+                    limit=config.eval_dataset_size * 2,
+                )
+                tool_counts: dict[str, int] = {}
+                for cand in candidates:
+                    name = cand["invoked_tool"]
+                    tool_counts[name] = tool_counts.get(name, 0) + 1
+                console.print(
+                    f"\n[bold green]DRY RUN — importer surfaced {len(candidates)} candidates; "
+                    f"skipping judge + GEPA.[/bold green]"
+                )
+                console.print(f"  Importer drops: {importer_drops}")
+                if tool_counts:
+                    console.print(f"  Invoked-tool distribution: {tool_counts}")
+                return {
+                    "decision": "dry-run",
+                    "eval_source": "sessiondb",
+                    "candidate_count": len(candidates),
+                    "importer_drops": importer_drops,
+                    "invoked_tool_distribution": tool_counts,
+                }
             dataset, sessiondb_drops = build_tool_dataset_from_sessions(
                 manifest=manifest,
                 target_tool=tool_name,
@@ -399,12 +436,6 @@ def evolve(
             f"  Generated {len(dataset.all_examples)} examples — "
             f"{len(dataset.train)} train / {len(dataset.val)} val / {len(dataset.holdout)} holdout"
         )
-
-        if dry_run:
-            console.print(f"\n[bold green]DRY RUN — dataset built; skipping GEPA loop.[/bold green]")
-            if sessiondb_drops:
-                console.print(f"  Drops: {sessiondb_drops}")
-            return {"decision": "dry-run", "dataset_size": len(dataset.all_examples)}
 
         if len(dataset.holdout) < config.min_holdout_size:
             console.print(
