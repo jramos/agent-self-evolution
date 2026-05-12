@@ -354,9 +354,6 @@ def evolve(
         try:
             register_litellm_failure_callback()
             register_litellm_cost_callback()
-            # reset() also clears any pending cost-ceiling abort flag from a
-            # prior run in the same process (load-bearing for test isolation —
-            # the litellm callback is module-global).
             COST_LEDGER.reset()
             COST_LEDGER.set_ceiling(max_total_cost_usd)
             console.print(f"  Run log: {run_log_path}")
@@ -637,11 +634,8 @@ def evolve(
                 if not c.passed:
                     growth_pass = False
 
-            # Benchmark hook: run the user's command against the evolved
-            # manifest when --benchmark-cmd is set AND the framework's
-            # gate would deploy. Nonzero exit flips to reject with
-            # reason="benchmark_failed". Files are written first so the
-            # subprocess can reference them via $EVOLVED_PATH.
+            # Write manifests before the hook so it can reference them via
+            # $EVOLVED_PATH / $BASELINE_PATH.
             benchmark_block: Optional[dict[str, Any]] = None
             if growth_pass and benchmark_cmd is not None:
                 evolved_manifest_for_hook = manifest.replace_description(tool_name, evolved_description)
@@ -664,8 +658,6 @@ def evolve(
                 )
                 if not benchmark_block["passed"]:
                     growth_pass = False
-                    # Drop the deploy artifacts; the reject path writes
-                    # evolved_FAILED.json from the in-memory manifest.
                     evolved_manifest_path.unlink(missing_ok=True)
                     baseline_manifest_path.unlink(missing_ok=True)
 
@@ -820,9 +812,8 @@ def evolve(
 
             return metrics
         except CostCeilingExceeded as exc:
-            # `run_inputs` is built later in the deploy path; if the abort
-            # fires earlier (e.g., during dataset build), build a minimal
-            # equivalent here so gate_decision.json is still useful.
+            # Abort may fire before `run_inputs` is built in the deploy path;
+            # fall back to a minimal equivalent so gate_decision.json is still useful.
             run_inputs_for_abort = locals().get("run_inputs") or {
                 "seed": config.seed,
                 "iterations": iterations,

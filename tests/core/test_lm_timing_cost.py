@@ -242,11 +242,8 @@ class TestCostLedgerReset:
         assert summary["by_model"] == {}
 
     def test_reset_clears_pending_abort_flag(self):
-        """Test-isolation regression: the litellm cost callback is
-        module-global and persists across tests in the same pytest
-        process. Without this clearing, a prior test that tripped the
-        ceiling would abort the next test's first LM call.
-        """
+        """The cost callback persists process-globally, so a stale flag
+        would abort the next run's first LM call."""
         ledger = CostLedger()
         ledger.set_ceiling(0.0)
         with patch(
@@ -263,16 +260,7 @@ class TestCostLedgerReset:
 
 
 class TestCostCeiling:
-    """The cost-ceiling kill switch: ledger sets the abort flag when total
-    exceeds the ceiling; `LMTimingCallback.on_lm_start` reads the flag and
-    raises `CostCeilingExceeded` to terminate the next LM call.
-
-    Why the polled-flag design: litellm's success-callback dispatch wraps
-    every callback in a bare `try/except Exception` (verified at
-    `litellm_logging.py:2438`), so an exception raised from
-    `_log_litellm_cost` is silently swallowed. DSPy `BaseCallback`
-    exceptions, in contrast, propagate to the LM call site.
-    """
+    """The cost-ceiling kill switch."""
 
     def test_set_ceiling_persists_until_reset(self):
         ledger = CostLedger()
@@ -312,8 +300,8 @@ class TestCostCeiling:
         assert total == pytest.approx(0.25)
 
     def test_record_does_not_raise_when_over_ceiling(self):
-        """The cost callback NEVER raises (litellm would swallow it). It
-        only sets the flag — the next on_lm_start does the raising.
+        """The cost callback only sets the flag — it never raises (litellm
+        would swallow callback exceptions anyway).
         """
         ledger = CostLedger()
         ledger.set_ceiling(0.0)
@@ -328,13 +316,8 @@ class TestCostCeiling:
             )
 
     def test_baselm_call_raises_when_abort_pending(self):
-        """The monkey-patched BaseLM.__call__ is the load-bearing seam.
-
-        We can't raise from a callback — both litellm and DSPy wrap
-        callbacks in try/except and swallow exceptions. The patch
-        installed by _install_cost_ceiling_lm_guard wraps __call__ to
-        raise BEFORE the wrapped body runs, and DSPy's with_callbacks
-        decorator re-raises function-body exceptions cleanly.
+        """The monkey-patched BaseLM.__call__ is the load-bearing seam —
+        callbacks get their exceptions swallowed, the call path doesn't.
         """
         from dspy.clients.base_lm import BaseLM
 

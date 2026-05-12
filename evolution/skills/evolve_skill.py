@@ -361,9 +361,7 @@ def _build_optimizer_and_compile(
         )
         return optimized, "GEPA"
     except CostCeilingExceeded:
-        # The user explicitly asked to stop spending. Falling back to
-        # MIPROv2 here would re-incur cost and defeat the kill switch.
-        # Bubble the abort to the orchestrator's top-level handler.
+        # Don't fall back to MIPROv2 — that would re-incur cost and defeat the kill switch.
         raise
     except Exception as gepa_exc:
         if no_fallback:
@@ -594,9 +592,6 @@ def evolve(
             register_litellm_cost_callback()
             # Module-level singleton: reset between runs so metrics.json reflects
             # this run only, not whatever previous evolve() call(s) accumulated.
-            # reset() also clears any pending cost-ceiling abort flag from a
-            # prior run — load-bearing for test isolation since the litellm
-            # callback is module-global.
             COST_LEDGER.reset()
             COST_LEDGER.set_ceiling(max_total_cost_usd)
             console.print(f"  Run log: {run_log_path}")
@@ -864,11 +859,10 @@ def evolve(
                 if not c.passed:
                     growth_pass = False
 
-            # Benchmark hook: run the user's command against the evolved
-            # artifact when --benchmark-cmd is set AND the framework's own
-            # gate would deploy. Nonzero exit flips the decision to reject
-            # with reason="benchmark_failed". Files are written first so
-            # the subprocess can reference them via $EVOLVED_PATH.
+            # Write artifacts before the hook so it can reference them via
+            # $EVOLVED_PATH / $BASELINE_PATH. On benchmark failure the deploy
+            # path's identical write becomes a no-op overwrite of the reject
+            # path's evolved_FAILED.md.
             benchmark_block: Optional[dict[str, Any]] = None
             if growth_pass and benchmark_cmd is not None:
                 evolved_path = output_dir / "evolved_skill.md"
@@ -886,8 +880,6 @@ def evolve(
                 )
                 if not benchmark_block["passed"]:
                     growth_pass = False
-                    # Drop the deploy artifacts; the reject path below
-                    # writes evolved_FAILED.md from the in-memory text.
                     evolved_path.unlink(missing_ok=True)
                     baseline_path.unlink(missing_ok=True)
 

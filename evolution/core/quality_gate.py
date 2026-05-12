@@ -85,14 +85,8 @@ def write_cost_ceiling_abort(
     extra_fields: dict[str, Any] | None = None,
 ) -> Path:
     """Write a ``decision="aborted"`` gate_decision for a cost-ceiling trip.
-
-    Both ``evolve_skill`` and ``evolve_tool`` catch ``CostCeilingExceeded``
-    at their top level and call this helper. The console message is emitted
-    here so both paths render the same way.
-
-    ``extra_fields`` lets the tool path carry ``artifact_type`` /
-    ``target_tool`` so downstream calibration scripts can group abort
-    rates by surface; the skill path passes ``None``.
+    ``extra_fields`` lets callers add path-specific keys (e.g.,
+    ``artifact_type``, ``target_tool``).
     """
     cost_summary = COST_LEDGER.summary()
     _console.print(
@@ -123,23 +117,12 @@ def run_benchmark_hook(
     target_name: str,
     artifact_type: str,
 ) -> dict[str, Any]:
-    """Execute a user-provided shell command as a deploy-gate hook.
+    """Run the user's ``--benchmark-cmd`` and report the outcome.
 
-    The hook runs only when the framework's own deploy gate has already
-    decided to deploy. Nonzero exit / timeout / spawn error flips the
-    decision back to ``reject`` with ``reason="benchmark_failed"``.
-
-    ``shell=True`` is intentional. The user wrote the command and runs
-    the CLI on their own machine — there is no untrusted-input pipeline.
-    ``shlex.split`` would force users to argv-quote ``pytest -k 'foo or
-    bar'``-style commands for zero security gain. The hook runs under
-    ``/bin/sh -c``, which is non-interactive and never sources
-    ``.bashrc`` / ``.zshrc``; aliases and shell functions from your
-    interactive shell are NOT available.
-
-    Returns a dict suitable for the ``benchmark`` block in
-    ``gate_decision.json``. Caller is responsible for using
-    ``passed`` to decide whether to flip the deploy decision.
+    ``shell=True`` because the user wrote the command and runs the CLI
+    on their own machine — no untrusted-input pipeline; forcing
+    ``shlex.split`` for the user's own shell pipelines is friction for
+    no security gain.
     """
     env = {
         **os.environ,

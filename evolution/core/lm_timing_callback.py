@@ -54,29 +54,11 @@ _HEARTBEAT_TIERS: tuple[tuple[int, int], ...] = (
 
 
 class CostCeilingExceeded(BaseException):
-    """Raised from the monkey-patched ``BaseLM.__call__`` when ``COST_LEDGER``
-    has recorded that cumulative cost has exceeded a user-set ceiling
-    (``--max-total-cost-usd``).
+    """Cumulative LM cost exceeded ``--max-total-cost-usd``.
 
-    Subclasses ``BaseException`` rather than ``Exception`` — same pattern
-    as ``KeyboardInterrupt`` and ``SystemExit`` — so routine ``except
-    Exception:`` clauses don't swallow it. Three layers were verified to
-    catch generic ``Exception`` and silently absorb:
-
-    1. ``litellm`` success-callback dispatch wraps every callback in a
-       bare ``try/except Exception`` (``litellm_logging.py:2438``).
-    2. DSPy ``_execute_start_callbacks`` wraps every callback the same
-       way (``dspy/utils/callback.py:268-272``).
-    3. ``dspy.Evaluate`` runs per-example LM calls with
-       ``max_errors=len*100`` — any ``Exception`` from a single call is
-       caught and scored as 0, not propagated.
-
-    The only seam where an exception actually propagates is the wrapped
-    function body itself — so we patch ``BaseLM.__call__`` to do the
-    check just before invoking the real call. Even there, generic
-    ``except Exception`` would absorb the abort. Inheriting from
-    ``BaseException`` means the orchestrator's explicit
-    ``except CostCeilingExceeded`` is the only catcher.
+    Inherits from ``BaseException`` so routine ``except Exception:`` in
+    litellm callbacks, DSPy callbacks, and ``dspy.Evaluate``'s per-call
+    error swallower can't absorb the abort.
     """
 
     def __init__(self, total_usd: float, ceiling_usd: float):
@@ -245,10 +227,9 @@ class CostLedger:
         self._abort_requested: bool = False
 
     def reset(self) -> None:
-        # Test-isolation requirement: the litellm cost callback is
-        # module-global and persists across tests in the same pytest
-        # process. Without clearing the abort flag here, a prior test that
-        # tripped the ceiling would abort the next test's first LM call.
+        # Must also clear the abort flag — the cost callback is registered
+        # process-globally, so a stale flag from a prior run would abort
+        # the next run's first LM call.
         with self._lock:
             self._by_model.clear()
             self._ceiling_usd = None
@@ -272,10 +253,9 @@ class CostLedger:
         reasoning_tokens: int,
         cost_usd: float,
     ) -> None:
-        # Single critical section over dict-insert + counter-increment + the
-        # ceiling check, so concurrent dspy.Evaluate threads can't observe a
-        # half-updated row, race the model-key creation, or read a stale
-        # total when deciding whether to set the abort flag.
+        # Single critical section over the dict insert + the ceiling check
+        # so concurrent dspy.Evaluate threads can't observe a half-updated
+        # row or read a stale total when setting the abort flag.
         with self._lock:
             row = self._by_model.setdefault(model, _ModelCostRow())
             row.tokens_in_uncached += max(0, prompt_tokens - cached_tokens)
@@ -390,18 +370,10 @@ def register_litellm_cost_callback() -> None:
             litellm.success_callback = callbacks + [_log_litellm_cost]
 
 def _install_cost_ceiling_lm_guard() -> None:
-    """Monkey-patch ``BaseLM.__call__`` to abort when COST_LEDGER signals.
-
-    This patch is the only reliable seam for the kill switch (see the
-    CostCeilingExceeded docstring). The wrapped ``BaseLM.__call__`` —
-    ``@with_callbacks``-decorated — calls our patched body, which checks
-    the ledger BEFORE invoking the original. An exception raised here
-    propagates through with_callbacks's try/except (which re-raises after
-    running end callbacks) and reaches the GEPA loop.
-
-    Idempotent: re-running does not double-wrap. Applied at module
-    import time so test code that exercises BaseLM.__call__ behaves
-    consistently with production runs.
+    """Patch ``BaseLM.__call__`` to raise ``CostCeilingExceeded`` when the
+    ledger has flagged an abort. Callbacks can't raise — DSPy and litellm
+    both swallow callback exceptions — so the check has to live in the
+    call path itself. Idempotent.
     """
     from dspy.clients.base_lm import BaseLM
 
