@@ -52,6 +52,24 @@ _HEARTBEAT_TIERS: tuple[tuple[int, int], ...] = (
 )
 
 
+class CostCeilingExceeded(Exception):
+    """Raised from ``LMTimingCallback.on_lm_start`` when ``COST_LEDGER`` has
+    recorded that cumulative cost has exceeded a user-set ceiling
+    (``--max-total-cost-usd``). Cannot be raised from the litellm cost
+    callback directly: litellm's success-callback dispatch wraps every
+    callback in a bare ``try/except Exception`` and silently swallows
+    anything that escapes it. DSPy ``BaseCallback`` exceptions, in
+    contrast, propagate to the LM call site and bubble up.
+    """
+
+    def __init__(self, total_usd: float, ceiling_usd: float):
+        self.total_usd = total_usd
+        self.ceiling_usd = ceiling_usd
+        super().__init__(
+            f"cost ${total_usd:.4f} exceeded ceiling ${ceiling_usd:.4f} — aborting"
+        )
+
+
 class LMTimingCallback(BaseCallback):
     """Log every dspy.LM call with timing + tiered heartbeat warnings."""
 
@@ -67,6 +85,12 @@ class LMTimingCallback(BaseCallback):
         self._call_seq = 0
 
     def on_lm_start(self, call_id: str, instance: Any, inputs: dict[str, Any]) -> None:
+        # Cost-ceiling kill switch — see CostCeilingExceeded docstring for
+        # why this check lives here and not in the litellm cost callback.
+        abort_state = COST_LEDGER.get_abort_state()
+        if abort_state is not None:
+            raise CostCeilingExceeded(*abort_state)
+
         model = getattr(instance, "model", "<unknown>")
         with self._lock:
             self._call_seq += 1
@@ -206,10 +230,26 @@ class CostLedger:
     def __init__(self) -> None:
         self._lock = threading.Lock()
         self._by_model: dict[str, _ModelCostRow] = {}
+        self._ceiling_usd: Optional[float] = None
+        self._abort_requested: bool = False
 
     def reset(self) -> None:
+        # Test-isolation requirement: the litellm cost callback is
+        # module-global and persists across tests in the same pytest
+        # process. Without clearing the abort flag here, a prior test that
+        # tripped the ceiling would abort the next test's first LM call.
         with self._lock:
             self._by_model.clear()
+            self._ceiling_usd = None
+            self._abort_requested = False
+
+    def set_ceiling(self, usd: Optional[float]) -> None:
+        """Set the total-cost ceiling in USD. ``None`` disables. After the
+        ceiling is exceeded, the next LM call will raise
+        ``CostCeilingExceeded`` from ``LMTimingCallback.on_lm_start``.
+        """
+        with self._lock:
+            self._ceiling_usd = usd
 
     def record(
         self,
@@ -221,9 +261,10 @@ class CostLedger:
         reasoning_tokens: int,
         cost_usd: float,
     ) -> None:
-        # Single critical section over dict-insert + counter-increment so
-        # concurrent dspy.Evaluate threads can't observe a half-updated
-        # row or race the model-key creation.
+        # Single critical section over dict-insert + counter-increment + the
+        # ceiling check, so concurrent dspy.Evaluate threads can't observe a
+        # half-updated row, race the model-key creation, or read a stale
+        # total when deciding whether to set the abort flag.
         with self._lock:
             row = self._by_model.setdefault(model, _ModelCostRow())
             row.tokens_in_uncached += max(0, prompt_tokens - cached_tokens)
@@ -232,6 +273,24 @@ class CostLedger:
             row.reasoning_tokens += reasoning_tokens
             row.cost_usd += cost_usd
             row.calls += 1
+            if self._ceiling_usd is not None and not self._abort_requested:
+                total = sum(r.cost_usd for r in self._by_model.values())
+                if total > self._ceiling_usd:
+                    self._abort_requested = True
+
+    def get_abort_state(self) -> Optional[tuple[float, float]]:
+        """If a cost-ceiling abort is pending, return ``(total_usd,
+        ceiling_usd)`` for the exception payload. Returns ``None``
+        otherwise. The flag is not cleared by reading — every LM call
+        after the ceiling trip will keep aborting until ``reset()``.
+        """
+        with self._lock:
+            if not self._abort_requested:
+                return None
+            total = sum(r.cost_usd for r in self._by_model.values())
+            # _ceiling_usd is non-None when _abort_requested is True (set
+            # together inside the lock in record()), so the cast is safe.
+            return total, float(self._ceiling_usd)  # type: ignore[arg-type]
 
     def summary(self) -> dict[str, Any]:
         with self._lock:

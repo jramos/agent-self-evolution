@@ -10,7 +10,12 @@ import json
 from pathlib import Path
 from typing import Any
 
+from rich.console import Console
+
+from evolution.core.lm_timing_callback import COST_LEDGER, CostCeilingExceeded
 from evolution.skills.budget_aware_proposer import ProposerMode
+
+_console = Console()
 
 
 # `default` is calibrated against the obsidian deploy (+24.2% growth,
@@ -65,6 +70,42 @@ def write_gate_decision(output_dir: Path, decision: dict[str, Any]) -> Path:
     path = output_dir / "gate_decision.json"
     path.write_text(json.dumps(decision, indent=2))
     return path
+
+
+def write_cost_ceiling_abort(
+    exc: CostCeilingExceeded,
+    *,
+    output_dir: Path,
+    run_inputs: dict[str, Any],
+    extra_fields: dict[str, Any] | None = None,
+) -> Path:
+    """Write a ``decision="aborted"`` gate_decision for a cost-ceiling trip.
+
+    Both ``evolve_skill`` and ``evolve_tool`` catch ``CostCeilingExceeded``
+    at their top level and call this helper. The console message is emitted
+    here so both paths render the same way.
+
+    ``extra_fields`` lets the tool path carry ``artifact_type`` /
+    ``target_tool`` so downstream calibration scripts can group abort
+    rates by surface; the skill path passes ``None``.
+    """
+    cost_summary = COST_LEDGER.summary()
+    _console.print(
+        f"\n[bold red]✗ Aborting: cost ${exc.total_usd:.4f} exceeded "
+        f"ceiling ${exc.ceiling_usd:.4f}[/bold red]"
+    )
+    payload: dict[str, Any] = {
+        "schema_version": "4",
+        "decision": "aborted",
+        "reason": "cost_ceiling_exceeded",
+        "cost_ceiling_usd": exc.ceiling_usd,
+        "cost_at_abort_usd": exc.total_usd,
+        "cost_summary": cost_summary,
+        "run_inputs": run_inputs,
+    }
+    if extra_fields:
+        payload.update(extra_fields)
+    return write_gate_decision(output_dir, payload)
 
 
 def resolve_proposer_mode(fitness_profile: str) -> ProposerMode:

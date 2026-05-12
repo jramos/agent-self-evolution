@@ -177,6 +177,16 @@ uv run python -m evolution.skills.evolve_skill --skill X --patch | git apply
 
 Both flags are no-ops on a reject decision (with a stderr notice). `--apply` also skips with a warning when the source path is under Claude Code's plugin cache (read-only by design).
 
+### Safety knobs
+
+`--max-total-cost-usd FLOAT` aborts the run cleanly when cumulative LM cost exceeds the ceiling. Useful when an accidentally-cranked `--iterations` could push a run past your expected budget. Worst-case overshoot is one LM call past the ceiling — the cost callback fires after each call returns, and the next call aborts at start.
+
+```bash
+uv run python -m evolution.skills.evolve_skill --skill X --max-total-cost-usd 5.00
+```
+
+On abort, `output/<artifact>/<ts>/gate_decision.json` carries `decision="aborted"`, `reason="cost_ceiling_exceeded"`, and the full `cost_summary` block so you see what was actually spent.
+
 ## What It Optimizes
 
 | Phase | Target | Engine | Status |

@@ -18,7 +18,10 @@ from unittest.mock import patch
 import pytest
 
 from evolution.core.lm_timing_callback import (
+    COST_LEDGER,
+    CostCeilingExceeded,
     CostLedger,
+    LMTimingCallback,
     _log_litellm_cost,
 )
 
@@ -237,3 +240,136 @@ class TestCostLedgerReset:
         summary = ledger.summary()
         assert summary["total_usd"] == 0.0
         assert summary["by_model"] == {}
+
+    def test_reset_clears_pending_abort_flag(self):
+        """Test-isolation regression: the litellm cost callback is
+        module-global and persists across tests in the same pytest
+        process. Without this clearing, a prior test that tripped the
+        ceiling would abort the next test's first LM call.
+        """
+        ledger = CostLedger()
+        ledger.set_ceiling(0.0)
+        with patch(
+            "evolution.core.lm_timing_callback.litellm.completion_cost",
+            return_value=0.5,
+        ):
+            _log_litellm_cost(
+                {}, _make_response(prompt_tokens=100, completion_tokens=10),
+                None, None, ledger=ledger,
+            )
+        assert ledger.get_abort_state() is not None  # abort is queued
+        ledger.reset()
+        assert ledger.get_abort_state() is None  # cleared
+
+
+class TestCostCeiling:
+    """The cost-ceiling kill switch: ledger sets the abort flag when total
+    exceeds the ceiling; `LMTimingCallback.on_lm_start` reads the flag and
+    raises `CostCeilingExceeded` to terminate the next LM call.
+
+    Why the polled-flag design: litellm's success-callback dispatch wraps
+    every callback in a bare `try/except Exception` (verified at
+    `litellm_logging.py:2438`), so an exception raised from
+    `_log_litellm_cost` is silently swallowed. DSPy `BaseCallback`
+    exceptions, in contrast, propagate to the LM call site.
+    """
+
+    def test_set_ceiling_persists_until_reset(self):
+        ledger = CostLedger()
+        ledger.set_ceiling(2.50)
+        # Setting None disables (no exception, no aborts queued).
+        ledger.set_ceiling(None)
+        assert ledger.get_abort_state() is None
+
+    def test_record_below_ceiling_does_not_set_flag(self):
+        ledger = CostLedger()
+        ledger.set_ceiling(1.00)
+        with patch(
+            "evolution.core.lm_timing_callback.litellm.completion_cost",
+            return_value=0.50,  # under the ceiling
+        ):
+            _log_litellm_cost(
+                {}, _make_response(prompt_tokens=10, completion_tokens=5),
+                None, None, ledger=ledger,
+            )
+        assert ledger.get_abort_state() is None
+
+    def test_record_over_ceiling_sets_flag(self):
+        ledger = CostLedger()
+        ledger.set_ceiling(0.10)
+        with patch(
+            "evolution.core.lm_timing_callback.litellm.completion_cost",
+            return_value=0.25,  # one call past the ceiling
+        ):
+            _log_litellm_cost(
+                {}, _make_response(prompt_tokens=10, completion_tokens=5),
+                None, None, ledger=ledger,
+            )
+        state = ledger.get_abort_state()
+        assert state is not None
+        total, ceiling = state
+        assert ceiling == 0.10
+        assert total == pytest.approx(0.25)
+
+    def test_record_does_not_raise_when_over_ceiling(self):
+        """The cost callback NEVER raises (litellm would swallow it). It
+        only sets the flag — the next on_lm_start does the raising.
+        """
+        ledger = CostLedger()
+        ledger.set_ceiling(0.0)
+        with patch(
+            "evolution.core.lm_timing_callback.litellm.completion_cost",
+            return_value=1.00,
+        ):
+            # Must complete without exception even though total >> ceiling.
+            _log_litellm_cost(
+                {}, _make_response(prompt_tokens=10, completion_tokens=5),
+                None, None, ledger=ledger,
+            )
+
+    def test_lm_timing_callback_raises_when_abort_pending(self):
+        """on_lm_start polls COST_LEDGER (module global) and raises if a
+        cost-ceiling abort is queued. This is the load-bearing seam where
+        the abort actually terminates an LM call.
+        """
+        # Use the real module-global ledger so the callback finds the
+        # state. Reset before and after so test isolation holds.
+        COST_LEDGER.reset()
+        try:
+            COST_LEDGER.set_ceiling(0.0)
+            with patch(
+                "evolution.core.lm_timing_callback.litellm.completion_cost",
+                return_value=1.00,
+            ):
+                _log_litellm_cost(
+                    {}, _make_response(prompt_tokens=10, completion_tokens=5),
+                    None, None,
+                )
+            cb = LMTimingCallback()
+            with pytest.raises(CostCeilingExceeded) as exc_info:
+                cb.on_lm_start(
+                    call_id="test-call",
+                    instance=SimpleNamespace(model="openai/gpt-4.1-mini"),
+                    inputs={"messages": [{"content": "test"}]},
+                )
+            assert exc_info.value.ceiling_usd == 0.0
+            assert exc_info.value.total_usd == pytest.approx(1.00)
+        finally:
+            COST_LEDGER.reset()
+
+    def test_lm_timing_callback_does_not_raise_when_no_abort(self):
+        """Sanity: with no ceiling set, on_lm_start runs normally."""
+        COST_LEDGER.reset()
+        cb = LMTimingCallback()
+        # Use FakeTimer to avoid spawning real threading.Timer instances.
+        cb._timer_factory = lambda *a, **k: SimpleNamespace(
+            daemon=False,
+            start=lambda: None,
+            cancel=lambda: None,
+        )
+        # Doesn't raise.
+        cb.on_lm_start(
+            call_id="test-call",
+            instance=SimpleNamespace(model="openai/gpt-4.1-mini"),
+            inputs={"messages": [{"content": "test"}]},
+        )
