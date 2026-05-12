@@ -327,13 +327,17 @@ class TestCostCeiling:
                 None, None, ledger=ledger,
             )
 
-    def test_lm_timing_callback_raises_when_abort_pending(self):
-        """on_lm_start polls COST_LEDGER (module global) and raises if a
-        cost-ceiling abort is queued. This is the load-bearing seam where
-        the abort actually terminates an LM call.
+    def test_baselm_call_raises_when_abort_pending(self):
+        """The monkey-patched BaseLM.__call__ is the load-bearing seam.
+
+        We can't raise from a callback — both litellm and DSPy wrap
+        callbacks in try/except and swallow exceptions. The patch
+        installed by _install_cost_ceiling_lm_guard wraps __call__ to
+        raise BEFORE the wrapped body runs, and DSPy's with_callbacks
+        decorator re-raises function-body exceptions cleanly.
         """
-        # Use the real module-global ledger so the callback finds the
-        # state. Reset before and after so test isolation holds.
+        from dspy.clients.base_lm import BaseLM
+
         COST_LEDGER.reset()
         try:
             COST_LEDGER.set_ceiling(0.0)
@@ -345,31 +349,51 @@ class TestCostCeiling:
                     {}, _make_response(prompt_tokens=10, completion_tokens=5),
                     None, None,
                 )
-            cb = LMTimingCallback()
+            # Build a minimal BaseLM-like subclass; we don't want to spawn a
+            # real LM. Calling __call__ directly through the class exercises
+            # the patched method.
+            class _StubLM(BaseLM):
+                model = "stub"
+
+                def forward(self, *args, **kwargs):  # pragma: no cover — should not reach this
+                    raise AssertionError("forward should not be called when abort is pending")
+
+            stub = _StubLM(model="stub")
             with pytest.raises(CostCeilingExceeded) as exc_info:
-                cb.on_lm_start(
-                    call_id="test-call",
-                    instance=SimpleNamespace(model="openai/gpt-4.1-mini"),
-                    inputs={"messages": [{"content": "test"}]},
-                )
+                stub(prompt="hello")
             assert exc_info.value.ceiling_usd == 0.0
             assert exc_info.value.total_usd == pytest.approx(1.00)
         finally:
             COST_LEDGER.reset()
 
-    def test_lm_timing_callback_does_not_raise_when_no_abort(self):
-        """Sanity: with no ceiling set, on_lm_start runs normally."""
+    def test_baselm_call_does_not_raise_when_no_abort(self):
+        """Sanity: with no ceiling set, the patched __call__ delegates
+        to the original BaseLM behavior with no extra exception.
+        """
+        from dspy.clients.base_lm import BaseLM
         COST_LEDGER.reset()
-        cb = LMTimingCallback()
-        # Use FakeTimer to avoid spawning real threading.Timer instances.
-        cb._timer_factory = lambda *a, **k: SimpleNamespace(
-            daemon=False,
-            start=lambda: None,
-            cancel=lambda: None,
-        )
-        # Doesn't raise.
-        cb.on_lm_start(
-            call_id="test-call",
-            instance=SimpleNamespace(model="openai/gpt-4.1-mini"),
-            inputs={"messages": [{"content": "test"}]},
-        )
+
+        called = {"forward": False}
+
+        class _StubLM(BaseLM):
+            model = "stub"
+
+            def forward(self, *args, **kwargs):
+                called["forward"] = True
+                return SimpleNamespace(
+                    choices=[SimpleNamespace(message=SimpleNamespace(content="ok"))],
+                    usage=SimpleNamespace(prompt_tokens=0, completion_tokens=0),
+                    model="stub",
+                )
+
+        stub = _StubLM(model="stub")
+        # Doesn't raise from the patch (forward may or may not succeed,
+        # but the patch itself should not interfere).
+        try:
+            stub(prompt="hello")
+        except CostCeilingExceeded:
+            pytest.fail("patched __call__ raised CostCeilingExceeded when no abort was pending")
+        except Exception:
+            # Other downstream errors are acceptable for this test — we
+            # only care that the cost-ceiling guard didn't fire.
+            pass

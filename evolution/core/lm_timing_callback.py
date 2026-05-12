@@ -30,6 +30,7 @@ Three surfaces:
 
 from __future__ import annotations
 
+import functools
 import logging
 import threading
 import time
@@ -52,14 +53,30 @@ _HEARTBEAT_TIERS: tuple[tuple[int, int], ...] = (
 )
 
 
-class CostCeilingExceeded(Exception):
-    """Raised from ``LMTimingCallback.on_lm_start`` when ``COST_LEDGER`` has
-    recorded that cumulative cost has exceeded a user-set ceiling
-    (``--max-total-cost-usd``). Cannot be raised from the litellm cost
-    callback directly: litellm's success-callback dispatch wraps every
-    callback in a bare ``try/except Exception`` and silently swallows
-    anything that escapes it. DSPy ``BaseCallback`` exceptions, in
-    contrast, propagate to the LM call site and bubble up.
+class CostCeilingExceeded(BaseException):
+    """Raised from the monkey-patched ``BaseLM.__call__`` when ``COST_LEDGER``
+    has recorded that cumulative cost has exceeded a user-set ceiling
+    (``--max-total-cost-usd``).
+
+    Subclasses ``BaseException`` rather than ``Exception`` — same pattern
+    as ``KeyboardInterrupt`` and ``SystemExit`` — so routine ``except
+    Exception:`` clauses don't swallow it. Three layers were verified to
+    catch generic ``Exception`` and silently absorb:
+
+    1. ``litellm`` success-callback dispatch wraps every callback in a
+       bare ``try/except Exception`` (``litellm_logging.py:2438``).
+    2. DSPy ``_execute_start_callbacks`` wraps every callback the same
+       way (``dspy/utils/callback.py:268-272``).
+    3. ``dspy.Evaluate`` runs per-example LM calls with
+       ``max_errors=len*100`` — any ``Exception`` from a single call is
+       caught and scored as 0, not propagated.
+
+    The only seam where an exception actually propagates is the wrapped
+    function body itself — so we patch ``BaseLM.__call__`` to do the
+    check just before invoking the real call. Even there, generic
+    ``except Exception`` would absorb the abort. Inheriting from
+    ``BaseException`` means the orchestrator's explicit
+    ``except CostCeilingExceeded`` is the only catcher.
     """
 
     def __init__(self, total_usd: float, ceiling_usd: float):
@@ -85,12 +102,6 @@ class LMTimingCallback(BaseCallback):
         self._call_seq = 0
 
     def on_lm_start(self, call_id: str, instance: Any, inputs: dict[str, Any]) -> None:
-        # Cost-ceiling kill switch — see CostCeilingExceeded docstring for
-        # why this check lives here and not in the litellm cost callback.
-        abort_state = COST_LEDGER.get_abort_state()
-        if abort_state is not None:
-            raise CostCeilingExceeded(*abort_state)
-
         model = getattr(instance, "model", "<unknown>")
         with self._lock:
             self._call_seq += 1
@@ -377,3 +388,38 @@ def register_litellm_cost_callback() -> None:
         callbacks = litellm.success_callback or []
         if _log_litellm_cost not in callbacks:
             litellm.success_callback = callbacks + [_log_litellm_cost]
+
+def _install_cost_ceiling_lm_guard() -> None:
+    """Monkey-patch ``BaseLM.__call__`` to abort when COST_LEDGER signals.
+
+    This patch is the only reliable seam for the kill switch (see the
+    CostCeilingExceeded docstring). The wrapped ``BaseLM.__call__`` —
+    ``@with_callbacks``-decorated — calls our patched body, which checks
+    the ledger BEFORE invoking the original. An exception raised here
+    propagates through with_callbacks's try/except (which re-raises after
+    running end callbacks) and reaches the GEPA loop.
+
+    Idempotent: re-running does not double-wrap. Applied at module
+    import time so test code that exercises BaseLM.__call__ behaves
+    consistently with production runs.
+    """
+    from dspy.clients.base_lm import BaseLM
+
+    if getattr(BaseLM.__call__, "_cost_ceiling_guarded", False):
+        return
+
+    original_call = BaseLM.__call__
+
+    @functools.wraps(original_call)
+    def call_with_cost_ceiling_check(self, *args, **kwargs):
+        state = COST_LEDGER.get_abort_state()
+        if state is not None:
+            raise CostCeilingExceeded(*state)
+        return original_call(self, *args, **kwargs)
+
+    call_with_cost_ceiling_check._cost_ceiling_guarded = True  # type: ignore[attr-defined]
+    BaseLM.__call__ = call_with_cost_ceiling_check
+
+
+_install_cost_ceiling_lm_guard()
+
