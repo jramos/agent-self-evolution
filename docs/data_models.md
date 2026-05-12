@@ -233,6 +233,24 @@ Written when any `validate_static` check fails on the evolved artifact (short-ci
 }
 ```
 
+### Benchmark-hook block (opt-in, present when `--benchmark-cmd` was set)
+
+When the run uses `--benchmark-cmd`, the gate decision carries an extra `benchmark` block regardless of pass/fail:
+
+```json
+"benchmark": {
+  "command": "pytest -k smoke",
+  "exit_code": 0,                 // null on timeout / spawn error
+  "duration_seconds": 12.4,
+  "stdout_tail": "...4096 chars max...",
+  "stderr_tail": "...4096 chars max...",
+  "passed": true,
+  "reason": "ok"                  // "ok" | "exit_nonzero" | "timeout" | "command_error"
+}
+```
+
+When `passed=false`, the top-level `decision` is `"reject"` and `reason` is `"benchmark_failed"`. The benchmark hook only runs when the framework's own deploy gate would deploy — if `growth_quality_gate` already rejected, the hook is skipped and the `benchmark` block is absent (no point spending the user's CI budget on a variant we already decided not to ship).
+
 ### Cost-ceiling-abort variant
 
 Written when `--max-total-cost-usd` is set and cumulative LM cost exceeds the ceiling. The next LM call after the ceiling trips raises `CostCeilingExceeded` from `LMTimingCallback.on_lm_start`, which the orchestrator catches at top level. Worst-case overshoot is one LM call past the ceiling — `cost_at_abort_usd` shows what was actually spent.

@@ -26,6 +26,7 @@ from evolution.core.config import EvolutionConfig
 from evolution.core.quality_gate import (
     QUALITY_GATE_PRESETS,
     resolve_proposer_mode,
+    run_benchmark_hook,
     write_cost_ceiling_abort,
     write_gate_decision,
 )
@@ -494,6 +495,8 @@ def evolve(
     apply_in_place: bool = False,
     emit_patch: bool = False,
     max_total_cost_usd: Optional[float] = None,
+    benchmark_cmd: Optional[str] = None,
+    benchmark_timeout_seconds: int = 600,
 ):
     """Main evolution function — orchestrates the full optimization loop."""
 
@@ -861,6 +864,33 @@ def evolve(
                 if not c.passed:
                     growth_pass = False
 
+            # Benchmark hook: run the user's command against the evolved
+            # artifact when --benchmark-cmd is set AND the framework's own
+            # gate would deploy. Nonzero exit flips the decision to reject
+            # with reason="benchmark_failed". Files are written first so
+            # the subprocess can reference them via $EVOLVED_PATH.
+            benchmark_block: Optional[dict[str, Any]] = None
+            if growth_pass and benchmark_cmd is not None:
+                evolved_path = output_dir / "evolved_skill.md"
+                baseline_path = output_dir / "baseline_skill.md"
+                evolved_path.write_text(evolved_full)
+                baseline_path.write_text(skill["raw"])
+                benchmark_block = run_benchmark_hook(
+                    benchmark_cmd,
+                    timeout_seconds=benchmark_timeout_seconds,
+                    evolved_path=evolved_path,
+                    baseline_path=baseline_path,
+                    output_dir=output_dir,
+                    target_name=skill_name,
+                    artifact_type="skill",
+                )
+                if not benchmark_block["passed"]:
+                    growth_pass = False
+                    # Drop the deploy artifacts; the reject path below
+                    # writes evolved_FAILED.md from the in-memory text.
+                    evolved_path.unlink(missing_ok=True)
+                    baseline_path.unlink(missing_ok=True)
+
             growth_pct = (len(evolved_full) - len(skill["raw"])) / max(1, len(skill["raw"]))
             required_improvement = max(
                 0.0,
@@ -868,10 +898,16 @@ def evolve(
             )
             # Single source of truth for the rule string — same helper the constraint uses.
             decision_rule_used = resolve_decision_rule(config, growth_pct)
+            if growth_pass:
+                decision_reason = "passed"
+            elif benchmark_block is not None and not benchmark_block["passed"]:
+                decision_reason = "benchmark_failed"
+            else:
+                decision_reason = "growth_quality_gate"
             decision_payload = {
                 "schema_version": "4",
                 "decision": "deploy" if growth_pass else "reject",
-                "reason": "passed" if growth_pass else "growth_quality_gate",
+                "reason": decision_reason,
                 "decision_rule_used": decision_rule_used,
                 "gate_mode": config.gate_mode,
                 "inferiority_tolerance": config.inferiority_tolerance,
@@ -911,6 +947,8 @@ def evolve(
                     "eval_source": eval_source,
                 },
             }
+            if benchmark_block is not None:
+                decision_payload["benchmark"] = benchmark_block
             gate_path = write_gate_decision(output_dir, decision_payload)
             console.print(f"  [dim]Gate decision logged to {gate_path}[/dim]")
 
@@ -1221,6 +1259,24 @@ def evolve(
          "and the next call aborts at start. 0 is accepted (aborts on first "
          "call, useful for testing). Negative values rejected. Off by default.",
 )
+@click.option(
+    "--benchmark-cmd",
+    default=None,
+    type=str,
+    help="Deploy-gate hook: shell command run AFTER the framework's own "
+         "deploy gate passes; nonzero exit flips the decision to reject "
+         "with reason='benchmark_failed'. Receives EVOLVED_PATH, "
+         "BASELINE_PATH, RUN_DIR, TARGET_NAME, ARTIFACT_TYPE via env. Runs "
+         "under /bin/sh -c with shell=True (your shell, your command — "
+         "interactive aliases are not available). Trust boundary: the "
+         "command string is yours; do not pass strings you didn't write.",
+)
+@click.option(
+    "--benchmark-timeout-seconds",
+    default=600,
+    type=click.IntRange(min=1),
+    help="Wall-clock cap for the --benchmark-cmd hook (default 600s).",
+)
 def main(skill, iterations, eval_source, dataset_path, optimizer_model, reflection_model,
          eval_model, skill_source_dir, dry_run, seed, budget, no_fallback,
          quality_gate, growth_free_threshold,
@@ -1228,7 +1284,8 @@ def main(skill, iterations, eval_source, dataset_path, optimizer_model, reflecti
          bootstrap_confidence, bootstrap_resamples, knee_point_epsilon,
          knee_point_strategy, bap_safety_margin, bap_max_growth,
          eval_dataset_size, holdout_ratio, evaluate_band_on_holdout,
-         fitness_profile, apply, patch, max_total_cost_usd):
+         fitness_profile, apply, patch, max_total_cost_usd,
+         benchmark_cmd, benchmark_timeout_seconds):
     """Evolve an agent skill using DSPy + GEPA optimization."""
     evolve(
         skill_name=skill,
@@ -1261,6 +1318,8 @@ def main(skill, iterations, eval_source, dataset_path, optimizer_model, reflecti
         apply_in_place=apply,
         emit_patch=patch,
         max_total_cost_usd=max_total_cost_usd,
+        benchmark_cmd=benchmark_cmd,
+        benchmark_timeout_seconds=benchmark_timeout_seconds,
     )
 
 

@@ -7,6 +7,9 @@ without depending on the skill pipeline.
 """
 
 import json
+import os
+import subprocess
+import time
 from pathlib import Path
 from typing import Any
 
@@ -16,6 +19,8 @@ from evolution.core.lm_timing_callback import COST_LEDGER, CostCeilingExceeded
 from evolution.skills.budget_aware_proposer import ProposerMode
 
 _console = Console()
+
+_BENCHMARK_OUTPUT_TAIL_BYTES = 4096
 
 
 # `default` is calibrated against the obsidian deploy (+24.2% growth,
@@ -106,6 +111,107 @@ def write_cost_ceiling_abort(
     if extra_fields:
         payload.update(extra_fields)
     return write_gate_decision(output_dir, payload)
+
+
+def run_benchmark_hook(
+    cmd: str,
+    *,
+    timeout_seconds: int,
+    evolved_path: Path,
+    baseline_path: Path,
+    output_dir: Path,
+    target_name: str,
+    artifact_type: str,
+) -> dict[str, Any]:
+    """Execute a user-provided shell command as a deploy-gate hook.
+
+    The hook runs only when the framework's own deploy gate has already
+    decided to deploy. Nonzero exit / timeout / spawn error flips the
+    decision back to ``reject`` with ``reason="benchmark_failed"``.
+
+    ``shell=True`` is intentional. The user wrote the command and runs
+    the CLI on their own machine — there is no untrusted-input pipeline.
+    ``shlex.split`` would force users to argv-quote ``pytest -k 'foo or
+    bar'``-style commands for zero security gain. The hook runs under
+    ``/bin/sh -c``, which is non-interactive and never sources
+    ``.bashrc`` / ``.zshrc``; aliases and shell functions from your
+    interactive shell are NOT available.
+
+    Returns a dict suitable for the ``benchmark`` block in
+    ``gate_decision.json``. Caller is responsible for using
+    ``passed`` to decide whether to flip the deploy decision.
+    """
+    env = {
+        **os.environ,
+        "EVOLVED_PATH": str(evolved_path),
+        "BASELINE_PATH": str(baseline_path),
+        "RUN_DIR": str(output_dir),
+        "TARGET_NAME": target_name,
+        "ARTIFACT_TYPE": artifact_type,
+    }
+
+    _console.print(f"\n[bold]Running benchmark hook[/bold] (timeout {timeout_seconds}s)")
+    _console.print(f"  [dim]$ {cmd}[/dim]")
+
+    start = time.time()
+    try:
+        result = subprocess.run(
+            cmd,
+            shell=True,
+            capture_output=True,
+            text=True,
+            timeout=timeout_seconds,
+            cwd=str(Path.cwd()),
+            env=env,
+        )
+        duration = time.time() - start
+        passed = result.returncode == 0
+        block = {
+            "command": cmd,
+            "exit_code": result.returncode,
+            "duration_seconds": round(duration, 3),
+            "stdout_tail": (result.stdout or "")[-_BENCHMARK_OUTPUT_TAIL_BYTES:],
+            "stderr_tail": (result.stderr or "")[-_BENCHMARK_OUTPUT_TAIL_BYTES:],
+            "passed": passed,
+            "reason": "ok" if passed else "exit_nonzero",
+        }
+    except subprocess.TimeoutExpired as exc:
+        duration = time.time() - start
+        block = {
+            "command": cmd,
+            "exit_code": None,
+            "duration_seconds": round(duration, 3),
+            "stdout_tail": (exc.stdout or "")[-_BENCHMARK_OUTPUT_TAIL_BYTES:] if exc.stdout else "",
+            "stderr_tail": (exc.stderr or "")[-_BENCHMARK_OUTPUT_TAIL_BYTES:] if exc.stderr else "",
+            "passed": False,
+            "reason": "timeout",
+        }
+    except OSError as exc:
+        # shell=True normally suppresses FileNotFoundError (sh handles it
+        # as exit 127), but other OSErrors (permission denied, etc.) can
+        # still surface. Treat any spawn-side failure as a benchmark fail.
+        duration = time.time() - start
+        block = {
+            "command": cmd,
+            "exit_code": None,
+            "duration_seconds": round(duration, 3),
+            "stdout_tail": "",
+            "stderr_tail": str(exc),
+            "passed": False,
+            "reason": "command_error",
+        }
+
+    if block["passed"]:
+        _console.print(
+            f"  [green]✓ benchmark passed[/green] "
+            f"(exit 0, {block['duration_seconds']:.1f}s)"
+        )
+    else:
+        _console.print(
+            f"  [red]✗ benchmark failed: {block['reason']}[/red] "
+            f"(exit_code={block['exit_code']}, duration={block['duration_seconds']:.1f}s)"
+        )
+    return block
 
 
 def resolve_proposer_mode(fitness_profile: str) -> ProposerMode:

@@ -43,6 +43,7 @@ from evolution.core.lm_timing_callback import (
 from evolution.core.quality_gate import (
     QUALITY_GATE_PRESETS,
     resolve_proposer_mode,
+    run_benchmark_hook,
     write_cost_ceiling_abort,
     write_gate_decision,
 )
@@ -278,6 +279,8 @@ def evolve(
     reflection_model: Optional[str] = "openai/gpt-5-mini",
     eval_model: str = "openai/gpt-4.1-mini",
     max_total_cost_usd: Optional[float] = None,
+    benchmark_cmd: Optional[str] = None,
+    benchmark_timeout_seconds: int = 600,
 ) -> dict[str, Any]:
     """Evolve one tool description inside a manifest.
 
@@ -634,6 +637,38 @@ def evolve(
                 if not c.passed:
                     growth_pass = False
 
+            # Benchmark hook: run the user's command against the evolved
+            # manifest when --benchmark-cmd is set AND the framework's
+            # gate would deploy. Nonzero exit flips to reject with
+            # reason="benchmark_failed". Files are written first so the
+            # subprocess can reference them via $EVOLVED_PATH.
+            benchmark_block: Optional[dict[str, Any]] = None
+            if growth_pass and benchmark_cmd is not None:
+                evolved_manifest_for_hook = manifest.replace_description(tool_name, evolved_description)
+                evolved_manifest_path = output_dir / "evolved_manifest.json"
+                baseline_manifest_path = output_dir / "baseline_manifest.json"
+                evolved_manifest_path.write_text(
+                    json.dumps(_manifest_to_dict(evolved_manifest_for_hook), indent=2) + "\n"
+                )
+                baseline_manifest_path.write_text(
+                    json.dumps(_manifest_to_dict(manifest), indent=2) + "\n"
+                )
+                benchmark_block = run_benchmark_hook(
+                    benchmark_cmd,
+                    timeout_seconds=benchmark_timeout_seconds,
+                    evolved_path=evolved_manifest_path,
+                    baseline_path=baseline_manifest_path,
+                    output_dir=output_dir,
+                    target_name=tool_name,
+                    artifact_type="tool_description",
+                )
+                if not benchmark_block["passed"]:
+                    growth_pass = False
+                    # Drop the deploy artifacts; the reject path writes
+                    # evolved_FAILED.json from the in-memory manifest.
+                    evolved_manifest_path.unlink(missing_ok=True)
+                    baseline_manifest_path.unlink(missing_ok=True)
+
             baseline_chars = len(baseline_description)
             evolved_chars = len(evolved_description)
             growth_pct = (evolved_chars - baseline_chars) / max(1, baseline_chars)
@@ -642,10 +677,16 @@ def evolve(
                 config.growth_quality_slope * (growth_pct - config.growth_free_threshold),
             )
             decision_rule_used = resolve_decision_rule(config, growth_pct)
+            if growth_pass:
+                decision_reason = "passed"
+            elif benchmark_block is not None and not benchmark_block["passed"]:
+                decision_reason = "benchmark_failed"
+            else:
+                decision_reason = "growth_quality_gate"
             decision_payload = {
                 "schema_version": "4",
                 "decision": "deploy" if growth_pass else "reject",
-                "reason": "passed" if growth_pass else "growth_quality_gate",
+                "reason": decision_reason,
                 "decision_rule_used": decision_rule_used,
                 "gate_mode": config.gate_mode,
                 "inferiority_tolerance": config.inferiority_tolerance,
@@ -674,6 +715,8 @@ def evolve(
                 "run_inputs": run_inputs,
                 **tool_payload_fields,
             }
+            if benchmark_block is not None:
+                decision_payload["benchmark"] = benchmark_block
             gate_path = write_gate_decision(output_dir, decision_payload)
             console.print(f"  [dim]Gate decision logged to {gate_path}[/dim]")
 
@@ -897,6 +940,24 @@ def evolve(
          "past the ceiling. 0 is accepted (aborts on first call, useful for "
          "testing). Negative values rejected. Off by default.",
 )
+@click.option(
+    "--benchmark-cmd",
+    default=None,
+    type=str,
+    help="Deploy-gate hook: shell command run AFTER the framework's own "
+         "deploy gate passes; nonzero exit flips the decision to reject "
+         "with reason='benchmark_failed'. Receives EVOLVED_PATH, "
+         "BASELINE_PATH, RUN_DIR, TARGET_NAME, ARTIFACT_TYPE via env. Runs "
+         "under /bin/sh -c with shell=True (your shell, your command — "
+         "interactive aliases are not available). Trust boundary: the "
+         "command string is yours; do not pass strings you didn't write.",
+)
+@click.option(
+    "--benchmark-timeout-seconds",
+    default=600,
+    type=click.IntRange(min=1),
+    help="Wall-clock cap for the --benchmark-cmd hook (default 600s).",
+)
 def main(
     tool_name: str,
     manifest_path: Path,
@@ -911,6 +972,8 @@ def main(
     eval_source: str,
     dry_run: bool,
     max_total_cost_usd: Optional[float],
+    benchmark_cmd: Optional[str],
+    benchmark_timeout_seconds: int,
 ) -> None:
     """Evolve one tool description in an MCP manifest using DSPy + GEPA."""
     if apply_flag and patch_flag:
@@ -929,6 +992,8 @@ def main(
         eval_source=eval_source,
         dry_run=dry_run,
         max_total_cost_usd=max_total_cost_usd,
+        benchmark_cmd=benchmark_cmd,
+        benchmark_timeout_seconds=benchmark_timeout_seconds,
     )
 
 
