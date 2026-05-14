@@ -55,8 +55,18 @@ class ResolvedLM:
     source: str
 
 
-class HermesProviderError(RuntimeError):
-    """Raised when no model can be resolved from any source."""
+class HermesProviderError(BaseException):
+    """Raised when no model can be resolved from any source, or when an
+    auth failure aborts a run.
+
+    Inherits from BaseException (not RuntimeError) so the dspy.Evaluate
+    worker pool's ``except Exception`` cannot swallow it. This mirrors
+    the trick CostCeilingExceeded uses in evolution/core/lm_timing_callback.py
+    to bypass the same swallowing.
+
+    Callers that previously caught with ``except HermesProviderError`` keep
+    working unchanged; only the bare ``except Exception`` no longer catches it.
+    """
 
 
 # ---------------------------------------------------------------------------
