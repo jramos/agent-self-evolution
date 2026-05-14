@@ -51,7 +51,7 @@ The Hermes provider name maps to LiteLLM as follows. For each, the framework con
 
 **Wire-mode flip:** if the resolved `api_base` contains `/anthropic` (z.ai with `/anthropic` suffix, MiniMax with `/anthropic` suffix), the model string flips to `anthropic/<model>` — Hermes does the same auto-detection.
 
-**Bedrock and Codex Responses API are not supported in v1.** They raise `NotImplementedError`. Pass `--optimizer-model` explicitly to bypass, or use a different provider.
+**Bedrock and Codex Responses API are not in the provider table.** A `provider: bedrock` or `provider: openai-codex` in `config.yaml` is rejected with a "Unknown provider" error. Pass `--optimizer-model` with the correct LiteLLM-native string (e.g. `bedrock/anthropic.claude-...`) to bypass the resolver entirely; you'll need to set the corresponding env vars (AWS creds, Codex auth) yourself.
 
 ## Local-server setups
 
@@ -142,9 +142,9 @@ For finer control, pass `--optimizer-model` etc. explicitly and skip Hermes reso
 
 ## Stale OAuth tokens
 
-`~/.hermes/auth.json` can hold OAuth-issued credentials (Nous Portal, OpenAI Codex). If the underlying token expires, LiteLLM will return 401. The framework does not refresh OAuth tokens — that's Hermes's job. When this happens you'll see a clear error pointing at `hermes login`.
+`~/.hermes/auth.json` can hold OAuth-issued credentials (Nous Portal, OpenAI Codex). If the underlying token expires, LiteLLM will return 401 and the run fails with a `litellm.AuthenticationError` traceback — currently surfaced as-is, with no translation to a friendlier message. Run `hermes login` to refresh the token, or pass `--optimizer-model` with a different provider to bypass.
 
-To bypass without refreshing Hermes, pass an explicit `--optimizer-model` and the corresponding env var.
+The framework does not refresh OAuth tokens — that's Hermes's job. Translating LiteLLM auth errors into a `HermesProviderError` with an actionable "run hermes login" hint is tracked under "Future work" below.
 
 ## Troubleshooting
 
@@ -169,7 +169,8 @@ The framework defaults all four roles to Hermes's single `model.default`. To use
 This module currently does not:
 
 - Refresh expired OAuth tokens (delegated to `hermes login`)
-- Honor `auxiliary.*` provider config from `cli-config.yaml` (Hermes's vision/web-extract/session-search routing)
+- Translate `litellm.AuthenticationError` into an actionable `HermesProviderError` pointing at `hermes login`
+- Honor `auxiliary.*` provider config from `config.yaml` (Hermes's vision/web-extract/session-search routing)
 - Support AWS Bedrock or OpenAI Codex Responses API end-to-end
 - Auto-suggest cheaper per-role models via `/v1/models` introspection
 

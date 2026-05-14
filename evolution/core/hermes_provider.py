@@ -24,11 +24,15 @@ from __future__ import annotations
 
 import json
 import os
+import sys
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Literal, Optional, Tuple
 
 import yaml
+
+
+Role = Literal["optimizer", "reflection", "eval", "judge"]
 
 
 # ---------------------------------------------------------------------------
@@ -124,6 +128,14 @@ _PROVIDER_ALIASES = {
     "llamacpp": "custom",
 }
 
+# Every canonical provider name the resolver knows how to handle. Anything
+# else in config.yaml's model.provider is rejected — silent fallthrough
+# to the OpenAI-wire default would route a typo'd provider to the wrong
+# endpoint with the wrong key.
+_KNOWN_PROVIDERS = (
+    set(_NATIVE_LITELLM_PREFIX) | set(_OPENAI_WIRE_DEFAULT_BASE_URL)
+)
+
 # Auto-detect priority order when ``model.provider: auto`` (or unset).
 # Mirrors the spirit of Hermes's resolve_provider() chain but compressed
 # to what we can detect from auth.json + env vars without OAuth dance.
@@ -185,7 +197,7 @@ def _is_auth_optional(requested_provider: str, base_url: str) -> bool:
 
 def resolve_default_lm(
     *,
-    role: str = "optimizer",
+    role: Role = "optimizer",
     explicit_model: Optional[str] = None,
     hermes_home: Optional[Path] = None,
 ) -> ResolvedLM:
@@ -241,6 +253,12 @@ def resolve_default_lm(
 
     # Explicit provider in config.yaml.
     canonical = _PROVIDER_ALIASES.get(requested_provider, requested_provider)
+    if canonical not in _KNOWN_PROVIDERS:
+        raise HermesProviderError(
+            f"Unknown provider '{requested_provider}' in ~/.hermes/config.yaml. "
+            f"Known: {sorted(_KNOWN_PROVIDERS)}. Set model.provider to one of "
+            f"these, or pass --{role}-model to bypass Hermes resolution."
+        )
     if not target_model:
         raise HermesProviderError(
             f"~/.hermes/config.yaml sets provider='{requested_provider}' "
@@ -320,7 +338,16 @@ def _load_cli_config(hermes_home: Path) -> Optional[Dict[str, Any]]:
         return None
     try:
         loaded = yaml.safe_load(path.read_text())
-    except yaml.YAMLError:
+    except yaml.YAMLError as exc:
+        # File present but unparseable — distinct from "absent" because the
+        # user almost certainly intended for it to be read. Falling through
+        # silently would route their run to a different model than they
+        # configured.
+        print(
+            f"warning: {path} exists but failed to parse ({exc}); "
+            "falling back to env-var auto-detection.",
+            file=sys.stderr,
+        )
         return None
     return loaded if isinstance(loaded, dict) else None
 
@@ -331,7 +358,12 @@ def _load_auth_store(hermes_home: Path) -> Dict[str, Any]:
         return {}
     try:
         loaded = json.loads(path.read_text())
-    except (json.JSONDecodeError, OSError):
+    except (json.JSONDecodeError, OSError) as exc:
+        print(
+            f"warning: {path} exists but failed to parse ({exc}); "
+            "credential pool unavailable.",
+            file=sys.stderr,
+        )
         return {}
     return loaded if isinstance(loaded, dict) else {}
 
@@ -356,8 +388,8 @@ def _resolve_credentials(
 
     pool_entry = _pick_pool_entry(auth_store, provider)
     if pool_entry is not None:
-        api_key = (pool_entry.get("access_token") or "").strip() or None
-        api_base = (pool_entry.get("base_url") or "").strip() or None
+        api_key = _str_or_none(pool_entry.get("access_token"))
+        api_base = _str_or_none(pool_entry.get("base_url"))
         if api_key:
             return _Credential(
                 api_key=api_key,
@@ -366,6 +398,29 @@ def _resolve_credentials(
             )
     tried.append(f"~/.hermes/auth.json credential_pool[{provider}]: no usable entry")
     return None
+
+
+def _str_or_none(value: Any) -> Optional[str]:
+    """Defensive accessor for hand-edited auth.json entries — coerce only
+    actual strings, return None for any other type so a non-string credential
+    field never raises mid-resolution.
+    """
+    if not isinstance(value, str):
+        return None
+    stripped = value.strip()
+    return stripped or None
+
+
+def _coerce_priority(value: Any) -> int:
+    """Sort key for credential pool entries. Hand-edited auth.json may
+    store priority as a string ("0") or omit it; either way we never want
+    sort to raise TypeError comparing str to int.
+    """
+    if isinstance(value, int):
+        return value
+    if isinstance(value, str) and value.lstrip("-").isdigit():
+        return int(value)
+    return 999
 
 
 def _pick_pool_entry(auth_store: Dict[str, Any], provider: str) -> Optional[Dict[str, Any]]:
@@ -385,7 +440,7 @@ def _pick_pool_entry(auth_store: Dict[str, Any], provider: str) -> Optional[Dict
             candidates.extend(e for e in entries if isinstance(e, dict))
     if not candidates:
         return None
-    candidates.sort(key=lambda e: e.get("priority", 999))
+    candidates.sort(key=lambda e: _coerce_priority(e.get("priority")))
     return candidates[0]
 
 
@@ -410,8 +465,8 @@ def _auto_detect(
                     source=f"auth.json:credential_pool[{provider}]",
                 )
     tried.append(
-        "auto-detect: no provider in (anthropic, openrouter, openai, nous, "
-        "gemini, copilot, ...) has env-var or auth.json credentials"
+        f"auto-detect: no provider in ({', '.join(_AUTO_DETECT_ORDER)}) "
+        "has env-var or auth.json credentials"
     )
     return None, _Credential(api_key=None, api_base=None, source="none")
 
@@ -466,14 +521,17 @@ def _build_resolved_lm(
 def _format_hard_error(
     hermes_home: Path,
     tried: List[str],
-    role: str,
+    role: Role,
     requested_provider: Optional[str] = None,
 ) -> str:
     """Build the actionable error message for the no-credentials case."""
     config_path = hermes_home / "config.yaml"
     config_status = "found" if config_path.exists() else "not found"
+    header = [f"No model could be resolved for role={role}."]
+    if requested_provider:
+        header.append(f"Provider requested via config.yaml: {requested_provider}")
     lines = [
-        f"No model could be resolved for role={role}.",
+        *header,
         "",
         "Tried in order:",
         f"  - --{role}-model flag: not set",
@@ -488,12 +546,7 @@ def _format_hard_error(
             "  (b) Set a provider env var (e.g. export ANTHROPIC_API_KEY=sk-ant-...,",
             "      export OPENROUTER_API_KEY=sk-or-..., export OPENAI_API_KEY=sk-...)",
             f"  (c) Pass --{role}-model explicitly "
-            "(e.g. --{role}-model anthropic/claude-opus-4-5)".format(role=role),
+            f"(e.g. --{role}-model anthropic/claude-opus-4-5)",
         ]
     )
-    if requested_provider:
-        lines.insert(
-            3,
-            f"  Provider requested via config.yaml: {requested_provider}",
-        )
     return "\n".join(lines)

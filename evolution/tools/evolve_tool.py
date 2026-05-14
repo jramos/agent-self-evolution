@@ -23,7 +23,7 @@ from rich.panel import Panel
 from rich.table import Table
 
 from evolution.core.config import EvolutionConfig
-from evolution.core.hermes_provider import resolved_lms_dump
+from evolution.core.hermes_provider import resolve_default_lm, resolved_lms_dump
 from evolution.core.constraints import (
     ConstraintValidator,
     effective_absolute_char_ceiling,
@@ -532,7 +532,6 @@ def evolve(
             if not all(c.passed for c in baseline_constraints):
                 console.print("[yellow]⚠ Baseline description has constraint violations — proceeding anyway[/yellow]")
 
-            from evolution.core.hermes_provider import resolve_default_lm
             _eval_lm = resolve_default_lm(role="eval", explicit_model=eval_model)
             lm = dspy.LM(_eval_lm.model, **_eval_lm.lm_kwargs, request_timeout=60, num_retries=5)
             dspy.configure(

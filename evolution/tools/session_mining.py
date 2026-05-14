@@ -30,6 +30,7 @@ from evolution.core.external_importers import (
     iter_hermes_sessions,
     parse_scoring_json,
 )
+from evolution.core.hermes_provider import resolve_default_lm
 from evolution.tools.tool_source import ToolManifest
 
 logger = logging.getLogger(__name__)
@@ -234,7 +235,6 @@ class ToolRelevanceFilter:
             "unknown_correct_tool": 0,
         }
 
-        from evolution.core.hermes_provider import resolve_default_lm
         _lm = resolve_default_lm(role="judge", explicit_model=self.model)
         lm = dspy.LM(_lm.model, **_lm.lm_kwargs, temperature=0.0, max_tokens=2000)
         budget = candidates[: max_examples * 2]

@@ -23,7 +23,7 @@ from rich.panel import Panel
 from rich.table import Table
 
 from evolution.core.config import EvolutionConfig
-from evolution.core.hermes_provider import resolved_lms_dump
+from evolution.core.hermes_provider import resolve_default_lm, resolved_lms_dump
 from evolution.core.quality_gate import (
     QUALITY_GATE_PRESETS,
     resolve_proposer_mode,
@@ -258,7 +258,6 @@ def _default_gepa_runner(
     # max_tokens=32000 satisfies DSPy's reasoning-model floor of 16000
     # (DSPy raises ValueError below that).
     reflection_lm_model = reflection_model or optimizer_model
-    from evolution.core.hermes_provider import resolve_default_lm
     _reflection_lm = resolve_default_lm(role="reflection", explicit_model=reflection_lm_model)
     optimizer = dspy.GEPA(
         metric=metric,
@@ -667,14 +666,17 @@ def evolve(
                 console.print("[yellow]⚠ Baseline skill has constraint violations — proceeding anyway[/yellow]")
 
             gepa_budget = _resolve_budget(iterations, budget)
+            # Resolve up-front so the banner reflects the model the run will
+            # actually call — printing the raw CLI flag value showed "None"
+            # whenever Hermes was doing the resolving.
+            _optimizer_lm = resolve_default_lm(role="optimizer", explicit_model=optimizer_model)
+            _eval_lm = resolve_default_lm(role="eval", explicit_model=eval_model)
             console.print(f"\n[bold]Configuring optimizer[/bold]")
             console.print(f"  Optimizer: GEPA (budget={gepa_budget})")
-            console.print(f"  Optimizer model: {optimizer_model}")
-            console.print(f"  Eval model: {eval_model}")
+            console.print(f"  Optimizer model: {_optimizer_lm.model} ({_optimizer_lm.source})")
+            console.print(f"  Eval model: {_eval_lm.model} ({_eval_lm.source})")
 
             # request_timeout=60 ≈ 6x P99 of slowest observed gpt-4.1-mini call.
-            from evolution.core.hermes_provider import resolve_default_lm
-            _eval_lm = resolve_default_lm(role="eval", explicit_model=eval_model)
             lm = dspy.LM(_eval_lm.model, **_eval_lm.lm_kwargs, request_timeout=60, num_retries=5)
             # warn_on_type_mismatch=False silences spam from signatures that pass
             # empty/None into `str` inputs (e.g. RelevanceFilter.assistant_response

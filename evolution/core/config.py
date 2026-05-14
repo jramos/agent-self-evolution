@@ -11,7 +11,7 @@ from pathlib import Path
 from dataclasses import dataclass, field
 from typing import Optional
 
-from evolution.core.hermes_provider import ResolvedLM, resolve_default_lm
+from evolution.core.hermes_provider import ResolvedLM, Role, resolve_default_lm
 from evolution.core.skill_sources import SkillSource, discover_skill_sources
 
 
@@ -36,7 +36,7 @@ class EvolutionConfig:
     eval_model: Optional[str] = None
     judge_model: Optional[str] = None
 
-    def get_lm(self, role: str) -> ResolvedLM:
+    def get_lm(self, role: Role) -> ResolvedLM:
         """Return the ResolvedLM for the given role.
 
         Reads the ``<role>_model`` override field; if set, treats it as an
