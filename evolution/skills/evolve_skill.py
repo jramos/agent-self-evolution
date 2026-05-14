@@ -257,13 +257,16 @@ def _default_gepa_runner(
     # max_tokens=32000 satisfies DSPy's reasoning-model floor of 16000
     # (DSPy raises ValueError below that).
     reflection_lm_model = reflection_model or optimizer_model
+    from evolution.core.hermes_provider import resolve_default_lm
+    _reflection_lm = resolve_default_lm(role="reflection", explicit_model=reflection_lm_model)
     optimizer = dspy.GEPA(
         metric=metric,
         auto=gepa_budget,
         # cache=False because at temperature=1.0 the disk cache would
         # replay stale mutations across runs and shrink candidate diversity.
         reflection_lm=dspy.LM(
-            reflection_lm_model,
+            _reflection_lm.model,
+            **_reflection_lm.lm_kwargs,
             temperature=1.0,
             max_tokens=32000,
             cache=False,
@@ -669,7 +672,9 @@ def evolve(
             console.print(f"  Eval model: {eval_model}")
 
             # request_timeout=60 ≈ 6x P99 of slowest observed gpt-4.1-mini call.
-            lm = dspy.LM(eval_model, request_timeout=60, num_retries=5)
+            from evolution.core.hermes_provider import resolve_default_lm
+            _eval_lm = resolve_default_lm(role="eval", explicit_model=eval_model)
+            lm = dspy.LM(_eval_lm.model, **_eval_lm.lm_kwargs, request_timeout=60, num_retries=5)
             # warn_on_type_mismatch=False silences spam from signatures that pass
             # empty/None into `str` inputs (e.g. RelevanceFilter.assistant_response
             # before any assistant turn).

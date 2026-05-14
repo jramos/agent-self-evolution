@@ -531,7 +531,9 @@ def evolve(
             if not all(c.passed for c in baseline_constraints):
                 console.print("[yellow]⚠ Baseline description has constraint violations — proceeding anyway[/yellow]")
 
-            lm = dspy.LM(eval_model, request_timeout=60, num_retries=5)
+            from evolution.core.hermes_provider import resolve_default_lm
+            _eval_lm = resolve_default_lm(role="eval", explicit_model=eval_model)
+            lm = dspy.LM(_eval_lm.model, **_eval_lm.lm_kwargs, request_timeout=60, num_retries=5)
             dspy.configure(
                 lm=lm,
                 warn_on_type_mismatch=False,
@@ -603,8 +605,13 @@ def evolve(
             console.print(f"\n[bold cyan]Running GEPA optimization (max_full_evals={iterations})[/bold cyan]\n")
             start_time = time.time()
 
+            _reflection_lm = resolve_default_lm(
+                role="reflection",
+                explicit_model=reflection_model or optimizer_model,
+            )
             reflection_lm = dspy.LM(
-                reflection_model or optimizer_model,
+                _reflection_lm.model,
+                **_reflection_lm.lm_kwargs,
                 temperature=1.0,
                 max_tokens=32000,
                 cache=False,
