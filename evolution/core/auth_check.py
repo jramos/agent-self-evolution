@@ -222,12 +222,17 @@ def _probe_one(
 ) -> None:
     """Single ``litellm.completion`` probe. Translates auth/rate-limit
     failures; lets unrelated errors propagate.
+
+    ``max_tokens=16`` (not 1) because OpenAI's reasoning-class models
+    reject sub-output-budget probes with HTTP 400 ("max_tokens or model
+    output limit was reached"). 16 is plenty for an empty-ish response
+    and still costs ~$0.0001.
     """
     try:
         completion_fn(
             model=model,
             messages=[{"role": "user", "content": "."}],
-            max_tokens=1,
+            max_tokens=16,
             num_retries=0,
             timeout=timeout,
             **lm_kwargs,
@@ -250,4 +255,13 @@ def _probe_one(
                     underlying=exc,
                 )
             ) from exc
+        # 400 BadRequest on a tiny probe usually means the probe payload
+        # itself is wrong for this model (some endpoints reject empty
+        # messages, max_tokens floors, etc.) — not the user's credential.
+        # Letting it through as a non-auth failure would crash the run
+        # before GEPA gets to make its own (longer) call which might work
+        # fine. Suppress with a debug log; the actual GEPA call will
+        # surface real errors at the right time.
+        if isinstance(exc, getattr(litellm, "BadRequestError", ())):
+            return
         raise

@@ -157,7 +157,10 @@ class TestPreflight:
         kwargs = completion_fn.call_args.kwargs
         assert kwargs["model"] == "openai/gpt-4o-mini"
         assert kwargs["api_key"] == "k"
-        assert kwargs["max_tokens"] == 1
+        # max_tokens=16 not 1: OpenAI's reasoning-class models reject
+        # sub-output-budget probes with a 400. 16 is plenty for an
+        # empty-ish response and still costs ~$0.0001.
+        assert kwargs["max_tokens"] == 16
         assert kwargs["num_retries"] == 0
 
     def test_dedup_collapses_duplicate_lms(self):
