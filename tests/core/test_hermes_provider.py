@@ -23,6 +23,8 @@ import pytest
 from evolution.core.hermes_provider import (
     HermesProviderError,
     ResolvedLM,
+    _coerce_priority,
+    _pick_pool_entry,
     _redact_lm,
     resolve_default_lm,
     resolved_lms_dump,
@@ -650,3 +652,348 @@ class TestRoleParameter:
         }
         # Hermes has only one model.default; all roles collapse onto it.
         assert len(set(models.values())) == 1
+
+
+# ---------------------------------------------------------------------------
+# Credential pool — declared-but-untested branches
+# ---------------------------------------------------------------------------
+
+
+class TestCredentialPoolEdgeCases:
+    def test_pool_sort_three_or_more_entries_stable(self, hermes_home):
+        write_config(
+            hermes_home,
+            """
+            model:
+              default: m
+              provider: anthropic
+            """,
+        )
+        write_auth(
+            hermes_home,
+            {
+                "credential_pool": {
+                    "anthropic": [
+                        {"priority": 5, "auth_type": "api_key", "access_token": "low", "label": "five"},
+                        {"priority": 0, "auth_type": "api_key", "access_token": "first-zero", "label": "zero-a"},
+                        {"priority": 0, "auth_type": "api_key", "access_token": "second-zero", "label": "zero-b"},
+                        {"auth_type": "api_key", "access_token": "no-priority", "label": "default-999"},
+                    ]
+                },
+            },
+        )
+        lm = resolve_default_lm(role="optimizer", hermes_home=hermes_home)
+        # Stable sort: among the two priority=0 entries, the first-listed wins.
+        assert lm.lm_kwargs["api_key"] == "first-zero"
+
+    def test_custom_namespaced_pool_key(self, hermes_home):
+        # provider=anthropic, but only `custom:anthropic` is populated.
+        # Pins the declared-in-code namespaced-key branch.
+        write_config(
+            hermes_home,
+            """
+            model:
+              default: m
+              provider: anthropic
+            """,
+        )
+        write_auth(
+            hermes_home,
+            {
+                "credential_pool": {
+                    "custom:anthropic": [
+                        {"priority": 0, "auth_type": "api_key", "access_token": "from-custom-namespace"}
+                    ]
+                },
+            },
+        )
+        lm = resolve_default_lm(role="optimizer", hermes_home=hermes_home)
+        assert lm.lm_kwargs["api_key"] == "from-custom-namespace"
+
+    def test_string_priority_does_not_crash_sort(self, hermes_home):
+        # Hand-edited auth.json may store priority as a string. The sort
+        # must not raise; coerce to int with a fallback.
+        write_config(
+            hermes_home,
+            """
+            model:
+              default: m
+              provider: anthropic
+            """,
+        )
+        write_auth(
+            hermes_home,
+            {
+                "credential_pool": {
+                    "anthropic": [
+                        {"priority": "0", "auth_type": "api_key", "access_token": "str-zero"},
+                        {"priority": 5, "auth_type": "api_key", "access_token": "int-five"},
+                    ]
+                },
+            },
+        )
+        lm = resolve_default_lm(role="optimizer", hermes_home=hermes_home)
+        assert lm.lm_kwargs["api_key"] == "str-zero"
+
+    def test_non_string_access_token_never_crashes(self, hermes_home, monkeypatch):
+        monkeypatch.setenv("ANTHROPIC_API_KEY", "from-env")
+        write_config(
+            hermes_home,
+            """
+            model:
+              default: m
+              provider: anthropic
+            """,
+        )
+        write_auth(
+            hermes_home,
+            {
+                "credential_pool": {
+                    "anthropic": [
+                        {"priority": 0, "auth_type": "api_key", "access_token": 12345}
+                    ]
+                },
+            },
+        )
+        lm = resolve_default_lm(role="optimizer", hermes_home=hermes_home)
+        # Pool entry skipped (non-string token); env wins.
+        assert lm.lm_kwargs["api_key"] == "from-env"
+
+    def test_coerce_priority_unit(self):
+        assert _coerce_priority(0) == 0
+        assert _coerce_priority(5) == 5
+        assert _coerce_priority("0") == 0
+        assert _coerce_priority("-3") == -3
+        assert _coerce_priority(None) == 999
+        assert _coerce_priority("not-a-number") == 999
+        assert _coerce_priority(1.5) == 999  # float intentionally rejected
+
+
+# ---------------------------------------------------------------------------
+# Local-server / alias coverage
+# ---------------------------------------------------------------------------
+
+
+class TestLocalServerAndAliases:
+    def test_custom_with_localhost_no_key_succeeds(self, hermes_home):
+        # provider:custom + localhost base_url is the auth-optional branch
+        # that was declared in code but never tested.
+        write_config(
+            hermes_home,
+            """
+            model:
+              default: my-local
+              provider: custom
+              base_url: http://localhost:9000/v1
+            """,
+        )
+        lm = resolve_default_lm(role="optimizer", hermes_home=hermes_home)
+        assert lm.model == "openai/my-local"
+        assert lm.lm_kwargs["api_base"] == "http://localhost:9000/v1"
+        # custom provider doesn't get the EMPTY placeholder (only ollama/vllm/
+        # llamacpp/lmstudio do); api_key is simply absent. LiteLLM and most
+        # local servers accept that.
+        assert "api_key" not in lm.lm_kwargs or lm.lm_kwargs["api_key"] in ("", "EMPTY")
+
+    def test_custom_with_remote_url_no_key_hard_errors(self, hermes_home):
+        # The negative case: custom + non-local URL must require a key.
+        write_config(
+            hermes_home,
+            """
+            model:
+              default: m
+              provider: custom
+              base_url: https://api.example.com/v1
+            """,
+        )
+        with pytest.raises(HermesProviderError):
+            resolve_default_lm(role="optimizer", hermes_home=hermes_home)
+
+    def test_vllm_alias_collapses_to_custom(self, hermes_home):
+        write_config(
+            hermes_home,
+            """
+            model:
+              default: vllm-model
+              provider: vllm
+              base_url: http://localhost:8000/v1
+            """,
+        )
+        lm = resolve_default_lm(role="optimizer", hermes_home=hermes_home)
+        assert lm.model == "openai/vllm-model"
+        assert lm.lm_kwargs["api_base"] == "http://localhost:8000/v1"
+
+    def test_llamacpp_alias_collapses_to_custom(self, hermes_home):
+        write_config(
+            hermes_home,
+            """
+            model:
+              default: llama-model
+              provider: llamacpp
+              base_url: http://localhost:8080/v1
+            """,
+        )
+        lm = resolve_default_lm(role="optimizer", hermes_home=hermes_home)
+        assert lm.model == "openai/llama-model"
+
+
+# ---------------------------------------------------------------------------
+# Auto-detect ordering past the first pair
+# ---------------------------------------------------------------------------
+
+
+class TestAutoDetectOrdering:
+    def test_openai_beats_gemini_when_both_set(self, hermes_home, monkeypatch):
+        monkeypatch.setenv("OPENAI_API_KEY", "openai-key")
+        monkeypatch.setenv("GEMINI_API_KEY", "gemini-key")
+        write_config(
+            hermes_home,
+            """
+            model:
+              default: m
+              provider: auto
+            """,
+        )
+        lm = resolve_default_lm(role="optimizer", hermes_home=hermes_home)
+        # _AUTO_DETECT_ORDER places openai before gemini; pin that contract.
+        assert lm.model.startswith("openai/")
+
+    def test_gemini_secondary_env_var_picked_up(self, hermes_home, monkeypatch):
+        # Only GOOGLE_API_KEY is set, not GEMINI_API_KEY. The
+        # _PROVIDER_ENV_KEYS["gemini"] tuple has both — pin that the
+        # second one is consulted.
+        monkeypatch.setenv("GOOGLE_API_KEY", "google-key")
+        write_config(
+            hermes_home,
+            """
+            model:
+              default: gemini-2.5-pro
+              provider: auto
+            """,
+        )
+        lm = resolve_default_lm(role="optimizer", hermes_home=hermes_home)
+        assert lm.model == "gemini/gemini-2.5-pro"
+        assert lm.lm_kwargs["api_key"] == "google-key"
+
+
+# ---------------------------------------------------------------------------
+# Provider validation (typo guard)
+# ---------------------------------------------------------------------------
+
+
+class TestProviderValidation:
+    def test_typo_provider_rejected_with_known_list(self, hermes_home):
+        write_config(
+            hermes_home,
+            """
+            model:
+              default: m
+              provider: anthropc
+              api_key: x
+            """,
+        )
+        with pytest.raises(HermesProviderError) as exc:
+            resolve_default_lm(role="optimizer", hermes_home=hermes_home)
+        msg = str(exc.value)
+        assert "anthropc" in msg
+        assert "Known:" in msg
+        # Sanity: at least one real provider name appears in the suggested list.
+        assert "anthropic" in msg
+
+    def test_explicit_override_bypasses_provider_validation(self, hermes_home):
+        # Even if config.yaml has a bogus provider, an explicit --optimizer-model
+        # short-circuits before validation runs.
+        write_config(
+            hermes_home,
+            """
+            model:
+              default: m
+              provider: anthropc
+            """,
+        )
+        lm = resolve_default_lm(
+            role="optimizer",
+            explicit_model="anthropic/claude-haiku-4-5",
+            hermes_home=hermes_home,
+        )
+        assert lm.model == "anthropic/claude-haiku-4-5"
+
+
+# ---------------------------------------------------------------------------
+# Hard-error rendering structure
+# ---------------------------------------------------------------------------
+
+
+class TestHardErrorRendering:
+    def test_provider_note_renders_above_tried_list_not_inside(self, hermes_home):
+        # Regression: the previous version inserted the "Provider requested..."
+        # line at index 3, which landed mid-bullet-list with mismatched indent.
+        write_config(
+            hermes_home,
+            """
+            model:
+              default: m
+              provider: anthropic
+            """,
+        )
+        with pytest.raises(HermesProviderError) as exc:
+            resolve_default_lm(role="optimizer", hermes_home=hermes_home)
+        msg = str(exc.value)
+        lines = msg.splitlines()
+
+        provider_idx = next(i for i, l in enumerate(lines) if "Provider requested" in l)
+        tried_idx = next(i for i, l in enumerate(lines) if l == "Tried in order:")
+        # Provider line must precede the bullet list, not split it.
+        assert provider_idx < tried_idx
+        # And the lines between should be only the blank separator.
+        between = lines[provider_idx + 1: tried_idx]
+        assert all(l == "" for l in between), f"non-blank line between provider and bullets: {between}"
+
+    def test_auto_detect_message_lists_full_provider_set(self, hermes_home):
+        # Regression: the previous message hardcoded only the first 6 of 15
+        # providers, hiding whether xiaomi/arcee/etc. were actually checked.
+        with pytest.raises(HermesProviderError) as exc:
+            resolve_default_lm(role="optimizer", hermes_home=hermes_home)
+        msg = str(exc.value)
+        # Every provider in the auto-detect list should appear in the message.
+        for provider in ("anthropic", "openrouter", "openai", "nous", "gemini",
+                         "copilot", "kilocode", "ai-gateway"):
+            assert provider in msg, f"provider {provider!r} missing from auto-detect message"
+
+
+# ---------------------------------------------------------------------------
+# Malformed-config warning
+# ---------------------------------------------------------------------------
+
+
+class TestMalformedConfigWarning:
+    def test_unparseable_yaml_warns_on_stderr(self, hermes_home, monkeypatch, capsys):
+        monkeypatch.setenv("ANTHROPIC_API_KEY", "ant-key")
+        # Mismatched quote = real yaml.YAMLError, distinct from the
+        # "valid but odd YAML" case (':::not yaml:::' parses as a scalar).
+        (hermes_home / "config.yaml").write_text(
+            'model:\n  default: "unterminated\n  provider: anthropic\n'
+        )
+        lm = resolve_default_lm(role="optimizer", hermes_home=hermes_home)
+        captured = capsys.readouterr()
+        assert "warning" in captured.err
+        assert "config.yaml" in captured.err
+        # Resolution still succeeds via env-var fallback.
+        assert lm.lm_kwargs["api_key"] == "ant-key"
+
+    def test_unparseable_auth_json_warns_on_stderr(self, hermes_home, monkeypatch, capsys):
+        monkeypatch.setenv("ANTHROPIC_API_KEY", "ant-key")
+        write_config(
+            hermes_home,
+            """
+            model:
+              default: m
+              provider: anthropic
+            """,
+        )
+        (hermes_home / "auth.json").write_text("{this is not json")
+        lm = resolve_default_lm(role="optimizer", hermes_home=hermes_home)
+        captured = capsys.readouterr()
+        assert "warning" in captured.err
+        assert "auth.json" in captured.err
+        assert lm.lm_kwargs["api_key"] == "ant-key"
