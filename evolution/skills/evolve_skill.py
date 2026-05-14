@@ -471,8 +471,8 @@ def evolve(
     iterations: int = 10,
     eval_source: str = "synthetic",
     dataset_path: Optional[str] = None,
-    optimizer_model: str = "openai/gpt-4.1",
-    eval_model: str = "openai/gpt-4.1-mini",
+    optimizer_model: Optional[str] = None,
+    eval_model: Optional[str] = None,
     skill_source_dirs: Optional[list[str]] = None,
     dry_run: bool = False,
     seed: int = 42,
@@ -1087,19 +1087,28 @@ def evolve(
 @click.option("--dataset-path", default=None, help="Path to existing eval dataset (JSONL)")
 @click.option(
     "--optimizer-model",
-    default="openai/gpt-4.1",
-    help="Default LM bound to dspy.configure (eval LM). Reflection LM is "
-    "controlled separately by --reflection-model.",
+    default=None,
+    help="LiteLLM model string for the optimizer LM (e.g. anthropic/claude-opus-4-5, "
+    "openai/gpt-4.1, openrouter/anthropic/claude-opus-4-5). When unset, defaults "
+    "to the model resolved from ~/.hermes/config.yaml + auth.json + provider env "
+    "vars; if neither is configured, exits with an actionable error. "
+    "Reflection LM is controlled separately by --reflection-model.",
 )
 @click.option(
     "--reflection-model",
-    default="openai/gpt-5-mini",
+    default=None,
     help="Model for the GEPA reflection LM (the LM the instruction proposer "
-    "calls). DSPy's GEPA docstring recommends gpt-5-class reasoning models; "
-    "Decagon's production blog reports gpt-4o-mini failed completely here. "
-    "Reasoning models require max_tokens >= 16000 (we set 32000).",
+    "calls). DSPy's GEPA docstring recommends gpt-5-class reasoning models. "
+    "Reasoning models require max_tokens >= 16000 (we set 32000). "
+    "When unset, falls back to --optimizer-model.",
 )
-@click.option("--eval-model", default="openai/gpt-4.1-mini", help="Model for evaluations")
+@click.option(
+    "--eval-model",
+    default=None,
+    help="Model for evaluation + judge LMs. When unset, defaults to the "
+    "model resolved from Hermes (same as --optimizer-model). On Hermes setups "
+    "with one model only, all roles collapse onto it.",
+)
 @click.option(
     "--skill-source-dir",
     "skill_source_dir",
