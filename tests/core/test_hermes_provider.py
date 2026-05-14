@@ -25,6 +25,7 @@ from evolution.core.hermes_provider import (
     ResolvedLM,
     _redact_lm,
     resolve_default_lm,
+    resolved_lms_dump,
 )
 
 
@@ -110,6 +111,45 @@ class TestRedaction:
         lm = ResolvedLM(model="ollama/llama3", lm_kwargs={"api_base": "http://localhost:11434"}, source="explicit")
         redacted = _redact_lm(lm)
         assert "api_key" not in redacted["lm_kwargs"]
+
+
+class TestResolvedLmsDump:
+    def test_resolves_all_roles_and_redacts(self, hermes_home):
+        write_config(
+            hermes_home,
+            """
+            model:
+              default: claude-opus-4.6
+              provider: anthropic
+              api_key: sk-ant-load-bearing-secret
+            """,
+        )
+        dump = resolved_lms_dump(
+            hermes_home=hermes_home,
+            optimizer=None,
+            reflection=None,
+            eval_=None,
+            judge=None,
+        )
+        for role in ("optimizer", "reflection", "eval", "judge"):
+            assert role in dump
+            assert dump[role]["lm_kwargs"]["api_key"] == "<REDACTED>"
+        # The actual secret must never appear in the serialized payload —
+        # this is the load-bearing assertion that gates persistence safety.
+        assert "sk-ant-load-bearing-secret" not in json.dumps(dump)
+
+    def test_failed_role_records_error_not_raises(self, hermes_home):
+        # No config, no env — every role fails to resolve.
+        dump = resolved_lms_dump(hermes_home=hermes_home, optimizer=None, eval_=None)
+        assert "error" in dump["optimizer"]
+        assert "error" in dump["eval"]
+
+    def test_explicit_override_passes_through(self, hermes_home):
+        dump = resolved_lms_dump(
+            hermes_home=hermes_home, optimizer="anthropic/claude-haiku-4-5"
+        )
+        assert dump["optimizer"]["model"] == "anthropic/claude-haiku-4-5"
+        assert dump["optimizer"]["source"] == "explicit"
 
 
 # ---------------------------------------------------------------------------

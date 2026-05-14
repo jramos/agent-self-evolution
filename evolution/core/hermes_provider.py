@@ -279,6 +279,29 @@ def _redact_lm(lm: ResolvedLM) -> Dict[str, Any]:
     }
 
 
+def resolved_lms_dump(
+    *, hermes_home: Optional[Path] = None, **role_overrides: Optional[str]
+) -> Dict[str, Dict[str, Any]]:
+    """Resolve a set of role → model-string overrides into a dict of redacted
+    ResolvedLM entries suitable for a run-config JSON dump. Never raises;
+    failures appear as ``{"error": "..."}`` per role so a write_text() at
+    the dump site can never fail because the resolver couldn't find creds.
+
+    Use ``eval_=...`` for the eval role since ``eval`` is a Python builtin.
+    """
+    out: Dict[str, Dict[str, Any]] = {}
+    for kwarg_role, explicit in role_overrides.items():
+        role = "eval" if kwarg_role == "eval_" else kwarg_role
+        try:
+            lm = resolve_default_lm(
+                role=role, explicit_model=explicit, hermes_home=hermes_home
+            )
+            out[role] = _redact_lm(lm)
+        except HermesProviderError as exc:
+            out[role] = {"error": str(exc)}
+    return out
+
+
 # ---------------------------------------------------------------------------
 # Internal helpers
 # ---------------------------------------------------------------------------

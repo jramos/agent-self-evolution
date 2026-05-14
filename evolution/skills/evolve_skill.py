@@ -23,6 +23,7 @@ from rich.panel import Panel
 from rich.table import Table
 
 from evolution.core.config import EvolutionConfig
+from evolution.core.hermes_provider import resolved_lms_dump
 from evolution.core.quality_gate import (
     QUALITY_GATE_PRESETS,
     resolve_proposer_mode,
@@ -803,6 +804,11 @@ def evolve(
                         "optimizer_model": optimizer_model,
                         "reflection_model": config.reflection_model,
                         "eval_model": config.eval_model,
+                        "resolved_lms": resolved_lms_dump(
+                            optimizer=optimizer_model,
+                            reflection=config.reflection_model,
+                            eval_=config.eval_model,
+                        ),
                         "eval_dataset_size": config.eval_dataset_size,
                         "holdout_ratio": config.holdout_ratio,
                         "quality_gate_preset": quality_gate,
@@ -938,6 +944,11 @@ def evolve(
                     "optimizer_model": optimizer_model,
                     "reflection_model": config.reflection_model,
                     "eval_model": config.eval_model,
+                    "resolved_lms": resolved_lms_dump(
+                        optimizer=optimizer_model,
+                        reflection=config.reflection_model,
+                        eval_=config.eval_model,
+                    ),
                     "eval_dataset_size": config.eval_dataset_size,
                     "holdout_ratio": config.holdout_ratio,
                     "quality_gate_preset": quality_gate,
@@ -1001,6 +1012,9 @@ def evolve(
                 "iterations": iterations,
                 "optimizer_model": optimizer_model,
                 "eval_model": eval_model,
+                "resolved_lms": resolved_lms_dump(
+                    optimizer=optimizer_model, eval_=eval_model
+                ),
                 "baseline_score": avg_baseline,
                 "evolved_score": avg_evolved,
                 "improvement": improvement,
@@ -1044,6 +1058,11 @@ def evolve(
                     "optimizer_model": optimizer_model,
                     "reflection_model": config.reflection_model,
                     "eval_model": config.eval_model,
+                    "resolved_lms": resolved_lms_dump(
+                        optimizer=optimizer_model,
+                        reflection=config.reflection_model,
+                        eval_=config.eval_model,
+                    ),
                     "eval_dataset_size": config.eval_dataset_size,
                     "holdout_ratio": config.holdout_ratio,
                     "quality_gate_preset": quality_gate,
