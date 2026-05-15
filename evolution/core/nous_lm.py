@@ -10,14 +10,14 @@ from Codex:
      (``inference-api.nousresearch.com``) requires the **agent_key** as
      Bearer — not the access_token.
 
-This module mirrors Hermes's own ``resolve_nous_runtime_credentials`` flow
-at ``hermes_cli/auth.py:3061-3193``: refresh the OAuth token first if
-expiring, then mint a fresh agent_key from it. On inference 401, force
-re-mint and retry once. State is shared across LM instances via
-``_STATE_BY_KEY`` so the four LM roles (optimizer, reflection, eval,
-judge) coordinate through one lock and one mint per refresh window —
-without this, four parallel workers entering the skew window would each
-mint and three would race the portal.
+Mirrors Hermes's ``resolve_nous_runtime_credentials`` flow in
+``hermes_cli/auth.py``: refresh the OAuth token first if expiring, then
+mint a fresh agent_key from it. On inference 401, force re-mint and retry
+once. State is shared across LM instances via ``_STATE_BY_KEY`` so the
+four LM roles (optimizer, reflection, eval, judge) coordinate through
+one lock and one mint per refresh window — without this, four parallel
+workers entering the skew window would each mint and three would race
+the portal's single-use refresh-token rotation.
 
 In-memory only — no auth.json writeback. Long evolutions (>30 min on a
 fresh agent_key) refresh in-process, but the on-disk store stays at
@@ -27,6 +27,7 @@ with concurrent Hermes sessions that may also be refreshing.
 
 from __future__ import annotations
 
+import logging
 import os
 import threading
 import time
@@ -40,26 +41,26 @@ import litellm
 from evolution.core.hermes_provider import HermesProviderError
 from evolution.core.oauth_helpers import parse_iso_or_epoch
 
+_log = logging.getLogger(__name__)
 
-# Mirrors hermes_cli/auth.py:67-72 — reading the same constants keeps
-# us in lockstep with Hermes's own behavior. Override via env vars when
-# pointing at a stage portal or local mock for tests.
-NOUS_PORTAL_BASE_URL = os.getenv(
-    "HERMES_PORTAL_BASE_URL", "https://portal.nousresearch.com"
-)
-NOUS_INFERENCE_BASE_URL = os.getenv(
-    "NOUS_INFERENCE_BASE_URL", "https://inference-api.nousresearch.com/v1"
-)
+
+# Hardcoded defaults; the constructor reads ``HERMES_PORTAL_BASE_URL`` and
+# ``NOUS_INFERENCE_BASE_URL`` env vars at instance time so tests and stage
+# setups can override them post-import. Module-level capture would freeze
+# the values at first import, before any test or operator could intervene.
+NOUS_PORTAL_BASE_URL = "https://portal.nousresearch.com"
+NOUS_INFERENCE_BASE_URL = "https://inference-api.nousresearch.com/v1"
 NOUS_OAUTH_CLIENT_ID = "hermes-cli"
 
 # Refresh OAuth access tokens 2 minutes before they expire and re-mint
-# the inference agent_key 2 minutes before it expires. Hermes uses the
-# same constants at hermes_cli/auth.py:71-72; matching keeps multi-process
-# workloads from racing each other onto the wire.
+# the inference agent_key 2 minutes before it expires. Mirrors Hermes's
+# ``ACCESS_TOKEN_REFRESH_SKEW_SECONDS`` so multi-process workloads don't
+# race each other onto the wire on different cadences.
 OAUTH_REFRESH_SKEW_SECONDS = 120
 AGENT_KEY_REFRESH_SKEW_SECONDS = 120
 # Ask the portal for at least 30 minutes of agent_key TTL on each mint;
-# the portal is free to grant more. Mirrors DEFAULT_AGENT_KEY_MIN_TTL.
+# the portal is free to grant more. Mirrors Hermes's
+# ``DEFAULT_AGENT_KEY_MIN_TTL_SECONDS``.
 AGENT_KEY_MIN_TTL_SECONDS = 30 * 60
 
 
@@ -82,6 +83,19 @@ class _SharedNousState:
     agent_key: Optional[str]
     agent_key_expires_at: Optional[float]
     lock: threading.Lock
+
+    def __post_init__(self) -> None:
+        # An agent_key without an expiry trips _agent_key_needs_mint into
+        # "always re-mint" mode, which is defensive but masks the
+        # construction-time mistake of seeding partial state. Pin the
+        # invariant so the failure surfaces loudly at construction.
+        if (self.agent_key and self.agent_key_expires_at is None) or (
+            self.agent_key_expires_at is not None and not self.agent_key
+        ):
+            raise ValueError(
+                "_SharedNousState: agent_key and agent_key_expires_at "
+                "must be set together (or both None)"
+            )
 
     def __deepcopy__(self, memo):
         # NousLM uses dspy.LM.copy() (which deepcopies the whole instance)
@@ -148,12 +162,27 @@ class NousLM(dspy.LM):
         inference_base_url: Optional[str] = None,
         **kwargs: Any,
     ) -> None:
-        kwargs["api_base"] = inference_base_url or NOUS_INFERENCE_BASE_URL
+        # Resolve URLs at construction time (not module-import time) so
+        # tests and stage setups can override via env vars after the
+        # framework is loaded. ``HERMES_PORTAL_BASE_URL`` is Hermes's own
+        # variable name — sharing keeps a single ``export`` portable.
+        effective_portal = (
+            portal_base_url
+            or os.getenv("HERMES_PORTAL_BASE_URL")
+            or NOUS_PORTAL_BASE_URL
+        )
+        effective_inference = (
+            inference_base_url
+            or os.getenv("NOUS_INFERENCE_BASE_URL")
+            or NOUS_INFERENCE_BASE_URL
+        )
+
+        kwargs["api_base"] = effective_inference
         kwargs["api_key"] = agent_key or ""
 
         super().__init__(model=model, **kwargs)
 
-        self._portal_base_url = portal_base_url or NOUS_PORTAL_BASE_URL
+        self._portal_base_url = effective_portal
 
         # The lookup key for shared state — falls back to id(self) so test
         # scenarios with synthetic creds get per-instance isolation rather
@@ -282,18 +311,30 @@ class NousLM(dspy.LM):
                 "Run `hermes model` to re-authenticate."
             )
 
-        # Refresh tokens may rotate (single-use semantics). Honor the new
-        # one if present; missing means the portal kept the original valid.
+        # The Nous portal enforces single-use refresh-token rotation;
+        # honor any rotated token in the response. Missing means the
+        # portal kept the original valid.
         new_refresh = payload.get("refresh_token")
         if isinstance(new_refresh, str) and new_refresh.strip():
             self._shared_state.refresh_token = new_refresh.strip()
 
         expires_in = payload.get("expires_in")
-        if isinstance(expires_in, (int, float)) and expires_in > 0:
+        if (
+            isinstance(expires_in, (int, float))
+            and not isinstance(expires_in, bool)
+            and expires_in > 0
+        ):
             self._shared_state.oauth_expires_at = time.time() + float(expires_in)
         else:
             # Conservative 1h fallback if the field is missing — keeps the
-            # next call from racing to the wire again immediately.
+            # next call from racing to the wire again immediately. Logged
+            # so a portal protocol change that drops expires_in is at
+            # least visible in the run log.
+            _log.warning(
+                "Nous OAuth refresh response had no usable expires_in; "
+                "using 1h fallback. payload keys: %s",
+                sorted(payload.keys()),
+            )
             self._shared_state.oauth_expires_at = time.time() + 3600.0
 
         self._shared_state.access_token = new_access.strip()
@@ -305,9 +346,9 @@ class NousLM(dspy.LM):
     def _mint_agent_key(self, *, allow_oauth_retry: bool) -> None:
         """POST agent-key mint; on 401, optionally refresh OAuth and retry.
 
-        Mirrors Hermes's mint-401-triggers-refresh-retry pattern at
-        ``hermes_cli/auth.py:3122-3174``. ``allow_oauth_retry`` is True on
-        the first call from ``_ensure_credentials``; the recursive retry
+        Mirrors Hermes's mint-401-triggers-refresh-retry pattern in
+        ``hermes_cli/auth.py``. ``allow_oauth_retry`` is True on the
+        first call from ``_ensure_credentials``; the recursive retry
         passes False to bound the recursion at one OAuth refresh.
         """
         try:
@@ -365,10 +406,24 @@ class NousLM(dspy.LM):
         new_expires_at = parse_iso_or_epoch(payload.get("expires_at"))
         if new_expires_at is None:
             expires_in = payload.get("expires_in")
-            if isinstance(expires_in, (int, float)) and expires_in > 0:
+            if (
+                isinstance(expires_in, (int, float))
+                and not isinstance(expires_in, bool)
+                and expires_in > 0
+            ):
                 new_expires_at = time.time() + float(expires_in)
             else:
-                # Conservative — assume the floor TTL we asked for.
+                # Conservative — assume the floor TTL we asked for. Log
+                # so a portal protocol change that drops both expiry
+                # fields is at least visible in the run log; otherwise
+                # we silently cache a key for 30 minutes regardless of
+                # what the server intended.
+                _log.warning(
+                    "Nous mint response had no usable expires_at or "
+                    "expires_in; using AGENT_KEY_MIN_TTL_SECONDS "
+                    "fallback. payload keys: %s",
+                    sorted(payload.keys()),
+                )
                 new_expires_at = time.time() + AGENT_KEY_MIN_TTL_SECONDS
 
         self._shared_state.agent_key = agent_key.strip()
@@ -385,10 +440,20 @@ class NousLM(dspy.LM):
         except litellm.AuthenticationError:
             # Cached agent_key is dead despite passing the skew check.
             # Force re-mint (which may also refresh OAuth on its own 401)
-            # and retry once. A second 401 propagates so the auth-abort
-            # sentinel + cost-ceiling path catches it.
+            # and retry once. If the freshly-minted key is also rejected
+            # the OAuth grant has likely been revoked entirely; surface
+            # that explicitly so the operator gets the right recovery
+            # hint instead of a generic 401.
             self._force_remint()
-            return super().forward(prompt=prompt, messages=messages, **kwargs)
+            try:
+                return super().forward(prompt=prompt, messages=messages, **kwargs)
+            except litellm.AuthenticationError as exc:
+                raise HermesProviderError(
+                    "Nous Portal inference rejected a freshly-minted "
+                    "agent_key after an automatic re-mint. The OAuth "
+                    "grant may have been revoked. Run `hermes model` "
+                    "and select Nous Portal to re-authenticate."
+                ) from exc
 
     async def aforward(self, prompt=None, messages=None, **kwargs):  # type: ignore[override]
         self._ensure_credentials()
@@ -396,7 +461,17 @@ class NousLM(dspy.LM):
             return await super().aforward(prompt=prompt, messages=messages, **kwargs)
         except litellm.AuthenticationError:
             self._force_remint()
-            return await super().aforward(prompt=prompt, messages=messages, **kwargs)
+            try:
+                return await super().aforward(
+                    prompt=prompt, messages=messages, **kwargs
+                )
+            except litellm.AuthenticationError as exc:
+                raise HermesProviderError(
+                    "Nous Portal inference rejected a freshly-minted "
+                    "agent_key after an automatic re-mint. The OAuth "
+                    "grant may have been revoked. Run `hermes model` "
+                    "and select Nous Portal to re-authenticate."
+                ) from exc
 
 
 # ----------------------------------------------------------------------
@@ -410,7 +485,7 @@ _OAUTH_RELOGIN_ERROR_CODES = frozenset({"invalid_grant", "invalid_token"})
 
 def _format_oauth_error(response: httpx.Response) -> str:
     """Translate a non-200 OAuth refresh response into an actionable user
-    message. Mirrors hermes_cli/auth.py:2595-2624.
+    message. Mirrors the OAuth-error classification in ``hermes_cli/auth.py``.
     """
     code, detail = _parse_error_body(response)
 

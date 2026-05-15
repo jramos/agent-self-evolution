@@ -159,7 +159,7 @@ model:
 When the resolver detects a Nous credential pool entry with a `refresh_token` (signals OAuth-managed flow), the framework instantiates a `NousLM` subclass that:
 
 1. **Mints a fresh agent_key at preflight time** by POSTing to `{portal}/api/oauth/agent-key` with the OAuth access_token as Bearer.
-2. **Refreshes the OAuth access_token in-memory** when it's within 120s of expiry — POSTed to `{portal}/api/oauth/token` with the standard refresh_token grant. Mirrors Hermes's own refresh-first-then-mint sequencing at `hermes_cli/auth.py:3061-3193`.
+2. **Refreshes the OAuth access_token in-memory** when it's within 120s of expiry — POSTed to `{portal}/api/oauth/token` with the standard refresh_token grant. Mirrors Hermes's own refresh-first-then-mint sequencing in `hermes_cli/auth.py`.
 3. **Re-mints on inference 401** (mid-run agent_key revocation or expiration). The four LM roles (optimizer, reflection, eval, judge) coordinate through a shared lock so a four-thread evolution doesn't race the portal's single-use refresh-token rotation.
 
 The portal URL is overridable via `HERMES_PORTAL_BASE_URL` (Hermes's own env var name; sharing keeps configs portable for stage / mock setups).

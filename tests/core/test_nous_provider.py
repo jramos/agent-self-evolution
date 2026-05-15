@@ -162,12 +162,14 @@ class TestNousResolutionWithOAuth:
 
 
 class TestNousResolutionFallbacks:
-    def test_pool_entry_without_refresh_token_falls_back_to_direct(
+    def test_pool_entry_with_agent_key_no_refresh_falls_back_to_direct(
         self, hermes_home
     ):
-        # Env-var-style: pool has only access_token, no refresh_token.
-        # The resolver must fall through to the existing OpenAI-wire
-        # direct-pass-through path so a NOUS_API_KEY user keeps working.
+        # Hand-edited or inference-only entry: has access_token + agent_key
+        # but no refresh_token. The resolver must fall through to the
+        # existing OpenAI-wire direct-pass-through path. The agent_key
+        # presence signals "this is an inference-ready credential, not a
+        # partial OAuth setup."
         _write_config(
             hermes_home,
             """
@@ -181,6 +183,7 @@ class TestNousResolutionFallbacks:
             access_token="bare-api-key",
             refresh_token=None,
             oauth_expires_at=None,
+            agent_key="inference-ready-bearer",
         )
         resolved = resolve_default_lm(role="optimizer", hermes_home=hermes_home)
         # Direct pass-through path: openai/<model>, api_base + api_key in lm_kwargs,
@@ -188,6 +191,29 @@ class TestNousResolutionFallbacks:
         assert resolved.lm_factory is None
         assert resolved.model == "openai/Hermes-4-405B"
         assert resolved.lm_kwargs.get("api_key") == "bare-api-key"
+
+    def test_pool_entry_without_refresh_or_agent_key_raises(self, hermes_home):
+        # Partial OAuth setup: pool entry has access_token but no
+        # refresh_token AND no agent_key. Almost certainly an interrupted
+        # `hermes model` run. Raising here gives the operator a specific
+        # recovery hint instead of letting inference 401 with no breadcrumb.
+        _write_config(
+            hermes_home,
+            """
+            model:
+              default: Hermes-4-405B
+              provider: nous
+            """,
+        )
+        _write_nous_pool(
+            hermes_home,
+            access_token="oauth-only",
+            refresh_token=None,
+            oauth_expires_at=None,
+            agent_key=None,
+        )
+        with pytest.raises(HermesProviderError, match="partial OAuth setup"):
+            resolve_default_lm(role="optimizer", hermes_home=hermes_home)
 
     def test_missing_pool_entry_surfaces_recovery_hint(self, hermes_home):
         _write_config(

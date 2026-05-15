@@ -753,13 +753,24 @@ def _maybe_resolve_nous_lm(
         )
 
     refresh_token = _str_or_none(pool_entry.get("refresh_token"))
+    agent_key = _str_or_none(pool_entry.get("agent_key"))
     if not refresh_token:
-        # OAuth flow not in play; let the caller use the existing
-        # env-var/access_token-as-Bearer path. Note this path will still
-        # 401 against Nous's inference endpoint when the field actually
-        # holds the OAuth access_token (Nous needs the minted agent_key),
-        # but we can't tell from here whether the user intends OAuth or
-        # env-var, so the conservative posture is "don't change behavior".
+        # An entry with agent_key set is plausibly env-var-style or
+        # hand-edited inference-only — let it fall through to the
+        # generic OpenAI-wire handler with whatever Bearer it carries.
+        # An entry with NEITHER refresh_token NOR agent_key is almost
+        # certainly a partial OAuth setup (interrupted hermes model run,
+        # or the portal handed back access_token only). Inference would
+        # 401 with no breadcrumb pointing at the missing credentials, so
+        # raise here with a specific recovery hint.
+        if agent_key is None:
+            raise HermesProviderError(
+                "~/.hermes/auth.json credential_pool[\"nous\"] entry has "
+                "an access_token but no refresh_token or agent_key — "
+                "looks like a partial OAuth setup. Run `hermes model` "
+                "and select Nous Portal to complete authentication, or "
+                f"pass --{role}-model to bypass Hermes resolution."
+            )
         return None
 
     access_token = _str_or_none(pool_entry.get("access_token"))

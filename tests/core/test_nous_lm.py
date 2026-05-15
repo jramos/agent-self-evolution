@@ -18,7 +18,7 @@ import asyncio
 import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
-from unittest.mock import MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import httpx
 import litellm
@@ -326,7 +326,11 @@ class TestInferenceForceRemint:
             mock_cls.return_value = _mock_httpx_post(
                 [_mock_response(json_body={"api_key": "remint", "expires_in": 1800})]
             )
-            with pytest.raises(litellm.AuthenticationError):
+            # The second 401 (after re-mint) is wrapped as a
+            # HermesProviderError that names the recovery action ("OAuth
+            # grant may have been revoked"), so the operator gets a
+            # specific message instead of a bare 401.
+            with pytest.raises(HermesProviderError, match="re-mint"):
                 lm.forward(messages=[{"role": "user", "content": "hi"}])
 
 
@@ -484,6 +488,298 @@ class TestErrorClassification:
 # ---------------------------------------------------------------------------
 
 
+class TestResponseShapeEdgeCases:
+    """Coverage for protocol-rev edge cases that the unit tests originally
+    glossed over: malformed JSON, alternate field names, fallback TTLs,
+    and the bool-as-numeric trap.
+    """
+
+    def test_refresh_response_missing_access_token_raises(self):
+        with patch("evolution.core.nous_lm.httpx.Client") as mock_cls:
+            mock_cls.return_value = _mock_httpx_post(
+                [
+                    _mock_response(
+                        json_body={"refresh_token": "x", "expires_in": 3600}
+                    )
+                ]
+            )
+            with pytest.raises(HermesProviderError, match="missing access_token"):
+                NousLM(
+                    model="openai/test-model",
+                    access_token="stale",
+                    refresh_token="r",
+                    oauth_expires_at=time.time() + 30,  # forces refresh
+                )
+
+    def test_refresh_response_malformed_json_raises(self):
+        with patch("evolution.core.nous_lm.httpx.Client") as mock_cls:
+            mock_cls.return_value = _mock_httpx_post(
+                [_mock_response(status_code=200, json_body=None)]  # .json() raises
+            )
+            with pytest.raises(HermesProviderError, match="invalid JSON"):
+                NousLM(
+                    model="openai/test-model",
+                    access_token="stale",
+                    refresh_token="r",
+                    oauth_expires_at=time.time() + 30,
+                )
+
+    def test_mint_response_missing_api_key_raises(self):
+        with patch("evolution.core.nous_lm.httpx.Client") as mock_cls:
+            mock_cls.return_value = _mock_httpx_post(
+                [_mock_response(json_body={"expires_in": 1800})]
+            )
+            with pytest.raises(HermesProviderError, match="missing api_key"):
+                NousLM(
+                    model="openai/test-model",
+                    access_token="oauth",
+                    refresh_token="r",
+                    oauth_expires_at=time.time() + 86400,
+                )
+
+    def test_mint_response_malformed_json_raises(self):
+        with patch("evolution.core.nous_lm.httpx.Client") as mock_cls:
+            mock_cls.return_value = _mock_httpx_post(
+                [_mock_response(status_code=200, json_body=None)]
+            )
+            with pytest.raises(HermesProviderError, match="invalid JSON"):
+                NousLM(
+                    model="openai/test-model",
+                    access_token="oauth",
+                    refresh_token="r",
+                    oauth_expires_at=time.time() + 86400,
+                )
+
+    def test_mint_response_uses_agent_key_field_alias(self):
+        # The portal historically used `agent_key`; current shape is
+        # `api_key`. Forward/back compat: either should work.
+        with patch("evolution.core.nous_lm.httpx.Client") as mock_cls:
+            mock_cls.return_value = _mock_httpx_post(
+                [
+                    _mock_response(
+                        json_body={
+                            "agent_key": "minted-via-old-shape",
+                            "expires_in": 1800,
+                        }
+                    )
+                ]
+            )
+            lm = NousLM(
+                model="openai/test-model",
+                access_token="oauth",
+                refresh_token="r",
+                oauth_expires_at=time.time() + 86400,
+            )
+            assert lm.kwargs["api_key"] == "minted-via-old-shape"
+
+    def test_mint_response_iso_expires_at_parsed(self):
+        # The current portal returns expires_at as ISO 8601; verify the
+        # parser flows through without falling to the expires_in branch.
+        with patch("evolution.core.nous_lm.httpx.Client") as mock_cls:
+            mock_cls.return_value = _mock_httpx_post(
+                [
+                    _mock_response(
+                        json_body={
+                            "api_key": "minted",
+                            "expires_at": "2026-12-01T00:00:00+00:00",
+                            # expires_in omitted on purpose — exercises the
+                            # expires_at-wins-when-both-present branch
+                        }
+                    )
+                ]
+            )
+            lm = NousLM(
+                model="openai/test-model",
+                access_token="oauth",
+                refresh_token="r",
+                oauth_expires_at=time.time() + 86400,
+            )
+            # 2026-12-01T00:00:00+00:00 → epoch 1796083200
+            assert lm._shared_state.agent_key_expires_at == 1796083200.0
+
+    def test_mint_response_bool_expires_in_falls_to_floor(self):
+        # isinstance(True, int) is True in Python; without explicit
+        # bool exclusion, True would be cached as a 1-second TTL,
+        # triggering perpetual re-mint. The bool guard pushes us to
+        # the conservative 30-min floor instead.
+        with patch("evolution.core.nous_lm.httpx.Client") as mock_cls:
+            mock_cls.return_value = _mock_httpx_post(
+                [
+                    _mock_response(
+                        json_body={"api_key": "minted", "expires_in": True}
+                    )
+                ]
+            )
+            before = time.time()
+            lm = NousLM(
+                model="openai/test-model",
+                access_token="oauth",
+                refresh_token="r",
+                oauth_expires_at=time.time() + 86400,
+            )
+            # 30-minute floor, not 1 second.
+            assert lm._shared_state.agent_key_expires_at >= before + 1700
+
+
+class TestNetworkErrorWrapping:
+    def test_refresh_httpx_error_wrapped(self):
+        with patch("evolution.core.nous_lm.httpx.Client") as mock_cls:
+            client = MagicMock()
+            client.__enter__.return_value = client
+            client.post.side_effect = httpx.ConnectError("dns failure")
+            mock_cls.return_value = client
+            with pytest.raises(HermesProviderError, match="OAuth refresh"):
+                NousLM(
+                    model="openai/test-model",
+                    access_token="stale",
+                    refresh_token="r",
+                    oauth_expires_at=time.time() + 30,
+                )
+
+    def test_mint_httpx_error_wrapped(self):
+        with patch("evolution.core.nous_lm.httpx.Client") as mock_cls:
+            client = MagicMock()
+            client.__enter__.return_value = client
+            client.post.side_effect = httpx.ConnectError("dns failure")
+            mock_cls.return_value = client
+            with pytest.raises(HermesProviderError, match="agent-key mint"):
+                NousLM(
+                    model="openai/test-model",
+                    access_token="oauth",
+                    refresh_token="r",
+                    oauth_expires_at=time.time() + 86400,
+                )
+
+
+class TestStatusCodeRelogin:
+    def test_oauth_403_triggers_relogin_even_with_unknown_code(self):
+        # _format_oauth_error special-cases 401/403 status to force the
+        # relogin message even when the JSON error code isn't in the
+        # known-relogin set. Catches portal returns like a tenant-disabled
+        # 403 with code="access_denied".
+        with patch("evolution.core.nous_lm.httpx.Client") as mock_cls:
+            mock_cls.return_value = _mock_httpx_post(
+                [
+                    _mock_response(
+                        status_code=403,
+                        json_body={"error": "access_denied"},
+                    )
+                ]
+            )
+            with pytest.raises(HermesProviderError, match="hermes model"):
+                NousLM(
+                    model="openai/test-model",
+                    access_token="stale",
+                    refresh_token="r",
+                    oauth_expires_at=time.time() + 30,
+                )
+
+    def test_mint_403_triggers_relogin(self):
+        # Mint 401 has the refresh-retry path; mint 403 doesn't (it
+        # signals tenant-side denial that won't recover from a fresh
+        # access_token). Should surface the relogin message directly.
+        with patch("evolution.core.nous_lm.httpx.Client") as mock_cls:
+            mock_cls.return_value = _mock_httpx_post(
+                [
+                    _mock_response(
+                        status_code=403,
+                        json_body={"error": "tenant_suspended"},
+                    )
+                ]
+            )
+            with pytest.raises(HermesProviderError, match="hermes model"):
+                NousLM(
+                    model="openai/test-model",
+                    access_token="oauth",
+                    refresh_token="r",
+                    oauth_expires_at=time.time() + 86400,
+                )
+
+
+class TestAsyncForce401Recovery:
+    """The sync path has explicit retry + propagate tests; the async
+    path has neither equivalent. Mirror them to keep the two paths
+    from drifting silently.
+    """
+
+    def _build_lm_with_initial_mint(self):
+        with patch("evolution.core.nous_lm.httpx.Client") as mock_cls:
+            mock_cls.return_value = _mock_httpx_post(
+                [_mock_response(json_body={"api_key": "first-mint", "expires_in": 1800})]
+            )
+            return NousLM(
+                model="openai/test-model",
+                access_token="oauth-tok",
+                refresh_token="refresh-tok",
+                oauth_expires_at=time.time() + 86400,
+            )
+
+    def test_aforward_recovers_from_401_with_remint_and_retry(self):
+        lm = self._build_lm_with_initial_mint()
+        with patch("dspy.LM.aforward", new_callable=AsyncMock) as mock_super, \
+             patch("evolution.core.nous_lm.httpx.Client") as mock_cls:
+            err = litellm.AuthenticationError(
+                message="401",
+                llm_provider="openai",
+                model="openai/test-model",
+            )
+            # AsyncMock with a list side_effect raises exceptions in
+            # sequence and returns non-exception items as the await value.
+            mock_super.side_effect = [err, "ok"]
+            mock_cls.return_value = _mock_httpx_post(
+                [_mock_response(json_body={"api_key": "post-401-mint", "expires_in": 1800})]
+            )
+            result = asyncio.run(
+                lm.aforward(messages=[{"role": "user", "content": "hi"}])
+            )
+            assert result == "ok"
+            assert mock_super.await_count == 2
+            assert lm.kwargs["api_key"] == "post-401-mint"
+
+    def test_aforward_propagates_second_401_as_hermes_provider_error(self):
+        lm = self._build_lm_with_initial_mint()
+        with patch("dspy.LM.aforward", new_callable=AsyncMock) as mock_super, \
+             patch("evolution.core.nous_lm.httpx.Client") as mock_cls:
+            err = litellm.AuthenticationError(
+                message="401", llm_provider="openai", model="openai/test-model"
+            )
+            mock_super.side_effect = [err, err]
+            mock_cls.return_value = _mock_httpx_post(
+                [_mock_response(json_body={"api_key": "remint", "expires_in": 1800})]
+            )
+            with pytest.raises(HermesProviderError, match="re-mint"):
+                asyncio.run(
+                    lm.aforward(messages=[{"role": "user", "content": "hi"}])
+                )
+
+
+class TestSharedStateInvariants:
+    def test_post_init_rejects_partial_agent_key_state(self):
+        # _SharedNousState __post_init__ catches the construction-time
+        # mistake of seeding agent_key without a paired expires_at —
+        # which would otherwise silently force perpetual re-mint.
+        from evolution.core.nous_lm import _SharedNousState
+
+        with pytest.raises(ValueError, match="set together"):
+            _SharedNousState(
+                access_token="x",
+                refresh_token="r",
+                oauth_expires_at=None,
+                agent_key="orphan-key",
+                agent_key_expires_at=None,
+                lock=threading.Lock(),
+            )
+        with pytest.raises(ValueError, match="set together"):
+            _SharedNousState(
+                access_token="x",
+                refresh_token="r",
+                oauth_expires_at=None,
+                agent_key=None,
+                agent_key_expires_at=time.time() + 1800,
+                lock=threading.Lock(),
+            )
+
+
 class TestParseIsoOrEpoch:
     def test_iso8601_with_offset(self):
         result = parse_iso_or_epoch("2026-05-15T10:30:00+00:00")
@@ -512,3 +808,37 @@ class TestParseIsoOrEpoch:
 
     def test_garbage_returns_none(self):
         assert parse_iso_or_epoch("not-a-timestamp") is None
+
+    def test_inf_returns_none(self):
+        # inf would silently make every skew check evaluate as
+        # "something >= inf" → False, so the token would be treated as
+        # eternally fresh. The validator must reject.
+        assert parse_iso_or_epoch(float("inf")) is None
+        assert parse_iso_or_epoch("inf") is None
+        assert parse_iso_or_epoch("Infinity") is None
+
+    def test_nan_returns_none(self):
+        # All comparisons against nan are False — same eternal-freshness
+        # trap as inf.
+        assert parse_iso_or_epoch(float("nan")) is None
+        assert parse_iso_or_epoch("nan") is None
+
+    def test_negative_returns_none(self):
+        # Structurally absurd for an expires_at; usually a parser bug
+        # upstream. Reject so the caller treats as "unknown".
+        assert parse_iso_or_epoch(-100) is None
+        assert parse_iso_or_epoch(-0.5) is None
+
+    def test_naive_iso_returns_none(self):
+        # datetime.fromisoformat("2026-05-15T10:30:00") returns a naive
+        # datetime; .timestamp() then interprets in the host's local TZ,
+        # silently corrupting the skew window by hours on non-UTC hosts.
+        # The validator rejects naive datetimes so the caller treats as
+        # "unknown" rather than producing a confidently-wrong epoch.
+        assert parse_iso_or_epoch("2026-05-15T10:30:00") is None
+
+    def test_bool_returns_none(self):
+        # bool subclasses int; without an explicit reject, True/False
+        # would silently coerce to 1.0 / 0.0 epoch — meaningless.
+        assert parse_iso_or_epoch(True) is None
+        assert parse_iso_or_epoch(False) is None
