@@ -53,12 +53,18 @@ class ResolvedLM:
     ``dspy.LM`` (currently only OpenAI Codex, which carries OAuth state and
     a refresh hook). When set, callers should invoke the factory instead of
     constructing ``dspy.LM(model, **lm_kwargs)`` directly.
+
+    ``provider_hint`` is the canonical Hermes provider name (e.g.
+    ``"openai-codex"``) used to look up the right recovery command in the
+    auth-error path. When ``None``, the provider hint is derived from the
+    LiteLLM model prefix instead.
     """
 
     model: str
     lm_kwargs: Dict[str, Any]
     source: str
     lm_factory: Optional[Callable[[], Any]] = None
+    provider_hint: Optional[str] = None
 
 
 class HermesProviderError(BaseException):
@@ -670,9 +676,18 @@ def _resolve_codex_lm(
 
     effective_base_url = base_url or DEFAULT_CODEX_BASE_URL
 
+    # Codex models speak the OpenAI Responses wire protocol, so LiteLLM
+    # routes them via its OpenAI provider. Prefix with ``openai/`` if the
+    # user's config didn't already do so — the prefix is what tells LiteLLM
+    # to honor api_base + Bearer auth instead of inferring routing from the
+    # bare model name.
+    litellm_model = (
+        target_model if "/" in target_model else f"openai/{target_model}"
+    )
+
     def _factory() -> Any:
         return _CodexLM(
-            model=target_model,
+            model=litellm_model,
             access_token=access_token,
             refresh_token=refresh_token,
             expires_at=expires_at,
@@ -680,10 +695,11 @@ def _resolve_codex_lm(
         )
 
     return ResolvedLM(
-        model=target_model,
+        model=litellm_model,
         lm_kwargs={},
         source=f"hermes-config:openai-codex(base_url={effective_base_url})",
         lm_factory=_factory,
+        provider_hint="openai-codex",
     )
 
 

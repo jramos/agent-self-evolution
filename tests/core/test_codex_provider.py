@@ -95,10 +95,15 @@ class TestCodexResolution:
         )
         lm = resolve_default_lm(role="optimizer", hermes_home=hermes_home)
         assert isinstance(lm, ResolvedLM)
-        assert lm.model == "gpt-5-codex"
+        # Resolver normalizes to openai/<model> so LiteLLM routes via its
+        # OpenAI provider (which honors api_base + Bearer auth). User can
+        # also pass an already-prefixed name in config.yaml, in which case
+        # the prefix is preserved verbatim.
+        assert lm.model == "openai/gpt-5-codex"
         # Codex packs everything in the factory closure; lm_kwargs is empty.
         assert lm.lm_kwargs == {}
         assert lm.lm_factory is not None
+        assert lm.provider_hint == "openai-codex"
 
     def test_factory_constructs_codex_lm_with_oauth_state(self, hermes_home):
         expiry = time.time() + 3600
