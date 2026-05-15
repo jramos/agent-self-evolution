@@ -16,6 +16,8 @@ import pytest
 
 from evolution.core.cost_advisor import (
     CheaperAlternative,
+    _MIN_INPUT_COST_RATIO,
+    _namespace,
     _version_tuple,
     find_cheaper_alternative,
     render_suggestion_panel,
@@ -152,6 +154,79 @@ _FAKE_CATALOG = {
         "output_cost_per_token": 1.25e-6,
         "max_input_tokens": 200_000,
         "litellm_provider": "lonely-gen3",
+    },
+    # ----------------------------------------------------------------
+    # Namespace fixture: mirrors Bedrock cross-region routing patterns
+    # so the namespace filter has something to gate on.
+    # ----------------------------------------------------------------
+    "us.bedrocktest.opus-4-5": {
+        "input_cost_per_token": 5.5e-6,
+        "output_cost_per_token": 27.5e-6,
+        "max_input_tokens": 200_000,
+        "litellm_provider": "bedrock-test",
+    },
+    "us.bedrocktest.haiku-4-5": {
+        # Same us.* region — qualifies as a same-namespace suggestion.
+        "input_cost_per_token": 1.1e-6,
+        "output_cost_per_token": 5.5e-6,
+        "max_input_tokens": 200_000,
+        "litellm_provider": "bedrock-test",
+    },
+    "bedrocktest.haiku-4-5": {
+        # Regional-only (no us. prefix). Same provider, same major version,
+        # CHEAPER than us.bedrocktest.haiku-4-5 — but a different routing
+        # profile. Must NOT be suggested for a us.* user.
+        "input_cost_per_token": 1.0e-6,
+        "output_cost_per_token": 5.0e-6,
+        "max_input_tokens": 200_000,
+        "litellm_provider": "bedrock-test",
+    },
+    "eu.bedrocktest.haiku-4-5": {
+        # Different region — same shape, must not be cross-suggested.
+        "input_cost_per_token": 1.1e-6,
+        "output_cost_per_token": 5.5e-6,
+        "max_input_tokens": 200_000,
+        "litellm_provider": "bedrock-test",
+    },
+    # ----------------------------------------------------------------
+    # OpenRouter-style cross-vendor: same litellm_provider, different
+    # routing namespace (anthropic/* vs zai/*).
+    # ----------------------------------------------------------------
+    "openroutertest/anthropic/opus-4": {
+        "input_cost_per_token": 5e-6,
+        "output_cost_per_token": 25e-6,
+        "max_input_tokens": 200_000,
+        "litellm_provider": "openrouter-test",
+    },
+    "openroutertest/anthropic/haiku-4": {
+        "input_cost_per_token": 1e-6,
+        "output_cost_per_token": 5e-6,
+        "max_input_tokens": 200_000,
+        "litellm_provider": "openrouter-test",
+    },
+    "openroutertest/zai/glm-4-flash": {
+        # Cheaper than the anthropic options, completely different upstream
+        # vendor. Must NOT be suggested for an anthropic user.
+        "input_cost_per_token": 0.1e-6,
+        "output_cost_per_token": 0.5e-6,
+        "max_input_tokens": 200_000,
+        "litellm_provider": "openrouter-test",
+    },
+    # ----------------------------------------------------------------
+    # Weak-savings fixture: only a marginal saving exists.
+    # ----------------------------------------------------------------
+    "marginaltest-opus": {
+        "input_cost_per_token": 5e-6,
+        "output_cost_per_token": 25e-6,
+        "max_input_tokens": 200_000,
+        "litellm_provider": "marginal-test",
+    },
+    "marginaltest-opus-cheaper": {
+        # 1.1× cheaper — below the meaningful-savings threshold.
+        "input_cost_per_token": 4.5e-6,
+        "output_cost_per_token": 22.5e-6,
+        "max_input_tokens": 200_000,
+        "litellm_provider": "marginal-test",
     },
 }
 
@@ -318,6 +393,79 @@ class TestTiebreakByNewerMinor:
         alt = find_cheaper_alternative("vendor-opus-4-7")
         assert alt is not None
         assert alt.suggested_model == "vendor-sonnet-4-6"
+
+
+class TestNamespace:
+    """The namespace filter blocks two real surprises:
+      1. Bedrock cross-region (us.X) being silently swapped for regional (X)
+      2. OpenRouter cross-vendor (anthropic/X being swapped for zai/X)
+    """
+
+    @pytest.mark.parametrize(
+        "key,expected",
+        [
+            ("claude-opus-4-5", ""),
+            ("gpt-5", ""),
+            ("gpt-4.1", ""),
+            ("claude-3.5-sonnet", ""),  # claude-3 has digit, not a route
+            ("openrouter/anthropic/claude-opus-4", "openrouter/anthropic"),
+            ("openrouter/z-ai/glm-4.7-flash", "openrouter/z-ai"),
+            ("anthropic.claude-haiku-4-5-20251001-v1:0", "anthropic"),
+            ("us.anthropic.claude-haiku-4-5-20251001-v1:0", "us.anthropic"),
+            ("eu.anthropic.claude-sonnet-4-6", "eu.anthropic"),
+            ("us-gov.anthropic.claude-X", "us-gov.anthropic"),
+            ("apac.anthropic.claude-3-5-sonnet-20240620-v1:0", "apac.anthropic"),
+        ],
+    )
+    def test_extracts_correct_namespace(self, key, expected):
+        assert _namespace(key) == expected
+
+    def test_bedrock_cross_region_user_only_gets_same_region_suggestion(self):
+        # us.bedrocktest user must NOT be silently suggested the cheaper
+        # bedrocktest.haiku-4-5 (regional-only, different routing profile)
+        # or eu.bedrocktest.haiku-4-5 (different region).
+        alt = find_cheaper_alternative("us.bedrocktest.opus-4-5")
+        assert alt is not None
+        assert alt.suggested_model == "us.bedrocktest.haiku-4-5"
+        assert _namespace(alt.suggested_model) == "us.bedrocktest"
+
+    def test_bedrock_regional_user_only_gets_regional_suggestion(self):
+        # Inverse: a bedrocktest.* (regional-only) user must not be
+        # routed to us.bedrocktest.* (cross-region inference profile).
+        # Add a regional opus to the catalog implicitly via this test —
+        # the only candidate at namespace "" with cheaper input is
+        # bedrocktest.haiku-4-5 itself, which has no opus to compare to.
+        # Instead test via a synthetic: the bedrocktest.haiku-4-5 entry
+        # IS in the catalog as its own namespace; only candidates with
+        # the same empty-but-bedrocktest-prefix namespace should match.
+        alt = find_cheaper_alternative("bedrocktest.haiku-4-5")
+        # No same-namespace cheaper option exists — should return None
+        # (NOT cross-suggest us.bedrocktest.haiku-4-5 even though it's
+        # 1.1× more expensive, that wouldn't trigger anyway).
+        assert alt is None
+
+    def test_openrouter_cross_vendor_excluded(self):
+        # An openroutertest/anthropic/* user must not be suggested an
+        # openroutertest/zai/* model even though zai is much cheaper —
+        # different upstream vendor entirely.
+        alt = find_cheaper_alternative("openroutertest/anthropic/opus-4")
+        assert alt is not None
+        assert alt.suggested_model == "openroutertest/anthropic/haiku-4"
+        assert "zai" not in alt.suggested_model
+
+
+class TestMinimumSavingsThreshold:
+    def test_marginal_savings_suppressed(self):
+        # marginaltest-opus -> marginaltest-opus-cheaper would be only
+        # 1.1× cheaper. Below the floor where the panel is worth surfacing.
+        alt = find_cheaper_alternative("marginaltest-opus")
+        assert alt is None
+
+    def test_threshold_constant_is_at_least_one_and_a_half(self):
+        # Sanity check: the threshold should be high enough to suppress
+        # AWS pricing-tier noise (~10% savings) but low enough that the
+        # 1.7× sonnet-vs-opus suggestion still surfaces in the real catalog.
+        assert 1.4 <= _MIN_INPUT_COST_RATIO <= 1.7
 
 
 class TestPanel:

@@ -177,3 +177,41 @@ class TestCostSuggestionFiringRules:
             )
             mock_finder.assert_called_once()
             mock_render.assert_not_called()
+
+    def test_codex_lm_factory_skips_advisor(
+        self, stub_skill_loader, monkeypatch
+    ):
+        """When the resolver returns an LM with a custom factory (Codex),
+        the advisor must not fire. Suggesting a non-Codex model implies
+        an auth setup the user didn't opt in to (Codex uses ChatGPT-
+        subscription OAuth, not an OPENAI_API_KEY).
+        """
+        from evolution.core.hermes_provider import ResolvedLM
+
+        monkeypatch.setenv("OPENAI_API_KEY", "k")
+
+        codex_resolved = ResolvedLM(
+            model="openai/gpt-5-codex",
+            lm_kwargs={},
+            source="hermes-config:openai-codex(...)",
+            lm_factory=lambda: object(),  # any non-None callable
+            provider_hint="openai-codex",
+        )
+
+        with patch(
+            "evolution.skills.evolve_skill.resolve_default_lm",
+            return_value=codex_resolved,
+        ), \
+             patch(
+                 "evolution.skills.evolve_skill._find_cheaper_alternative"
+             ) as mock_finder, \
+             patch("evolution.skills.evolve_skill._preflight_lm_credentials"), \
+             patch("evolution.skills.evolve_skill._build_optimizer_and_compile") as mock_build:
+            mock_build.side_effect = RuntimeError("stop after advisor")
+
+            runner = CliRunner()
+            runner.invoke(
+                evolve_skill_main,
+                ["--skill", "fake_skill"],
+            )
+            mock_finder.assert_not_called()

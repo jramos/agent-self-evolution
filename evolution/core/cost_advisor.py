@@ -27,6 +27,14 @@ import litellm
 from rich.panel import Panel
 
 
+# Minimum input-cost ratio for a suggestion to surface. 1.5× is the
+# threshold below which the panel becomes noise — e.g., suggesting a
+# date-suffixed older Bedrock snapshot ($3.00/M) over the canonical newer
+# version ($3.30/M) for 1.1× savings is not worth interrupting the user
+# for. 1.7× sonnet-vs-opus and 5× haiku-vs-opus stay above this floor.
+_MIN_INPUT_COST_RATIO = 1.5
+
+
 @dataclass(frozen=True)
 class CheaperAlternative:
     """A same-provider model that's strictly cheaper for input tokens with
@@ -74,14 +82,19 @@ def find_cheaper_alternative(model: str) -> Optional[CheaperAlternative]:
         return None
 
     current_major, _ = _version_tuple(current_key)
+    current_namespace = _namespace(current_key)
 
     # Enumerate same-provider candidates that are strictly cheaper on input
-    # cost, have at least the current context window, AND share the current
-    # model's major version. The major-version filter keeps a user on
-    # claude-opus-4-5 from being silently downgraded to claude-3-haiku
-    # (a 20-month-old gen-3 model) just because pure cost-sort makes the
-    # older haiku 4x cheaper than the current claude-haiku-4-5. We'd rather
-    # surface no suggestion than route them onto a much weaker model.
+    # cost, have at least the current context window, share the current
+    # model's major version, AND share its namespace path. The version
+    # filter blocks gen-3 downgrades when the user is on gen-4. The
+    # namespace filter blocks cross-routing surprises:
+    #   * Bedrock cross-region (us.anthropic.X) vs regional (anthropic.X) —
+    #     the user picked us.* deliberately for failover/throughput; the
+    #     regional model is a different routing profile, not a substitute.
+    #   * OpenRouter cross-vendor (openrouter/anthropic/claude-X vs
+    #     openrouter/z-ai/glm-X) — same litellm_provider, completely
+    #     different upstream model.
     candidates = []
     for cand_key, cand_entry in catalog.items():
         if cand_entry.get("litellm_provider") != provider:
@@ -98,6 +111,8 @@ def find_cheaper_alternative(model: str) -> Optional[CheaperAlternative]:
         cand_major, cand_minor = _version_tuple(cand_key)
         if current_major is not None and cand_major != current_major:
             continue
+        if _namespace(cand_key) != current_namespace:
+            continue
         candidates.append((cand_input, -cand_minor, cand_key, cand_entry))
 
     if not candidates:
@@ -109,6 +124,12 @@ def find_cheaper_alternative(model: str) -> Optional[CheaperAlternative]:
     # ties on minor prefer the shorter/canonical name.
     candidates.sort(key=lambda t: (t[0], t[1], t[2]))
     _, _, suggested_key, suggested_entry = candidates[0]
+
+    # Suppress weak suggestions. Below ~1.5× the panel becomes noise the
+    # user has to read past every run; above it, the savings are worth
+    # surfacing.
+    if current_input / suggested_entry["input_cost_per_token"] < _MIN_INPUT_COST_RATIO:
+        return None
 
     # Reconstruct a paste-ready model string. If the user passed a
     # provider-prefixed name (e.g., ``anthropic/claude-opus-4-5``) but
@@ -162,6 +183,50 @@ def render_suggestion_panel(role: str, alt: CheaperAlternative) -> Panel:
         title="[bold cyan]💡 Cost suggestion[/bold cyan]",
         border_style="cyan",
     )
+
+
+def _namespace(catalog_key: str) -> str:
+    """Extract a routing-namespace path that suggestions must match.
+
+    For slash-segmented keys (OpenRouter, Bedrock-with-explicit-region):
+    everything before the last ``/`` segment.
+
+      ``openrouter/anthropic/claude-opus-4`` -> ``"openrouter/anthropic"``
+      ``openrouter/z-ai/glm-4.7-flash``      -> ``"openrouter/z-ai"``
+
+    For Bedrock-style dot-prefixed keys (cross-region inference profiles
+    or regional-only): the leading dot-segments stripped of the trailing
+    model body, where leading routing tokens look like short alphabetic
+    words (us, eu, apac, anthropic, ...). Stops at the first segment that
+    contains a digit (e.g. ``claude-3``), which marks the model body.
+
+      ``us.anthropic.claude-haiku-4-5-20251001-v1:0`` -> ``"us.anthropic"``
+      ``anthropic.claude-haiku-4-5-20251001-v1:0``    -> ``"anthropic"``
+      ``us-gov.anthropic.claude-X``                   -> ``"us-gov.anthropic"``
+
+    For bare keys (Anthropic-direct, OpenAI-direct): empty string —
+    candidates with empty namespace are interchangeable within the same
+    litellm provider.
+
+      ``claude-opus-4-5`` -> ``""``
+      ``gpt-5``           -> ``""``
+      ``claude-3.5-sonnet`` -> ``""``  (claude-3 has a digit, not a route)
+    """
+    if "/" in catalog_key:
+        return catalog_key.rsplit("/", 1)[0]
+
+    parts = catalog_key.split(".")
+    if len(parts) < 2:
+        return ""
+    namespace_segments = []
+    for seg in parts[:-1]:
+        # Routing tokens: short, alphabetic (with optional hyphens like
+        # us-gov). Anything containing a digit is part of the model body
+        # (e.g. claude-3, gpt-4) and breaks the namespace chain.
+        if not seg or not seg.replace("-", "").isalpha():
+            break
+        namespace_segments.append(seg)
+    return ".".join(namespace_segments)
 
 
 def _version_tuple(model_key: str) -> Tuple[Optional[int], int]:

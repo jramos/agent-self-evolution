@@ -450,10 +450,16 @@ def evolve(
                 if not skip_preflight:
                     _preflight_lm_credentials([_preflight_optimizer, _preflight_eval])
                 # Cost advisor: only fire when the user inherited the eval
-                # model from Hermes (eval_model is None). An explicit
-                # --eval-model means the user already chose; don't second-
-                # guess that choice.
-                if not skip_cost_suggest and eval_model is None:
+                # model from Hermes (eval_model is None) AND the resolver
+                # returned a stock LM. Custom factory paths (Codex) route
+                # to a closed ChatGPT-subscription endpoint where suggesting
+                # "use openai/gpt-5-nano" implies a different auth setup
+                # the user didn't opt in to.
+                if (
+                    not skip_cost_suggest
+                    and eval_model is None
+                    and _preflight_eval.lm_factory is None
+                ):
                     _alt = _find_cheaper_alternative(_preflight_eval.model)
                     if _alt is not None:
                         console.print(_render_cost_suggestion_panel("eval", _alt))
