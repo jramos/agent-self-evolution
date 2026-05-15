@@ -16,6 +16,7 @@ import pytest
 
 from evolution.core.cost_advisor import (
     CheaperAlternative,
+    _version_tuple,
     find_cheaper_alternative,
     render_suggestion_panel,
 )
@@ -90,6 +91,67 @@ _FAKE_CATALOG = {
         "output_cost_per_token": None,
         "max_input_tokens": 128_000,
         "litellm_provider": "anthropic-test",
+    },
+    # ----------------------------------------------------------------
+    # Versioned entries — exercise the major-version generation filter.
+    # Naming mirrors real catalog patterns (claude-3-haiku-20240307 vs
+    # claude-haiku-4-5) so the regex parser sees realistic input.
+    # ----------------------------------------------------------------
+    "vendor-opus-4-5": {
+        "input_cost_per_token": 5e-6,
+        "output_cost_per_token": 25e-6,
+        "max_input_tokens": 200_000,
+        "litellm_provider": "vendor",
+    },
+    "vendor-haiku-4-5": {
+        # Current-gen, $1/M — should win against the older gen-3 below.
+        "input_cost_per_token": 1e-6,
+        "output_cost_per_token": 5e-6,
+        "max_input_tokens": 200_000,
+        "litellm_provider": "vendor",
+    },
+    "vendor-3-haiku-20240307": {
+        # Older generation, MUCH cheaper. Pure cost-sort would pick this
+        # for a vendor-opus-4-5 user; the major-version filter must reject.
+        "input_cost_per_token": 0.25e-6,
+        "output_cost_per_token": 1.25e-6,
+        "max_input_tokens": 200_000,
+        "litellm_provider": "vendor",
+    },
+    "vendor-opus-4-7": {
+        "input_cost_per_token": 5e-6,
+        "output_cost_per_token": 25e-6,
+        "max_input_tokens": 1_000_000,
+        "litellm_provider": "vendor",
+    },
+    "vendor-sonnet-4-6": {
+        # Newer-named, same cost as vendor-4-sonnet-old below; tiebreak
+        # by minor desc must prefer this canonical name.
+        "input_cost_per_token": 3e-6,
+        "output_cost_per_token": 15e-6,
+        "max_input_tokens": 1_000_000,
+        "litellm_provider": "vendor",
+    },
+    "vendor-4-sonnet-20250514": {
+        # Same generation (major 4), same cost — but minor parses as 0
+        # because the digit isn't followed by another digit-pair.
+        "input_cost_per_token": 3e-6,
+        "output_cost_per_token": 15e-6,
+        "max_input_tokens": 1_000_000,
+        "litellm_provider": "vendor",
+    },
+    # Cross-generation isolation: only gen-3 entries on this provider.
+    "lonely-gen3-opus": {
+        "input_cost_per_token": 15e-6,
+        "output_cost_per_token": 75e-6,
+        "max_input_tokens": 200_000,
+        "litellm_provider": "lonely-gen3",
+    },
+    "lonely-gen3-haiku-20240307": {
+        "input_cost_per_token": 0.25e-6,
+        "output_cost_per_token": 1.25e-6,
+        "max_input_tokens": 200_000,
+        "litellm_provider": "lonely-gen3",
     },
 }
 
@@ -192,6 +254,70 @@ class TestSuggestionLogic:
 # ---------------------------------------------------------------------------
 # Panel rendering
 # ---------------------------------------------------------------------------
+
+
+class TestVersionTuple:
+    """The major-version filter is the user-visible safety net against
+    silently downgrading from gen-4 to gen-3 just because cost-sort wins.
+    """
+
+    @pytest.mark.parametrize(
+        "model_key,expected",
+        [
+            ("claude-opus-4-5", (4, 5)),
+            ("claude-opus-4-5-20251101", (4, 5)),  # date suffix ignored
+            ("claude-opus-4-7", (4, 7)),
+            ("claude-3-opus-20240229", (3, 0)),  # single-digit major
+            ("claude-3-haiku-20240307", (3, 0)),
+            ("claude-haiku-4-5", (4, 5)),
+            ("claude-haiku-4-5-20251001", (4, 5)),
+            ("claude-4-sonnet-20250514", (4, 0)),  # digit not followed by -N
+            ("claude-sonnet-4-6", (4, 6)),
+            ("gpt-5", (5, 0)),
+            ("gpt-5-codex", (5, 0)),
+            ("custom-local-model", (None, 0)),  # no parseable version
+        ],
+    )
+    def test_extracts_correct_major_minor(self, model_key, expected):
+        assert _version_tuple(model_key) == expected
+
+
+class TestGenerationFilter:
+    def test_excludes_older_major_version_even_if_cheaper(self):
+        # vendor-3-haiku-20240307 is 4x cheaper than vendor-haiku-4-5 but
+        # gen-3 vs gen-4. The advisor must NOT pick the older one.
+        alt = find_cheaper_alternative("vendor-opus-4-5")
+        assert alt is not None
+        assert alt.suggested_model == "vendor-haiku-4-5"
+        assert "3-haiku" not in alt.suggested_model
+
+    def test_gen3_user_gets_gen3_suggestion(self):
+        # Users still on gen-3 should get gen-3 suggestions — the filter
+        # is symmetric. lonely-gen3 provider has only two gen-3 models.
+        alt = find_cheaper_alternative("lonely-gen3-opus")
+        assert alt is not None
+        assert alt.suggested_model == "lonely-gen3-haiku-20240307"
+
+    def test_unversioned_models_treated_as_match_all(self):
+        # Custom/local models have no parseable version — _version_tuple
+        # returns (None, 0). The filter must degrade open (allow all
+        # candidates) rather than closed (reject everything).
+        alt = find_cheaper_alternative("claude-opus-test")  # no digits
+        assert alt is not None
+        # Existing fake catalog has 'claude-haiku-test' as the cheapest
+        # qualifying anthropic-test entry; this remains the suggestion.
+        assert alt.suggested_model == "claude-haiku-test"
+
+
+class TestTiebreakByNewerMinor:
+    def test_prefers_newer_minor_when_cost_ties(self):
+        # vendor-sonnet-4-6 (4, 6) and vendor-4-sonnet-20250514 (4, 0)
+        # are both $3/M with 1M context. The advisor must prefer the
+        # higher-minor canonical name so users get the current model
+        # rather than a stale date-suffixed snapshot.
+        alt = find_cheaper_alternative("vendor-opus-4-7")
+        assert alt is not None
+        assert alt.suggested_model == "vendor-sonnet-4-6"
 
 
 class TestPanel:

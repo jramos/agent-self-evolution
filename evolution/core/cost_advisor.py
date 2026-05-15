@@ -19,6 +19,7 @@ catalog and produce no suggestion — the advisor gracefully returns
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass
 from typing import Any, Dict, Optional, Tuple
 
@@ -72,10 +73,15 @@ def find_cheaper_alternative(model: str) -> Optional[CheaperAlternative]:
     if not (current_input and current_output and current_ctx and provider):
         return None
 
+    current_major, _ = _version_tuple(current_key)
+
     # Enumerate same-provider candidates that are strictly cheaper on input
-    # cost and have at least the current context window. Filtering on input
-    # cost (not output) because input is usually the dominant term for eval
-    # workloads, which feed long skill prompts to score short responses.
+    # cost, have at least the current context window, AND share the current
+    # model's major version. The major-version filter keeps a user on
+    # claude-opus-4-5 from being silently downgraded to claude-3-haiku
+    # (a 20-month-old gen-3 model) just because pure cost-sort makes the
+    # older haiku 4x cheaper than the current claude-haiku-4-5. We'd rather
+    # surface no suggestion than route them onto a much weaker model.
     candidates = []
     for cand_key, cand_entry in catalog.items():
         if cand_entry.get("litellm_provider") != provider:
@@ -89,13 +95,20 @@ def find_cheaper_alternative(model: str) -> Optional[CheaperAlternative]:
             continue
         if cand_ctx < current_ctx:
             continue
-        candidates.append((cand_input, cand_key, cand_entry))
+        cand_major, cand_minor = _version_tuple(cand_key)
+        if current_major is not None and cand_major != current_major:
+            continue
+        candidates.append((cand_input, -cand_minor, cand_key, cand_entry))
 
     if not candidates:
         return None
 
-    candidates.sort(key=lambda t: t[0])
-    _, suggested_key, suggested_entry = candidates[0]
+    # Sort by (input cost asc, minor version desc, name asc). Cost wins
+    # primarily; ties on cost prefer the newer minor (so a tied
+    # claude-sonnet-4-6 beats claude-4-sonnet-20250514, both at $3/M);
+    # ties on minor prefer the shorter/canonical name.
+    candidates.sort(key=lambda t: (t[0], t[1], t[2]))
+    _, _, suggested_key, suggested_entry = candidates[0]
 
     # Reconstruct a paste-ready model string. If the user passed a
     # provider-prefixed name (e.g., ``anthropic/claude-opus-4-5``) but
@@ -149,6 +162,42 @@ def render_suggestion_panel(role: str, alt: CheaperAlternative) -> Panel:
         title="[bold cyan]💡 Cost suggestion[/bold cyan]",
         border_style="cyan",
     )
+
+
+def _version_tuple(model_key: str) -> Tuple[Optional[int], int]:
+    """Extract a (major, minor) version tuple from a model name.
+
+    Used to gate cross-generation suggestions: we don't want to recommend
+    a 20-month-old gen-3 model just because it's cheaper than the user's
+    gen-4 choice. Returns (None, 0) for keys with no parseable version,
+    which means "unknown" — treated as same-major-as-anything for legacy
+    or custom model names so the filter degrades open rather than closed.
+
+    Patterns handled:
+      ``claude-opus-4-5``         -> (4, 5)
+      ``claude-opus-4-5-20251101`` -> (4, 5)  (date suffix ignored)
+      ``claude-3-opus-20240229``  -> (3, 0)  (single-digit major, no minor)
+      ``claude-4-sonnet-20250514`` -> (4, 0)  (digit followed by non-digit)
+      ``claude-sonnet-4-6``       -> (4, 6)
+      ``gpt-5``                    -> (5, 0)
+      ``gpt-5-mini``               -> (5, 0)
+      ``custom-local-model``      -> (None, 0)
+    """
+    # Look for a major-minor pair (e.g., "4-5"). Skip date-shaped patterns
+    # where the second number is suspiciously large or has > 3 digits.
+    for major_s, minor_s in re.findall(r"\b(\d+)-(\d+)\b", model_key):
+        if len(minor_s) > 3:
+            continue
+        minor = int(minor_s)
+        if minor > 60:  # months/days don't get above 31; allow some margin
+            continue
+        return int(major_s), minor
+
+    # Fall back to single-digit major (e.g., "claude-3-opus", "gpt-5").
+    m = re.search(r"\b(\d+)\b", model_key)
+    if m:
+        return int(m.group(1)), 0
+    return None, 0
 
 
 def _lookup(
