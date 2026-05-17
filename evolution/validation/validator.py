@@ -147,6 +147,8 @@ class ClosedLoopValidator:
                 expected_tools=task.expected_tools,
                 forbidden_tools=task.forbidden_tools,
                 run=run,
+                test_command=task.test_command,
+                fixture_dir=fixture_dir,
             )
             return TaskResult(
                 task_id=task.task_id,
