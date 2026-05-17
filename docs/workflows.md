@@ -488,7 +488,13 @@ Per-task scores are deterministic over candidate text (cache is keyed by `sha256
 
 Default `--closed-loop-mode` is `feedback` (not `trainset`) on the skill side. Skill bodies mutate heavily, so the `gate_mode="always"` that trainset needs would fire the validator on every novel candidate — N tasks × 2 phases per fire. Opt into `trainset` / `both` explicitly when the cost is acceptable.
 
-Reference suite: `evolution/validation/suites/systematic_debugging.jsonl` (5 planted-bug tasks). Manual smoke harness: `tests/manual/skill_closed_loop_smoke.py`.
+Reference suites:
+- `evolution/validation/suites/systematic_debugging.jsonl` — 5 textbook bugs; good for verifying the wiring works.
+- `evolution/validation/suites/systematic_debugging_advanced.jsonl` — 5 harder bugs (generator exhaustion, shared mutable return, float-precision equality, leftmost-insert boundary, class-vs-instance attribute) designed to discriminate skill-text variants on capable agent models that saturate the basic suite at 5/5.
+
+When your daily-driver Hermes model is capable enough to solve every textbook bug regardless of skill text, the planted-bug verdict adds no signal. Two knobs to recover discrimination: pass `--closed-loop-during-evolution .../systematic_debugging_advanced.jsonl` to use the harder bugs, and/or pass `--closed-loop-agent-model gpt-4o-mini` (or similar) to run the validator's agent against a weaker model without touching `~/.hermes/config.yaml`.
+
+Manual smoke harness: `tests/manual/skill_closed_loop_smoke.py` (supports `--suite advanced` + `--agent-model MODEL`).
 
 ## Failure-mode summary
 
