@@ -471,6 +471,7 @@ def _maybe_build_closed_loop_cache_skill(
     min_iters: int,
     window_size: int,
     gate_mode: str = "sampled",
+    agent_model: Optional[str] = None,
 ):
     """Build a ClosedLoopFeedbackCache for the skill path; return None when disabled.
 
@@ -506,7 +507,7 @@ def _maybe_build_closed_loop_cache_skill(
         skill_name=skill_name,
         workdir=workdir,
     )
-    runner = HermesAgentRunner()
+    runner = HermesAgentRunner(model=agent_model)
     validator = ClosedLoopValidator(installer=installer, runner=runner)
     suite = TaskSuite.from_jsonl(suite_path)
     return ClosedLoopFeedbackCache(
@@ -599,6 +600,7 @@ def evolve(
     closed_loop_window_size: int = 8,
     closed_loop_mode: str = "feedback",
     closed_loop_in_valset: bool = False,
+    closed_loop_agent_model: Optional[str] = None,
 ):
     """Main evolution function — orchestrates the full optimization loop."""
 
@@ -835,6 +837,7 @@ def evolve(
                 min_iters=closed_loop_min_iters,
                 window_size=closed_loop_window_size,
                 gate_mode=_cache_gate_mode,
+                agent_model=closed_loop_agent_model,
             )
 
             # Build the metric once: DSPy's LM cache lines up across GEPA's
@@ -1547,6 +1550,19 @@ def evolve(
          "scoring). Costs more — each accepted candidate triggers another full "
          "eval pass over the behavioral examples. Default off.",
 )
+@click.option(
+    "--closed-loop-agent-model",
+    "closed_loop_agent_model",
+    default=None,
+    type=str,
+    help="Override the agent model the closed-loop validator runs `hermes -z` "
+         "with (passed as `hermes -m MODEL -z ...`). When unset, the validator "
+         "uses whatever's in your ~/.hermes/config.yaml. Useful when your "
+         "daily-driver Hermes model is so capable it saturates the planted-bug "
+         "suite at 100%, hiding the behavioral signal closed-loop is supposed "
+         "to surface — run validation against a weaker model without touching "
+         "your config.",
+)
 def main(skill, iterations, eval_source, dataset_path, optimizer_model, reflection_model,
          eval_model, skill_source_dir, dry_run, seed, budget, no_fallback,
          quality_gate, growth_free_threshold,
@@ -1563,7 +1579,8 @@ def main(skill, iterations, eval_source, dataset_path, optimizer_model, reflecti
          closed_loop_min_iters,
          closed_loop_window_size,
          closed_loop_mode,
-         closed_loop_in_valset):
+         closed_loop_in_valset,
+         closed_loop_agent_model):
     """Evolve an agent skill using DSPy + GEPA optimization."""
     try:
         evolve(
@@ -1607,6 +1624,7 @@ def main(skill, iterations, eval_source, dataset_path, optimizer_model, reflecti
             closed_loop_window_size=closed_loop_window_size,
             closed_loop_mode=closed_loop_mode,
             closed_loop_in_valset=closed_loop_in_valset,
+            closed_loop_agent_model=closed_loop_agent_model,
         )
     except HermesProviderError as exc:
         # Render a clean error panel instead of dumping a Python traceback

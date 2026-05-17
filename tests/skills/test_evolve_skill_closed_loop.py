@@ -158,6 +158,35 @@ class TestMaybeBuildClosedLoopCacheSkill:
         )
         assert cache.gate_mode == "always"
 
+    def test_agent_model_plumbed_into_runner(self, fake_skill_path):
+        # The closed-loop validator's runner picks up the agent_model
+        # override so `hermes -z -m MODEL` runs instead of using the
+        # user's ~/.hermes/config.yaml default.
+        cache = _maybe_build_closed_loop_cache_skill(
+            skill_name="systematic_debugging",
+            skill_path=fake_skill_path,
+            baseline_skill_body="body",
+            suite_path=_SUITE_FIXTURE,
+            saturation_threshold=0.95,
+            min_iters=3,
+            window_size=8,
+            agent_model="gpt-4o-mini",
+        )
+        assert cache._validator.runner.model == "gpt-4o-mini"
+
+    def test_agent_model_none_leaves_runner_model_none(self, fake_skill_path):
+        # No override → runner.model is None and hermes uses config default.
+        cache = _maybe_build_closed_loop_cache_skill(
+            skill_name="systematic_debugging",
+            skill_path=fake_skill_path,
+            baseline_skill_body="body",
+            suite_path=_SUITE_FIXTURE,
+            saturation_threshold=0.95,
+            min_iters=3,
+            window_size=8,
+        )
+        assert cache._validator.runner.model is None
+
     def test_installer_skills_src_is_under_workdir(self, fake_skill_path):
         # The cache's validator holds an installer with skills_src — confirming
         # the wiring is intact so the runner sees the candidate.

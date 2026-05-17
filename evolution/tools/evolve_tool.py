@@ -260,6 +260,7 @@ def _maybe_build_closed_loop_cache(
     min_iters: int,
     window_size: int,
     gate_mode: str = "sampled",
+    agent_model: Optional[str] = None,
 ):
     """Build a ClosedLoopFeedbackCache when the user opted in, else None.
 
@@ -286,7 +287,7 @@ def _maybe_build_closed_loop_cache(
     installer = HermesToolDescriptionInstaller(
         hermes_repo=hermes_repo, tool_name=tool_name
     )
-    runner = HermesAgentRunner()
+    runner = HermesAgentRunner(model=agent_model)
     validator = ClosedLoopValidator(installer=installer, runner=runner)
     suite = TaskSuite.from_jsonl(suite_path)
     return ClosedLoopFeedbackCache(
@@ -359,6 +360,7 @@ def evolve(
     closed_loop_window_size: int = 8,
     closed_loop_mode: str = "feedback",
     closed_loop_in_valset: bool = False,
+    closed_loop_agent_model: Optional[str] = None,
     skip_preflight: bool = False,
     skip_cost_suggest: bool = False,
 ) -> dict[str, Any]:
@@ -592,6 +594,7 @@ def evolve(
                 min_iters=closed_loop_min_iters,
                 window_size=closed_loop_window_size,
                 gate_mode=cache_gate_mode,
+                agent_model=closed_loop_agent_model,
             )
             metric = make_tool_fitness_metric(
                 judge=judge,
@@ -1187,6 +1190,18 @@ def evolve(
          "scoring). Costs more — each accepted candidate triggers another full "
          "eval pass over the behavioral examples. Default off.",
 )
+@click.option(
+    "--closed-loop-agent-model",
+    "closed_loop_agent_model",
+    default=None,
+    type=str,
+    help="Override the agent model the closed-loop validator runs `hermes -z` "
+         "with (passed as `hermes -m MODEL -z ...`). When unset, the validator "
+         "uses whatever's in your ~/.hermes/config.yaml. Useful when your "
+         "daily-driver Hermes model saturates the planted-bug suite at 100%, "
+         "hiding the behavioral signal — run validation against a weaker model "
+         "without touching your config.",
+)
 def main(
     tool_name: str,
     manifest_path: Path,
@@ -1212,6 +1227,7 @@ def main(
     closed_loop_window_size: int,
     closed_loop_mode: str,
     closed_loop_in_valset: bool,
+    closed_loop_agent_model: Optional[str],
 ) -> None:
     """Evolve one tool description in an MCP manifest using DSPy + GEPA."""
     if apply_flag and patch_flag:
@@ -1249,6 +1265,7 @@ def main(
             closed_loop_window_size=closed_loop_window_size,
             closed_loop_mode=closed_loop_mode,
             closed_loop_in_valset=closed_loop_in_valset,
+            closed_loop_agent_model=closed_loop_agent_model,
             skip_preflight=skip_preflight,
             skip_cost_suggest=skip_cost_suggest,
         )
