@@ -29,7 +29,6 @@ from evolution.validation.artifact_installer import (
     ArtifactInstaller,
     atomic_write_bytes,
     sha256_of,
-    verify_python_parses,
 )
 from evolution.validation.report import (
     PhaseResult,
@@ -88,11 +87,11 @@ class ClosedLoopValidator:
     def validate(self, inputs: ValidationInputs) -> ValidationReport:
         target = self.installer.target_path
         backup_path = target.with_suffix(target.suffix + _BACKUP_SUFFIX)
-        _refuse_if_stale_backup_exists(backup_path)
+        _refuse_if_stale_backup_exists(backup_path, self.installer)
 
         with _exclusive_lock(target.parent):
             atomic_write_bytes(backup_path, target.read_bytes())
-            verify_python_parses(backup_path)
+            self.installer.verify_backup(backup_path)
             try:
                 baseline_results = self._run_phase(
                     inputs.suite,
@@ -141,6 +140,7 @@ class ClosedLoopValidator:
             ctx = TaskRunContext(
                 user_message=task.render_message(fixture_dir),
                 fixture_dir=fixture_dir,
+                skills_src=getattr(self.installer, "skills_src", None),
             )
             run = self.runner.run(ctx)
             passed, abstained = score_task(
@@ -161,14 +161,16 @@ class ClosedLoopValidator:
             )
 
 
-def _refuse_if_stale_backup_exists(backup_path: Path) -> None:
+def _refuse_if_stale_backup_exists(
+    backup_path: Path, installer: ArtifactInstaller
+) -> None:
     if not backup_path.exists():
         return
     try:
-        verify_python_parses(backup_path)
-    except SyntaxError as exc:
+        installer.verify_backup(backup_path)
+    except Exception as exc:
         raise StaleBackupError(
-            f"Stale backup at {backup_path} is corrupt (cannot parse as Python: "
+            f"Stale backup at {backup_path} is corrupt ({type(exc).__name__}: "
             f"{exc}). Inspect it manually; do not blindly restore."
         ) from exc
     raise StaleBackupError(
