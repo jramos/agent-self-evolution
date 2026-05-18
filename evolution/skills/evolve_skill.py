@@ -472,6 +472,7 @@ def _maybe_build_closed_loop_cache_skill(
     window_size: int,
     gate_mode: str = "sampled",
     agent_model: Optional[str] = None,
+    agent_timeout_seconds: Optional[int] = None,
 ):
     """Build a ClosedLoopFeedbackCache for the skill path; return None when disabled.
 
@@ -507,7 +508,10 @@ def _maybe_build_closed_loop_cache_skill(
         skill_name=skill_name,
         workdir=workdir,
     )
-    runner = HermesAgentRunner(model=agent_model)
+    runner_kwargs: dict = {"model": agent_model}
+    if agent_timeout_seconds is not None:
+        runner_kwargs["timeout_seconds"] = agent_timeout_seconds
+    runner = HermesAgentRunner(**runner_kwargs)
     validator = ClosedLoopValidator(installer=installer, runner=runner)
     suite = TaskSuite.from_jsonl(suite_path)
     return ClosedLoopFeedbackCache(
@@ -601,6 +605,7 @@ def evolve(
     closed_loop_mode: str = "feedback",
     closed_loop_in_valset: bool = False,
     closed_loop_agent_model: Optional[str] = None,
+    closed_loop_task_timeout_seconds: Optional[int] = None,
 ):
     """Main evolution function — orchestrates the full optimization loop."""
 
@@ -838,6 +843,7 @@ def evolve(
                 window_size=closed_loop_window_size,
                 gate_mode=_cache_gate_mode,
                 agent_model=closed_loop_agent_model,
+                agent_timeout_seconds=closed_loop_task_timeout_seconds,
             )
 
             # Build the metric once: DSPy's LM cache lines up across GEPA's
@@ -1563,6 +1569,18 @@ def evolve(
          "to surface — run validation against a weaker model without touching "
          "your config.",
 )
+@click.option(
+    "--closed-loop-task-timeout-seconds",
+    "closed_loop_task_timeout_seconds",
+    default=None,
+    type=click.IntRange(min=1),
+    help="Per-task wall-clock budget for the closed-loop validator's `hermes -z` "
+         "subprocess (default 120s). Bump when --closed-loop-agent-model selects "
+         "a slow reasoning model that doesn't finish within the default — most "
+         "OpenAI reasoning models (o1-family, o3-family) take 60-180s per "
+         "debugging task. Hitting the timeout abstains the task verdict rather "
+         "than failing it, so over-tight values silently produce no-signal runs.",
+)
 def main(skill, iterations, eval_source, dataset_path, optimizer_model, reflection_model,
          eval_model, skill_source_dir, dry_run, seed, budget, no_fallback,
          quality_gate, growth_free_threshold,
@@ -1580,7 +1598,8 @@ def main(skill, iterations, eval_source, dataset_path, optimizer_model, reflecti
          closed_loop_window_size,
          closed_loop_mode,
          closed_loop_in_valset,
-         closed_loop_agent_model):
+         closed_loop_agent_model,
+         closed_loop_task_timeout_seconds):
     """Evolve an agent skill using DSPy + GEPA optimization."""
     try:
         evolve(
@@ -1625,6 +1644,7 @@ def main(skill, iterations, eval_source, dataset_path, optimizer_model, reflecti
             closed_loop_mode=closed_loop_mode,
             closed_loop_in_valset=closed_loop_in_valset,
             closed_loop_agent_model=closed_loop_agent_model,
+            closed_loop_task_timeout_seconds=closed_loop_task_timeout_seconds,
         )
     except HermesProviderError as exc:
         # Render a clean error panel instead of dumping a Python traceback

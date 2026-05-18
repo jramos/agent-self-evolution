@@ -107,6 +107,15 @@ def main() -> int:
              "Use when your default Hermes model saturates the suite at 5/5 and "
              "you want to see the planted bugs actually fail on baseline.",
     )
+    parser.add_argument(
+        "--task-timeout-seconds",
+        type=int,
+        default=None,
+        help="Per-task wall-clock budget (default 120s). Bump when --agent-model "
+             "selects a slow reasoning model (o1/o3-family typically need 200-300s "
+             "per debugging task). Timeouts abstain the task verdict rather than "
+             "failing it, so under-sized values silently produce no-signal runs.",
+    )
     args = parser.parse_args()
 
     suite_path = SUITE_PATHS[args.suite]
@@ -134,6 +143,10 @@ def main() -> int:
         print(f"  ✓ Agent model override: {args.agent_model}")
     else:
         print(f"  ✓ Agent model: <Hermes config default>")
+    if args.task_timeout_seconds:
+        print(f"  ✓ Task timeout override: {args.task_timeout_seconds}s")
+    else:
+        print(f"  ✓ Task timeout: 120s (default)")
 
     _section("Constructing closed-loop cache")
     from evolution.skills.evolve_skill import _maybe_build_closed_loop_cache_skill
@@ -159,6 +172,7 @@ def main() -> int:
         window_size=4,
         gate_mode="always",  # force the validator to fire
         agent_model=args.agent_model,
+        agent_timeout_seconds=args.task_timeout_seconds,
     )
     assert cache is not None, "cache should be constructed when suite_path is set"
     print(f"  ✓ Cache constructed (gate_mode={cache.gate_mode})")
