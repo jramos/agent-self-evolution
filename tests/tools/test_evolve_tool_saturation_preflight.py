@@ -121,3 +121,52 @@ class TestSaturationPreflightCLI:
             )
             # confirm is bypassed when --force-saturation-check is set
             mock_confirm.assert_not_called()
+
+    def test_cache_reuse_skips_baseline_re_eval_after_gepa(self, manifest_dir):
+        """When the saturation preflight runs, the cached baseline holdout
+        scores must be reused at the post-GEPA evaluation site — the baseline
+        module should NOT be re-scored on the holdout after GEPA finishes.
+        This is the 'net cost ~zero' contract."""
+        from evolution.core.saturation_check import SaturationReport
+        from evolution.skills.knee_point import CandidatePick
+        from unittest.mock import MagicMock
+
+        # Healthy report so preflight passes without prompting; preflight
+        # still populates holdout_per_example which gets reused.
+        healthy = SaturationReport(
+            band="healthy", holdout_score=0.6, holdout_n=10,
+            holdout_per_example=[0.6] * 10, suggestions=[], thresholds={},
+        )
+        # Fake knee-point result so execution reaches the holdout site.
+        fake_module = MagicMock()
+        knee_pick = CandidatePick(
+            module=fake_module, skill_text="evolved desc", body_chars=12,
+            val_score=0.8, val_rank_in_band=1, band_size=1, epsilon=0.1,
+            fallback="knee", picked_idx=0, gepa_default_idx=0,
+            gepa_default_body_chars=12, band_roster=[],
+        )
+        with patch(
+            "evolution.tools.evolve_tool.saturation_preflight", return_value=healthy
+        ), patch(
+            "evolution.tools.evolve_tool._preflight_lm_credentials"
+        ), patch("evolution.tools.evolve_tool.dspy.GEPA"), patch(
+            "evolution.tools.evolve_tool.select_knee_point", return_value=knee_pick
+        ), patch(
+            "evolution.tools.evolve_tool._candidate_description", return_value="evolved desc"
+        ), patch(
+            "evolution.tools.evolve_tool._holdout_evaluate_with_metric"
+        ) as mock_holdout_eval:
+            mock_holdout_eval.return_value = (0.6, [0.6] * 10)
+            runner = CliRunner()
+            runner.invoke(
+                evolve_tool_main,
+                ["--tool", "write_file", "--manifest", str(manifest_dir),
+                 "--iterations", "1", "--no-preflight"],
+            )
+            # With preflight populating the cache, baseline should NOT be
+            # re-evaluated post-GEPA. Only evolved should be evaluated, so
+            # _holdout_evaluate_with_metric is called exactly once.
+            assert mock_holdout_eval.call_count == 1, (
+                f"Expected baseline holdout to be reused from preflight cache "
+                f"(1 call for evolved only), got {mock_holdout_eval.call_count}"
+            )

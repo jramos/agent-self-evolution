@@ -202,7 +202,7 @@ class ClosedLoopFeedbackCache:
             )
             report = self._validator.validate(inputs)
             self._cache[key] = report
-            self._iters_since_last_run = 0
+            self._iters_since_last_run = self.min_iters
             return report
 
     def get_task_verdict(
