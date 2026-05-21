@@ -179,6 +179,32 @@ class ClosedLoopFeedbackCache:
             self._iters_since_last_run = 0
             return report
 
+    def force_run(self, candidate_text: str) -> ValidationReport:
+        """Run the validator now, bypassing the saturation gate.
+
+        Use at preflight or anywhere a baseline probe is needed.
+        Result is cached for downstream ``get_or_run`` hits on the same
+        text. Propagates validator exceptions (unlike ``get_or_run``,
+        which swallows the expected ones to keep GEPA going) — preflight
+        callers want to know the probe failed.
+        """
+        key = self._key(candidate_text)
+        with self._lock:
+            cached = self._cache.get(key)
+            if cached is not None:
+                return cached
+            self._artifact_writer(candidate_text, self._evolved_path)
+            inputs = ValidationInputs(
+                tool_name=self._artifact_name,
+                suite=self._suite,
+                baseline_artifact=self._baseline_path,
+                evolved_artifact=self._evolved_path,
+            )
+            report = self._validator.validate(inputs)
+            self._cache[key] = report
+            self._iters_since_last_run = 0
+            return report
+
     def get_task_verdict(
         self, candidate_text: str, task_id: str
     ) -> Optional[TaskResult]:

@@ -533,3 +533,62 @@ class TestArtifactWriterInjection:
         path = tmp_path / "out.md"
         write_text_artifact("hello world\n", path)
         assert path.read_text() == "hello world\n"
+
+
+class TestForceRun:
+    """`force_run` bypasses should_run() and propagates errors (unlike
+    get_or_run which swallows expected validator errors)."""
+
+    def test_force_run_fires_in_sampled_mode_before_any_judge_scores(self, tmp_path):
+        """In default sampled mode with empty judge history, should_run()
+        returns False — but force_run runs the validator anyway."""
+        suite = _build_suite(tmp_path)
+        report = _build_report()
+        validator = MagicMock()
+        validator.validate.return_value = report
+        cache = ClosedLoopFeedbackCache(
+            validator=validator,
+            suite=suite,
+            artifact_name="write_file",
+            baseline_artifact_text="baseline desc",
+            gate_mode="sampled",
+        )
+        assert cache.should_run() is False
+
+        result = cache.force_run("candidate desc")
+
+        assert result is report
+        validator.validate.assert_called_once()
+
+    def test_force_run_uses_cache_on_repeat_calls(self, tmp_path):
+        """Second call with same candidate_text returns the cached report
+        without re-running the validator."""
+        suite = _build_suite(tmp_path)
+        report = _build_report()
+        validator = MagicMock()
+        validator.validate.return_value = report
+        cache = ClosedLoopFeedbackCache(
+            validator=validator, suite=suite, artifact_name="t",
+            baseline_artifact_text="b", gate_mode="sampled",
+        )
+
+        first = cache.force_run("cand")
+        second = cache.force_run("cand")
+
+        assert first is second
+        assert validator.validate.call_count == 1
+
+    def test_force_run_propagates_validator_errors(self, tmp_path):
+        """force_run propagates ConcurrentRunError (unlike get_or_run,
+        which swallows it and returns None to keep GEPA going). Preflight
+        callers want to know the probe failed."""
+        suite = _build_suite(tmp_path)
+        validator = MagicMock()
+        validator.validate.side_effect = ConcurrentRunError("locked")
+        cache = ClosedLoopFeedbackCache(
+            validator=validator, suite=suite, artifact_name="t",
+            baseline_artifact_text="b", gate_mode="sampled",
+        )
+
+        with pytest.raises(ConcurrentRunError):
+            cache.force_run("cand")
