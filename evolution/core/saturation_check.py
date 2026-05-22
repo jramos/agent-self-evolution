@@ -65,8 +65,24 @@ def _classify_band(
             "Or harden the suite tasks so failure modes are interesting, not 'model can't execute'.",
         ]
 
-    if holdout_score >= no_head_syn and (
-        closed_loop_score is None or closed_loop_score >= no_head_cl
+    synthetic_saturated = holdout_score >= no_head_syn
+    synthetic_close = holdout_score >= weak_syn
+    cl_saturated = (
+        closed_loop_score is not None and closed_loop_score >= no_head_cl
+    )
+    no_cl_signal = closed_loop_score is None
+
+    # no_headroom triggers when:
+    #   - synthetic alone is saturated and there's no closed-loop signal
+    #     (only signal available is judge, and it's pegged), OR
+    #   - closed-loop is saturated AND synthetic is close enough (≥ weak
+    #     threshold) that the judge isn't producing a useful gradient either.
+    # CL-saturated alone with a low synthetic (< weak_syn) does NOT trigger:
+    # there's real judge signal to optimize over even when behavioral is
+    # pegged, and that scenario usually means a misconfigured eval rather
+    # than true saturation.
+    if (synthetic_saturated and no_cl_signal) or (
+        cl_saturated and synthetic_close
     ):
         return "no_headroom", [
             "Baseline already saturates the eval. No measurable headroom to evolve into.",

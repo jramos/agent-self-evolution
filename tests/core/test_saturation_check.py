@@ -71,6 +71,27 @@ class TestClassifyBand:
         )
         assert band == "no_headroom"
 
+    def test_no_headroom_when_cl_saturated_and_synthetic_close(self):
+        """The smoke case: synthetic 0.987 (below strict no_head_syn=0.99
+        but above weak_syn=0.95), closed-loop 1.0. Both signals
+        effectively pegged → no_headroom should trigger so the user
+        doesn't burn GEPA budget on a hopeless run."""
+        band, _ = _classify_band(
+            holdout_score=0.987, closed_loop_score=1.0,
+            thresholds=DEFAULT_THRESHOLDS,
+        )
+        assert band == "no_headroom"
+
+    def test_healthy_when_cl_saturated_but_synthetic_low(self):
+        """Edge case: behavioral suite pegged at 1.0 but synthetic at 0.5
+        means there's real judge signal to optimize over (or the eval is
+        misconfigured). Don't auto-abort — proceed and let GEPA try."""
+        band, _ = _classify_band(
+            holdout_score=0.5, closed_loop_score=1.0,
+            thresholds=DEFAULT_THRESHOLDS,
+        )
+        assert band == "healthy"
+
 
 class TestSaturationPreflightNoClosedLoop:
     def test_returns_healthy_when_baseline_below_threshold(self):
