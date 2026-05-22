@@ -26,6 +26,26 @@ def skill_dir(tmp_path):
     return skills_root
 
 
+def _fake_skill_dataset(n: int = 50):
+    """Build a real-shaped EvalDataset with n fake examples (no LM calls).
+
+    Used by tests that need to flow through evolve() up to the saturation
+    preflight wiring; replaces SyntheticDatasetBuilder.generate so CI runs
+    with a fake OPENAI_API_KEY don't die on AuthError before reaching the
+    code under test. Default n=50 gives 30/10/10 splits — the holdout
+    must be ≥ EvolutionConfig.min_holdout_size (default 10) or evolve()
+    aborts before the preflight wiring.
+    """
+    from evolution.core.dataset_builder import EvalDataset, EvalExample
+    examples = [
+        EvalExample(task_input=f"task {i}", expected_behavior=f"rubric {i}")
+        for i in range(n)
+    ]
+    return EvalDataset(
+        train=examples[:30], val=examples[30:40], holdout=examples[40:50],
+    )
+
+
 class TestSaturationPreflightCLI:
     def test_no_saturation_check_flag_skips_helper(self, skill_dir):
         with patch(
@@ -69,7 +89,11 @@ class TestSaturationPreflightCLI:
             holdout_per_example=[1.0] * 50, suggestions=["x"], thresholds={},
         )
         gepa_mock = MagicMock()
+        fake_builder = MagicMock()
+        fake_builder.generate.return_value = _fake_skill_dataset()
         with patch(
+            "evolution.skills.evolve_skill.SyntheticDatasetBuilder", return_value=fake_builder
+        ), patch(
             "evolution.skills.evolve_skill.saturation_preflight", return_value=saturated
         ), patch(
             "evolution.skills.evolve_skill._preflight_lm_credentials"
@@ -129,7 +153,11 @@ class TestSaturationPreflightCLI:
             fallback="knee", picked_idx=0, gepa_default_idx=0,
             gepa_default_body_chars=18, band_roster=[],
         )
+        fake_builder = MagicMock()
+        fake_builder.generate.return_value = _fake_skill_dataset()
         with patch(
+            "evolution.skills.evolve_skill.SyntheticDatasetBuilder", return_value=fake_builder
+        ), patch(
             "evolution.skills.evolve_skill.saturation_preflight", return_value=healthy
         ), patch(
             "evolution.skills.evolve_skill._preflight_lm_credentials"

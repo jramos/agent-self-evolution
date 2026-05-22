@@ -35,6 +35,21 @@ def manifest_dir(tmp_path):
     return _minimal_manifest_dir(tmp_path)
 
 
+def _fake_tool_examples(n: int = 30):
+    """Build n fake EvalExamples without calling an LM.
+
+    Used by tests that need to flow through evolve() up to the saturation
+    preflight wiring; replaces SyntheticDatasetBuilder.generate_tool_selection
+    so CI runs with a fake OPENAI_API_KEY don't die on AuthError before
+    reaching the code under test.
+    """
+    from evolution.core.dataset_builder import EvalExample
+    return [
+        EvalExample(task_input=f"task {i}", expected_behavior=f"rubric {i}")
+        for i in range(n)
+    ]
+
+
 class TestSaturationPreflightCLI:
     def test_no_saturation_check_flag_skips_helper(self, manifest_dir):
         """--no-saturation-check skips the preflight helper entirely."""
@@ -82,7 +97,11 @@ class TestSaturationPreflightCLI:
             suggestions=["Try a harder suite"], thresholds={},
         )
         gepa_mock = MagicMock()
+        fake_builder = MagicMock()
+        fake_builder.generate_tool_selection.return_value = _fake_tool_examples()
         with patch(
+            "evolution.tools.evolve_tool.SyntheticDatasetBuilder", return_value=fake_builder
+        ), patch(
             "evolution.tools.evolve_tool.saturation_preflight", return_value=saturated
         ), patch(
             "evolution.tools.evolve_tool._preflight_lm_credentials"
@@ -145,7 +164,11 @@ class TestSaturationPreflightCLI:
             fallback="knee", picked_idx=0, gepa_default_idx=0,
             gepa_default_body_chars=12, band_roster=[],
         )
+        fake_builder = MagicMock()
+        fake_builder.generate_tool_selection.return_value = _fake_tool_examples()
         with patch(
+            "evolution.tools.evolve_tool.SyntheticDatasetBuilder", return_value=fake_builder
+        ), patch(
             "evolution.tools.evolve_tool.saturation_preflight", return_value=healthy
         ), patch(
             "evolution.tools.evolve_tool._preflight_lm_credentials"
