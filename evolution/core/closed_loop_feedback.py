@@ -24,8 +24,10 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
+import shutil
 import tempfile
 import threading
+import weakref
 from pathlib import Path
 from typing import Callable, Literal, Optional
 
@@ -62,8 +64,11 @@ class ClosedLoopFeedbackCache:
     """Run-bounded cache of closed-loop verdicts keyed by candidate text.
 
     One instance per ``evolve_tool`` / ``evolve_skill`` invocation. The
-    tmp dir lives for the cache's lifetime; the OS reclaims it at process
-    exit (no explicit cleanup).
+    tmp dir lives for the cache's lifetime and is cleaned up via
+    ``weakref.finalize`` when the cache is garbage-collected — including
+    on ``SystemExit`` from the saturation pre-flight's abort path, which
+    would otherwise leak the dir until the OS's /tmp reaper ran (3+
+    days on macOS, weekly on most Linux servers).
 
     The cache is shared across metric calls within a run, including across
     DSPy's parallel ``Evaluate`` workers. The threading lock prevents
@@ -112,13 +117,26 @@ class ClosedLoopFeedbackCache:
         )
 
         self._tmp_dir = Path(tempfile.mkdtemp(prefix="cl_feedback_"))
+        # Clean up the tmp dir when the cache is garbage-collected. This
+        # fires on normal completion AND on SystemExit (e.g. the saturation
+        # pre-flight's non-interactive abort), where atexit-only cleanup
+        # would leak the dir for days.
+        self._cleanup_finalizer = weakref.finalize(
+            self, shutil.rmtree, self._tmp_dir, ignore_errors=True
+        )
         self._baseline_path = self._tmp_dir / f"baseline{artifact_suffix}"
         self._evolved_path = self._tmp_dir / f"evolved{artifact_suffix}"
         self._artifact_writer(baseline_artifact_text, self._baseline_path)
 
         self._cache: dict[str, ValidationReport] = {}
         self._judge_history: list[float] = []
-        self._iters_since_last_run = self.min_iters  # allow first fire
+        # First-fire allowance: starts at min_iters so the first
+        # record_judge_score → should_run cycle satisfies the periodic
+        # floor (iters_since_last_run >= min_iters) and fires immediately
+        # in sampled gate_mode even before any judge saturation. force_run
+        # restores this same value rather than 0 to preserve the allowance
+        # for downstream get_or_run callers; see force_run's docstring.
+        self._iters_since_last_run = self.min_iters
         self._lock = threading.Lock()
 
     def record_judge_score(self, score: float) -> None:
@@ -187,6 +205,13 @@ class ClosedLoopFeedbackCache:
         text. Propagates validator exceptions (unlike ``get_or_run``,
         which swallows the expected ones to keep GEPA going) — preflight
         callers want to know the probe failed.
+
+        Sets ``_iters_since_last_run = self.min_iters`` (not 0 like
+        ``get_or_run``'s post-run reset) so the first GEPA-time
+        ``record_judge_score`` + ``should_run`` cycle after preflight
+        still satisfies the periodic floor and fires immediately,
+        preserving the first-fire allowance ``__init__`` sets up. A
+        regression test pins this invariant; do not change to 0.
         """
         key = self._key(candidate_text)
         with self._lock:

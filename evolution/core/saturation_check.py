@@ -145,9 +145,12 @@ def saturation_preflight(
     thresholds: Optional[dict[str, float]] = None,
 ) -> SaturationReport:
     """Score baseline on holdout (and closed-loop suite if cache provided),
-    classify into a band, return a report. Pure: no side effects.
+    classify into a band, return a report.
 
-    Call sites are responsible for rendering panels, prompting, and exiting.
+    Does the work — LM eval of the baseline, optional closed-loop validator
+    fire via ``force_run``, cache mutation, possibly a subprocess. The
+    "purity" we care about is at a higher layer: this function doesn't
+    render panels, prompt for confirmation, or exit. Call sites own those.
     """
     if not holdout_examples:
         raise ValueError("holdout_examples is empty; nothing to score")
@@ -260,7 +263,9 @@ def is_non_interactive() -> bool:
 def interactive_confirm(prompt: str = "Continue anyway? [y/N] ") -> bool:
     """Read one line from stdin; return True only for {y, yes} case-insensitive.
 
-    Ctrl-C / KeyboardInterrupt → False (treat like 'n', no traceback noise).
+    Ctrl-C and stdin EOF both → False (treat like 'n', no traceback noise).
+    The EOF branch matters in practice when stdin is piped from ``/dev/null``
+    or a closed pipe.
     """
     try:
         answer = input(prompt)

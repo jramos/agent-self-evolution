@@ -907,7 +907,12 @@ def evolve(
                                 "proceed. Pass --force-saturation-check to "
                                 "override.[/yellow]"
                             )
-                            sys.exit(0)
+                            # Exit code 3 distinguishes "refused to run for
+                            # lack of a TTY to confirm against" from clean
+                            # success (0) or hard user errors (1). Lets a
+                            # wrapping CI / cron / scheduled runner detect
+                            # silent denial.
+                            sys.exit(3)
                         if not interactive_confirm():
                             console.print("[yellow]Aborted by user.[/yellow]")
                             sys.exit(0)
