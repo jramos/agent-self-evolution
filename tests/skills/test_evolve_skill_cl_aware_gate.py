@@ -46,7 +46,7 @@ from evolution.validation.report import (
 
 # Demo SKILL.md used as the baseline. Kept tiny + stable so the
 # growth-pct math in every test is predictable. Lengths:
-#   frontmatter (between ---s) = "name: demo-skill\ndescription: a test skill" (43 chars)
+#   frontmatter (between ---s) = "name: demo-skill\ndescription: a test skill" (42 chars)
 #   body (after the second ---) = "Do X." (5 chars)
 #   raw (full file content)    = 58 chars
 # After reassemble_skill: "---\n{frontmatter}\n---\n\n{body}\n" = 53 + len(body) chars.
@@ -708,6 +708,14 @@ def test_absolute_char_ceiling_still_enforced_in_cl_primary_path(
     char ceiling → reject. CL-primary mustn't bypass the wallpaper-
     protection backstop.
 
+    Pinned production flow: ``validate_static`` at ``evolve_skill.py:1034``
+    only runs ``size_limit``/``non_empty``/``skill_structure``; the
+    ``absolute_char_ceiling`` check lives inside the CL-primary branch at
+    line 1271 (``validator._check_absolute_chars``) and runs AFTER
+    ``force_run``. So this test exercises the in-branch ceiling check —
+    the rejection carries ``decision_signal: "closed_loop"`` and the CL
+    cache must have been consulted for the evolved body.
+
     Baseline raw = 58 chars. With max_absolute_chars=50, the effective
     ceiling = max(50, 1.5*58) = 87. evolved_full = 53 + len(body) chars,
     so a 200-char body produces a 253-char evolved_full — trips the
@@ -746,6 +754,16 @@ def test_absolute_char_ceiling_still_enforced_in_cl_primary_path(
     assert "absolute_char_ceiling" in payload.get("failed_constraints", []), (
         f"failed_constraints={payload.get('failed_constraints')}"
     )
+    # Pin the actual code path: rejection comes from the in-branch
+    # _check_absolute_chars at evolve_skill.py:1271 (NOT the early
+    # validate_static at line 1034, which doesn't include the ceiling).
+    # That means CL eval already ran and the signal is "closed_loop".
+    assert payload["decision_signal"] == "closed_loop", (
+        f"CL-primary ceiling reject must emit decision_signal='closed_loop'; "
+        f"got {payload.get('decision_signal')!r} — did the ceiling check move "
+        f"out of the CL-primary branch?"
+    )
+    fake_cache.force_run.assert_called_once_with(long_body)
 
 
 # ---------------------------------------------------------------------------
