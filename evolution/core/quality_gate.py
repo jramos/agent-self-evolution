@@ -157,10 +157,15 @@ def write_cost_ceiling_abort(
     output_dir: Path,
     run_inputs: dict[str, Any],
     extra_fields: dict[str, Any] | None = None,
+    schema_version: str = "4",
 ) -> Path:
     """Write a ``decision="aborted"`` gate_decision for a cost-ceiling trip.
+
     ``extra_fields`` lets callers add path-specific keys (e.g.,
-    ``artifact_type``, ``target_tool``).
+    ``artifact_type``, ``target_tool``). ``schema_version`` defaults to
+    ``"4"`` so skill-side callers (which haven't bumped past v4 yet) keep
+    working unchanged; tool-side callers pass ``"5"`` to stay consistent
+    with the rest of the gate_decision write sites in that ``output_dir``.
     """
     cost_summary = COST_LEDGER.summary()
     _console.print(
@@ -168,7 +173,7 @@ def write_cost_ceiling_abort(
         f"ceiling ${exc.ceiling_usd:.4f}[/bold red]"
     )
     payload: dict[str, Any] = {
-        "schema_version": "4",
+        "schema_version": schema_version,
         "decision": "aborted",
         "reason": "cost_ceiling_exceeded",
         "cost_ceiling_usd": exc.ceiling_usd,

@@ -802,3 +802,74 @@ class TestSchemaV5Regression:
         assert not missing, f"v5 fields missing in CL-primary payload: {sorted(missing)}"
         assert payload["schema_version"] == "5"
         assert payload["decision_signal"] == "closed_loop"
+
+    def test_cl_eval_failed_payload_has_schema_v5_and_decision_signal(
+        self, temp_manifest: Path, tmp_path: Path,
+    ):
+        """Abort payloads are diagnostic-only (no full v4 field set), but
+        must still pin schema_version="5" and a decision_signal so abort
+        rows route the same way as deploy/reject rows in downstream jq."""
+        fake_cache = MagicMock()
+        fake_cache.force_run.side_effect = RuntimeError("validator crashed")
+        run_dir = tmp_path / "run"
+
+        with _patch_stack(sat_report=_weak_signal_report(), fake_cache=fake_cache):
+            _run_evolve(manifest_path=temp_manifest, output_dir=run_dir)
+
+        payload = json.loads((run_dir / "gate_decision.json").read_text())
+        assert payload["schema_version"] == "5"
+        assert payload["decision_signal"] == "closed_loop"
+        assert payload["decision"] == "aborted"
+        assert payload["reason"] == "cl_eval_failed"
+
+    def test_cl_eval_incomplete_payload_has_schema_v5_and_decision_signal(
+        self, temp_manifest: Path, tmp_path: Path,
+    ):
+        """Abort payloads from the incomplete-eval branch must also pin
+        schema_version="5" and decision_signal so abort rows participate
+        in v5 cohort queries alongside deploy/reject rows."""
+        fake_cache = MagicMock()
+        # task_2 abstains; mirrors the incomplete-detection scenario.
+        fake_cache.force_run.return_value = _fake_validation_report(
+            baseline_pass=[True, True, True, True, True, False, False],
+            evolved_pass=[True, True, False, True, True, True, True],
+            evolved_abstain=[False, False, True, False, False, False, False],
+        )
+        run_dir = tmp_path / "run"
+
+        with _patch_stack(sat_report=_weak_signal_report(), fake_cache=fake_cache):
+            _run_evolve(manifest_path=temp_manifest, output_dir=run_dir)
+
+        payload = json.loads((run_dir / "gate_decision.json").read_text())
+        assert payload["schema_version"] == "5"
+        assert payload["decision_signal"] == "closed_loop"
+        assert payload["decision"] == "aborted"
+        assert payload["reason"] == "cl_eval_incomplete"
+
+    def test_static_constraint_failure_payload_has_schema_v5_and_decision_signal(
+        self, temp_manifest: Path, tmp_path: Path,
+    ):
+        """Static-fail fires before any CL evaluation could run, so the
+        user never got into the CL-primary path → decision_signal must be
+        "synthetic". Triggered by patching _candidate_description to
+        return an empty string, which fails the non_empty constraint."""
+        fake_cache = MagicMock()
+        run_dir = tmp_path / "run"
+
+        # Use the healthy band so we route through the synthetic-only
+        # path conceptually, then make _candidate_description return ""
+        # to trip the non_empty static constraint. The _patch_stack
+        # context manager already patches _candidate_description; we
+        # override it here with an empty string.
+        with _patch_stack(
+            sat_report=_healthy_report(),
+            fake_cache=fake_cache,
+            evolved_description="",
+        ):
+            _run_evolve(manifest_path=temp_manifest, output_dir=run_dir)
+
+        payload = json.loads((run_dir / "gate_decision.json").read_text())
+        assert payload["schema_version"] == "5"
+        assert payload["decision_signal"] == "synthetic"
+        assert payload["decision"] == "reject"
+        assert payload["reason"] == "static_constraint_failure"

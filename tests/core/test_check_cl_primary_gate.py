@@ -31,9 +31,9 @@ class TestCheckClPrimaryGate:
         assert result.passed is True
         assert result.constraint_name == "cl_primary_gate"
 
-    def test_accepts_at_pr_68_calibration_point(self):
-        # PR #68: +2 gain on +121% growth → required=ceil(1.0*(1.21-0.20))=2.
-        # This is the exact case that motivated this work.
+    def test_accepts_at_24char_baseline_calibration_point(self):
+        # +2 task gain on +121% growth → required=ceil(1.0*(1.21-0.20))=2 → just barely passes.
+        # 24-char baseline calibration point from the prior retro-validation.
         result = _check_cl_primary_gate(
             baseline_cl_passes=5,
             evolved_cl_passes=7,

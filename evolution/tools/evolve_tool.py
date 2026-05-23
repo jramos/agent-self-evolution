@@ -824,6 +824,7 @@ def evolve(
                     "schema_version": "5",
                     "decision": "reject",
                     "reason": "static_constraint_failure",
+                    "decision_signal": "synthetic",
                     "failed_constraints": [c.constraint_name for c in static_constraints if not c.passed],
                     "messages": [c.message for c in static_constraints if not c.passed],
                     "knee_point": _knee_point_payload(knee_pick),
@@ -1250,6 +1251,7 @@ def evolve(
                     "artifact_type": "tool_description",
                     "target_tool": tool_name,
                 },
+                schema_version="5",
             )
             return {"decision": "aborted", "reason": "cost_ceiling_exceeded"}
     finally:
