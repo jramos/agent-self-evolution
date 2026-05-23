@@ -366,12 +366,7 @@ def test_weak_signal_band_triggers_evolved_cl_eval(
     ):
         result = _run_evolve(manifest_path=temp_manifest, output_dir=run_dir)
 
-    fake_cache.force_run.assert_called()
-    call_args = fake_cache.force_run.call_args_list
-    # The CL-primary post-GEPA call passes the evolved description text.
-    assert any(_LOW_GROWTH_EVOLVED in str(call) for call in call_args), (
-        f"Expected force_run to be called with evolved description, got: {call_args}"
-    )
+    fake_cache.force_run.assert_called_once_with(_LOW_GROWTH_EVOLVED)
 
     payload = json.loads((run_dir / "gate_decision.json").read_text())
     assert payload["decision"] == "deploy", (
@@ -459,6 +454,43 @@ def test_no_headroom_with_cl_data_falls_through_to_synthetic_gate(
         "synthetic_sanity_check",
     ):
         assert cl_field not in payload
+
+
+def test_uniform_failure_band_falls_through_to_synthetic_gate(
+    temp_manifest: Path, tmp_path: Path,
+):
+    """uniform_failure band (CL all-zero, e.g. validator broken) is NOT
+    covered by use_cl_primary — only weak_signal triggers CL-primary.
+    Verifies the gate falls through to the synthetic path with no
+    KeyError and no CL eval. If someone later expands use_cl_primary
+    to include uniform_failure, this test catches the change so it
+    must be accompanied by a deliberate spec update."""
+    fake_cache = MagicMock()
+    sat_report = SaturationReport(
+        band="uniform_failure",
+        holdout_score=0.99,
+        holdout_n=10,
+        holdout_per_example=[1.0] * 10,
+        closed_loop_score=0.0,
+        closed_loop_n=7,
+        closed_loop_per_example=[0.0] * 7,
+        suggestions=[],
+        thresholds={},
+    )
+    run_dir = tmp_path / "run"
+
+    with _patch_stack(sat_report=sat_report, fake_cache=fake_cache):
+        _run_evolve(
+            manifest_path=temp_manifest,
+            output_dir=run_dir,
+            extra_kwargs={"force_saturation_check": True},
+        )
+
+    fake_cache.force_run.assert_not_called()
+    payload = json.loads((run_dir / "gate_decision.json").read_text())
+    assert payload["decision_signal"] == "synthetic"
+    assert "baseline_closed_loop_per_example" not in payload
+    assert "cl_tasks_gained" not in payload
 
 
 def test_no_saturation_check_falls_through_to_synthetic_with_reason_recorded(
@@ -646,6 +678,7 @@ def test_evolved_task_error_writes_cl_eval_incomplete_decision(
     assert payload["decision"] == "aborted"
     assert payload["reason"] == "cl_eval_incomplete"
     assert payload["evolved_closed_loop_errored_tasks"] == ["task_2"]
+    assert (run_dir / "evolved_FAILED.json").exists()
 
 
 def test_absolute_char_ceiling_still_enforced_in_cl_primary_path(
