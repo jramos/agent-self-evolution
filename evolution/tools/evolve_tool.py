@@ -10,6 +10,7 @@ from __future__ import annotations
 import difflib
 import json
 import logging
+import math
 import sys
 import time
 from datetime import datetime
@@ -59,6 +60,9 @@ from evolution.core.lm_timing_callback import (
     register_litellm_failure_callback,
 )
 from evolution.core.quality_gate import (
+    CL_PRIMARY_GROWTH_FREE_THRESHOLD,
+    CL_PRIMARY_GROWTH_SLOPE,
+    CL_PRIMARY_SYNTH_TOLERANCE,
     QUALITY_GATE_PRESETS,
     _check_cl_primary_gate,
     resolve_proposer_mode,
@@ -817,7 +821,7 @@ def evolve(
                 evolved_manifest = manifest.replace_description(tool_name, evolved_description)
                 failed_path.write_text(json.dumps(_manifest_to_dict(evolved_manifest), indent=2) + "\n")
                 write_gate_decision(output_dir, {
-                    "schema_version": "4",
+                    "schema_version": "5",
                     "decision": "reject",
                     "reason": "static_constraint_failure",
                     "failed_constraints": [c.constraint_name for c in static_constraints if not c.passed],
@@ -1045,9 +1049,10 @@ def evolve(
             else:
                 decision_reason = "growth_quality_gate"
             decision_payload = {
-                "schema_version": "4",
+                "schema_version": "5",
                 "decision": "deploy" if growth_pass else "reject",
                 "reason": decision_reason,
+                "decision_signal": "closed_loop" if use_cl_primary else "synthetic",
                 "decision_rule_used": decision_rule_used,
                 "gate_mode": config.gate_mode,
                 "inferiority_tolerance": config.inferiority_tolerance,
@@ -1078,6 +1083,40 @@ def evolve(
             }
             if benchmark_block is not None:
                 decision_payload["benchmark"] = benchmark_block
+            if use_cl_primary:
+                decision_payload["baseline_closed_loop_per_example"] = cached_baseline_cl_per_example
+                decision_payload["evolved_closed_loop_per_example"] = evolved_cl_per_example
+                # Populated only on the abort path (cl_eval_incomplete); empty
+                # here because we reach this block only when no task errored.
+                decision_payload["evolved_closed_loop_errored_tasks"] = []
+                decision_payload["cl_tasks_gained"] = (
+                    int(sum(evolved_cl_per_example)) - int(sum(cached_baseline_cl_per_example))
+                )
+                decision_payload["cl_required_gain"] = max(
+                    1,
+                    math.ceil(
+                        max(0.0, CL_PRIMARY_GROWTH_SLOPE * (growth_pct - CL_PRIMARY_GROWTH_FREE_THRESHOLD))
+                    ),
+                )
+                decision_payload["synthetic_sanity_check"] = {
+                    "tolerance": CL_PRIMARY_SYNTH_TOLERANCE,
+                    "baseline_mean": avg_baseline,
+                    "evolved_mean": avg_evolved,
+                    "passed": (avg_evolved - avg_baseline) >= -CL_PRIMARY_SYNTH_TOLERANCE,
+                }
+                decision_payload["evolved_cl_eval_cost_usd"] = cl_eval_cost_usd
+                decision_payload["band_trigger_score"] = {
+                    "holdout": preflight_holdout_score,
+                    "closed_loop": preflight_cl_score,
+                }
+                decision_payload["validator_agent_model"] = closed_loop_agent_model
+
+            if not use_cl_primary and preflight_band is None:
+                # User passed --no-saturation-check; record why CL-primary
+                # didn't fire even though CL may be configured. Lets downstream
+                # consumers distinguish 'preflight saw no weak_signal' from
+                # 'preflight didn't run.'
+                decision_payload["reason_synthetic"] = "preflight_skipped"
             gate_path = write_gate_decision(output_dir, decision_payload)
             console.print(f"  [dim]Gate decision logged to {gate_path}[/dim]")
 
