@@ -884,6 +884,7 @@ def evolve(
                     failed_path = output_dir / "evolved_FAILED.json"
                     evolved_manifest = manifest.replace_description(tool_name, evolved_description)
                     failed_path.write_text(json.dumps(_manifest_to_dict(evolved_manifest), indent=2) + "\n")
+                    console.print(f"  Saved failed variant to {failed_path}")
                     write_gate_decision(output_dir, {
                         "schema_version": "5",
                         "decision": "aborted",
@@ -926,6 +927,7 @@ def evolve(
                     failed_path = output_dir / "evolved_FAILED.json"
                     evolved_manifest = manifest.replace_description(tool_name, evolved_description)
                     failed_path.write_text(json.dumps(_manifest_to_dict(evolved_manifest), indent=2) + "\n")
+                    console.print(f"  Saved failed variant to {failed_path}")
                     write_gate_decision(output_dir, {
                         "schema_version": "5",
                         "decision": "aborted",
@@ -979,6 +981,10 @@ def evolve(
                 # But still enforce the absolute_char_ceiling — that's an
                 # orthogonal wallpaper-protection backstop that must hold
                 # regardless of which signal we're gating on.
+                # cl_constraint was bound in the earlier `if use_cl_primary:` block;
+                # the assert narrows Optional[ConstraintResult] so growth_constraints
+                # types as list[ConstraintResult], not list[Optional[ConstraintResult]].
+                assert cl_constraint is not None
                 ceiling_constraint = validator._check_absolute_chars(
                     evolved_description, baseline_chars,
                 )
