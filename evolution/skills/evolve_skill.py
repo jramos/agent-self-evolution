@@ -8,6 +8,7 @@ Usage:
 import difflib
 import json
 import logging
+import math
 import random
 import sys
 import time
@@ -41,7 +42,11 @@ from evolution.core.hermes_provider import (
     resolved_lms_dump,
 )
 from evolution.core.quality_gate import (
+    CL_PRIMARY_GROWTH_FREE_THRESHOLD,
+    CL_PRIMARY_GROWTH_SLOPE,
+    CL_PRIMARY_SYNTH_TOLERANCE,
     QUALITY_GATE_PRESETS,
+    _check_cl_primary_gate,
     resolve_proposer_mode,
     run_benchmark_hook,
     write_cost_ceiling_abort,
@@ -61,6 +66,7 @@ from evolution.core.external_importers import build_dataset_from_external
 from evolution.core.stats import paired_bootstrap
 from evolution.core.fitness import LLMJudge, make_skill_fitness_metric
 from evolution.core.constraints import (
+    ConstraintResult,
     ConstraintValidator,
     effective_absolute_char_ceiling,
     resolve_decision_rule,
@@ -1087,6 +1093,146 @@ def evolve(
             )
             improvement = avg_evolved - avg_baseline
 
+            # Decide which deploy-gate path applies. CL-primary fires when
+            # the preflight saw weak_signal AND CL data is present. All
+            # other cases (no preflight, healthy/no_headroom/uniform_failure
+            # bands, missing CL data) use the synthetic-only path.
+            baseline_chars = len(skill["raw"])
+            evolved_chars = len(evolved_full)
+            growth_pct = (evolved_chars - baseline_chars) / max(1, baseline_chars)
+
+            # Hoist run_inputs to a local — referenced from 3 sites (the
+            # two CL-primary abort paths + the main decision_payload).
+            run_inputs = {
+                "seed": config.seed,
+                "iterations": iterations,
+                "optimizer_model": optimizer_model,
+                "reflection_model": config.reflection_model,
+                "eval_model": config.eval_model,
+                "resolved_lms": resolved_lms_dump(
+                    optimizer=optimizer_model,
+                    reflection=config.reflection_model,
+                    eval_=config.eval_model,
+                ),
+                "eval_dataset_size": config.eval_dataset_size,
+                "holdout_ratio": config.holdout_ratio,
+                "quality_gate_preset": quality_gate,
+                "eval_source": eval_source,
+            }
+
+            use_cl_primary = (
+                preflight_band == "weak_signal"
+                and cached_baseline_cl_per_example is not None
+                and len(cached_baseline_cl_per_example) > 0
+                and closed_loop_cache is not None
+            )
+
+            evolved_cl_report = None
+            evolved_cl_per_example: Optional[list[float]] = None
+            evolved_cl_errored_task_ids: list[str] = []
+            cl_eval_cost_before: float = 0.0
+            cl_eval_cost_usd: Optional[float] = None
+            cl_constraint: Optional[ConstraintResult] = None
+
+            if use_cl_primary:
+                console.print(
+                    f"\n[bold]Evaluating evolved skill body on closed-loop suite[/bold] "
+                    "(weak_signal band → CL-primary gate)"
+                )
+                cl_eval_cost_before = COST_LEDGER.summary().get("total_usd", 0.0)
+                try:
+                    # force_run takes the BODY (no YAML frontmatter); the cache
+                    # key was set up with skill["body"] during preflight, so we
+                    # must match that to avoid silently double-spending on the
+                    # evolved eval.
+                    evolved_cl_report = closed_loop_cache.force_run(evolved_body)
+                except Exception as exc:  # ValidatorError or downstream
+                    cl_eval_cost_usd = COST_LEDGER.summary().get("total_usd", 0.0) - cl_eval_cost_before
+                    console.print(
+                        f"[red]✗ Evolved closed-loop eval failed: {exc}[/red] — writing aborted decision"
+                    )
+                    failed_path = output_dir / "evolved_FAILED.md"
+                    failed_path.write_text(evolved_full)
+                    console.print(f"  Saved failed variant to {failed_path}")
+                    write_gate_decision(output_dir, {
+                        "schema_version": "5",
+                        "decision": "aborted",
+                        "reason": "cl_eval_failed",
+                        "decision_signal": "closed_loop",
+                        "cl_eval_exception": str(exc),
+                        "evolved_cl_eval_cost_usd": cl_eval_cost_usd,
+                        "band_trigger_score": {
+                            "holdout": preflight_holdout_score,
+                            "closed_loop": preflight_cl_score,
+                        },
+                        "validator_agent_model": closed_loop_agent_model,
+                        "baseline_chars": baseline_chars,
+                        "evolved_chars": evolved_chars,
+                        "growth_pct": growth_pct,
+                        "knee_point": _knee_point_payload(knee_pick),
+                        "dataset": _dataset_payload(dataset),
+                        "run_inputs": run_inputs,
+                    })
+                    return
+                cl_eval_cost_usd = COST_LEDGER.summary().get("total_usd", 0.0) - cl_eval_cost_before
+
+                # Detect abstained tasks (TaskResult.abstained == True means
+                # the runner errored — see validation/report.py:score_task).
+                # An infrastructure flake on an evolved task is NOT a quality
+                # regression; conflating them would falsely reject good
+                # candidates. Hard-fail with a written diagnostic instead.
+                evolved_cl_errored_task_ids = [
+                    t.task_id for t in evolved_cl_report.evolved.tasks if t.abstained
+                ]
+                evolved_cl_per_example = [
+                    1.0 if t.passed else 0.0 for t in evolved_cl_report.evolved.tasks
+                ]
+                if evolved_cl_errored_task_ids:
+                    console.print(
+                        f"[red]✗ {len(evolved_cl_errored_task_ids)} evolved CL task(s) errored "
+                        f"({', '.join(evolved_cl_errored_task_ids)}) — writing aborted decision[/red]"
+                    )
+                    failed_path = output_dir / "evolved_FAILED.md"
+                    failed_path.write_text(evolved_full)
+                    console.print(f"  Saved failed variant to {failed_path}")
+                    write_gate_decision(output_dir, {
+                        "schema_version": "5",
+                        "decision": "aborted",
+                        "reason": "cl_eval_incomplete",
+                        "decision_signal": "closed_loop",
+                        "evolved_closed_loop_errored_tasks": evolved_cl_errored_task_ids,
+                        "evolved_closed_loop_per_example": evolved_cl_per_example,
+                        "baseline_closed_loop_per_example": cached_baseline_cl_per_example,
+                        "evolved_cl_eval_cost_usd": cl_eval_cost_usd,
+                        "band_trigger_score": {
+                            "holdout": preflight_holdout_score,
+                            "closed_loop": preflight_cl_score,
+                        },
+                        "validator_agent_model": closed_loop_agent_model,
+                        "baseline_chars": baseline_chars,
+                        "evolved_chars": evolved_chars,
+                        "growth_pct": growth_pct,
+                        "knee_point": _knee_point_payload(knee_pick),
+                        "dataset": _dataset_payload(dataset),
+                        "run_inputs": run_inputs,
+                    })
+                    return
+
+                baseline_cl_passes = int(sum(cached_baseline_cl_per_example))
+                evolved_cl_passes = int(sum(evolved_cl_per_example))
+                cl_constraint = _check_cl_primary_gate(
+                    baseline_cl_passes=baseline_cl_passes,
+                    evolved_cl_passes=evolved_cl_passes,
+                    baseline_synth_mean=avg_baseline,
+                    evolved_synth_mean=avg_evolved,
+                    growth_pct=growth_pct,
+                )
+                icon = "✓" if cl_constraint.passed else "✗"
+                color = "green" if cl_constraint.passed else "red"
+                console.print(
+                    f"  [{color}]{icon} cl_primary_gate[/{color}]: {cl_constraint.message}"
+                )
+
             if evaluate_band_on_holdout and knee_pick is not None:
                 console.print(
                     f"\n[bold]Re-evaluating {knee_pick.band_size} band candidate(s) on holdout[/bold] "
@@ -1111,9 +1257,26 @@ def evolve(
                 n_resamples=config.bootstrap_n_resamples,
                 seed=config.seed,
             )
-            growth_constraints = validator.validate_growth_with_quality(
-                evolved_full, skill["raw"], bootstrap,
-            )
+            if use_cl_primary:
+                # CL-primary path: skip the synthetic growth_quality_gate
+                # (it would always reject when synth is saturated and growth > 0).
+                # But still enforce the absolute_char_ceiling — that's an
+                # orthogonal wallpaper-protection backstop that must hold
+                # regardless of which signal we're gating on.
+                # cl_constraint was bound in the earlier `if use_cl_primary:` block;
+                # the assert narrows Optional[ConstraintResult] so growth_constraints
+                # types as list[ConstraintResult], not list[Optional[ConstraintResult]].
+                assert cl_constraint is not None
+                ceiling_constraint = validator._check_absolute_chars(
+                    evolved_full, baseline_chars,
+                )
+                growth_constraints = [cl_constraint, ceiling_constraint]
+            else:
+                # Synthetic-only path (unchanged): growth_quality_gate runs both
+                # the growth curve and the absolute-char ceiling internally.
+                growth_constraints = validator.validate_growth_with_quality(
+                    evolved_full, skill["raw"], bootstrap,
+                )
             growth_pass = True
             for c in growth_constraints:
                 icon = "✓" if c.passed else "✗"
@@ -1146,7 +1309,9 @@ def evolve(
                     evolved_path.unlink(missing_ok=True)
                     baseline_path.unlink(missing_ok=True)
 
-            growth_pct = (len(evolved_full) - len(skill["raw"])) / max(1, len(skill["raw"]))
+            # baseline_chars / evolved_chars / growth_pct are bound earlier
+            # (before the use_cl_primary branch) so the CL-primary path can
+            # use them in its abort payloads. Don't recompute here.
             required_improvement = max(
                 0.0,
                 config.growth_quality_slope * (growth_pct - config.growth_free_threshold),
@@ -1168,11 +1333,11 @@ def evolve(
                 "inferiority_tolerance": config.inferiority_tolerance,
                 "growth_pct": growth_pct,
                 "required_improvement": required_improvement,
-                "baseline_chars": len(skill["raw"]),
-                "evolved_chars": len(evolved_full),
+                "baseline_chars": baseline_chars,
+                "evolved_chars": evolved_chars,
                 "absolute_char_ceiling": config.max_absolute_chars,
                 "effective_absolute_char_ceiling": effective_absolute_char_ceiling(
-                    config.max_absolute_chars, len(skill["raw"]),
+                    config.max_absolute_chars, baseline_chars,
                 ),
                 "growth_free_threshold": config.growth_free_threshold,
                 "fitness_profile": config.fitness_profile,
@@ -1190,22 +1355,7 @@ def evolve(
                 "messages": [c.message for c in growth_constraints if not c.passed],
                 "knee_point": _knee_point_payload(knee_pick),
                 "dataset": _dataset_payload(dataset),
-                "run_inputs": {
-                    "seed": config.seed,
-                    "iterations": iterations,
-                    "optimizer_model": optimizer_model,
-                    "reflection_model": config.reflection_model,
-                    "eval_model": config.eval_model,
-                    "resolved_lms": resolved_lms_dump(
-                        optimizer=optimizer_model,
-                        reflection=config.reflection_model,
-                        eval_=config.eval_model,
-                    ),
-                    "eval_dataset_size": config.eval_dataset_size,
-                    "holdout_ratio": config.holdout_ratio,
-                    "quality_gate_preset": quality_gate,
-                    "eval_source": eval_source,
-                },
+                "run_inputs": run_inputs,
             }
             if benchmark_block is not None:
                 decision_payload["benchmark"] = benchmark_block
