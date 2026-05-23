@@ -726,3 +726,79 @@ def test_absolute_char_ceiling_still_enforced_in_cl_primary_path(
     )
     # The deploy-gate reject path returns the reject reason from the dict.
     assert result["decision"] == "reject"
+
+
+class TestSchemaV5Regression:
+    """V5 must be additive over v4. Old consumers should see all v4 fields
+    plus the new decision_signal field (and the CL-specific fields when
+    use_cl_primary fired). Future schema bumps should add a parallel
+    TestSchemaV{N}Regression class following the same pattern."""
+
+    # V4 fields that MUST persist in v5 output regardless of code path.
+    # Verified against the decision_payload literal in
+    # evolution/tools/evolve_tool.py.
+    V4_REQUIRED_FIELDS = frozenset({
+        "schema_version", "decision", "reason", "decision_rule_used",
+        "gate_mode", "inferiority_tolerance", "growth_pct",
+        "required_improvement", "baseline_chars", "evolved_chars",
+        "absolute_char_ceiling", "effective_absolute_char_ceiling",
+        "growth_free_threshold", "fitness_profile", "proposer_mode",
+        "growth_quality_slope", "baseline_per_example",
+        "evolved_per_example",
+    })
+
+    def test_synthetic_path_writes_all_v4_fields(
+        self, temp_manifest: Path, tmp_path: Path,
+    ):
+        """healthy band → synthetic gate. Every v4 field must still be
+        present alongside the new decision_signal marker."""
+        fake_cache = MagicMock()
+        run_dir = tmp_path / "run"
+
+        with _patch_stack(sat_report=_healthy_report(), fake_cache=fake_cache):
+            _run_evolve(manifest_path=temp_manifest, output_dir=run_dir)
+
+        payload = json.loads((run_dir / "gate_decision.json").read_text())
+
+        missing = self.V4_REQUIRED_FIELDS - payload.keys()
+        assert not missing, f"v4 fields missing in v5 synthetic payload: {sorted(missing)}"
+        assert payload["schema_version"] == "5"
+        assert payload["decision_signal"] == "synthetic"
+
+    def test_cl_primary_path_writes_all_v4_fields_plus_cl_fields(
+        self, temp_manifest: Path, tmp_path: Path,
+    ):
+        """weak_signal + +2 CL win → CL-primary gate. Every v4 field must
+        still be present AND every new v5 CL-specific field must be
+        populated."""
+        cl_fields = frozenset({
+            "decision_signal", "baseline_closed_loop_per_example",
+            "evolved_closed_loop_per_example",
+            "evolved_closed_loop_errored_tasks", "cl_tasks_gained",
+            "cl_required_gain", "synthetic_sanity_check",
+            "evolved_cl_eval_cost_usd", "band_trigger_score",
+            "validator_agent_model",
+        })
+        fake_cache = MagicMock()
+        # 5/7 baseline → 7/7 evolved with _LOW_GROWTH_EVOLVED keeps
+        # required_gain=1 so the +2 win clears the gate and the deploy
+        # branch writes every CL-specific field.
+        fake_cache.force_run.return_value = _fake_validation_report(
+            baseline_pass=[True, True, True, True, True, False, False],
+            evolved_pass=[True, True, True, True, True, True, True],
+        )
+        run_dir = tmp_path / "run"
+
+        with _patch_stack(
+            sat_report=_weak_signal_report(),
+            fake_cache=fake_cache,
+            evolved_description=_LOW_GROWTH_EVOLVED,
+        ):
+            _run_evolve(manifest_path=temp_manifest, output_dir=run_dir)
+
+        payload = json.loads((run_dir / "gate_decision.json").read_text())
+
+        missing = (self.V4_REQUIRED_FIELDS | cl_fields) - payload.keys()
+        assert not missing, f"v5 fields missing in CL-primary payload: {sorted(missing)}"
+        assert payload["schema_version"] == "5"
+        assert payload["decision_signal"] == "closed_loop"
