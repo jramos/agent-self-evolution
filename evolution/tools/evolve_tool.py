@@ -669,7 +669,11 @@ def evolve(
                 if closed_loop_in_valset:
                     valset = valset + behavioral_examples
 
-            cached_baseline_holdout_per_example = None
+            cached_baseline_holdout_per_example: Optional[list[float]] = None
+            preflight_band: Optional[str] = None
+            cached_baseline_cl_per_example: Optional[list[float]] = None
+            preflight_holdout_score: Optional[float] = None
+            preflight_cl_score: Optional[float] = None
             if not skip_saturation_check:
                 holdout_examples_for_preflight = _build_examples(
                     dataset.holdout, for_module=True
@@ -703,6 +707,14 @@ def evolve(
                 else:
                     render_saturation_panel(sat_report, console=console)
                 cached_baseline_holdout_per_example = sat_report.holdout_per_example
+                # Preserve preflight outputs for the deploy gate's CL-primary
+                # path. None when --no-saturation-check was passed (sat_report
+                # itself doesn't exist in that case; handled by initialization
+                # to None above the preflight call).
+                preflight_band: Optional[str] = sat_report.band
+                cached_baseline_cl_per_example: Optional[list[float]] = sat_report.closed_loop_per_example
+                preflight_holdout_score: Optional[float] = sat_report.holdout_score
+                preflight_cl_score: Optional[float] = sat_report.closed_loop_score
 
             console.print(f"\n[bold cyan]Running GEPA optimization (max_full_evals={iterations})[/bold cyan]\n")
             start_time = time.time()
