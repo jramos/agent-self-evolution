@@ -1364,6 +1364,12 @@ def evolve(
 
             if not growth_pass:
                 console.print("[red]✗ Evolved skill REJECTED by quality gate — not deploying[/red]")
+                if use_cl_primary:
+                    console.print(
+                        f"[yellow]⚠ Evolution rejected: "
+                        f"CL gain {decision_payload['cl_tasks_gained']} < "
+                        f"required {decision_payload['cl_required_gain']}[/yellow]"
+                    )
                 failed_path = output_dir / "evolved_FAILED.md"
                 failed_path.write_text(evolved_full)
                 console.print(f"  Saved failed variant to {failed_path}")
@@ -1386,13 +1392,28 @@ def evolve(
             table.add_column("Evolved", justify="right")
             table.add_column("Change", justify="right")
 
-            change_color = "green" if improvement > 0 else "red"
+            # Under CL-primary, the gate verdict — not the synthetic delta —
+            # decides the row color; the synthetic delta is informational.
+            row_color = (
+                ("green" if growth_pass else "yellow")
+                if use_cl_primary
+                else ("green" if improvement > 0 else "red")
+            )
             table.add_row(
                 "Holdout Score",
                 f"{avg_baseline:.3f}",
                 f"{avg_evolved:.3f}",
-                f"[{change_color}]{improvement:+.3f}[/{change_color}]",
+                f"[{row_color}]{improvement:+.3f}[/{row_color}]",
             )
+            if use_cl_primary:
+                baseline_cl = int(sum(cached_baseline_cl_per_example))
+                evolved_cl = int(sum(evolved_cl_per_example))
+                table.add_row(
+                    "Closed-loop (behavioral)",
+                    f"{baseline_cl} tasks",
+                    f"{evolved_cl} tasks",
+                    f"[{row_color}]{evolved_cl - baseline_cl:+d} tasks[/{row_color}]",
+                )
             table.add_row(
                 "Skill Size",
                 f"{len(skill['body']):,} chars",
@@ -1444,7 +1465,13 @@ def evolve(
                     if applied:
                         console.print(f"  --apply: wrote evolved skill to {skill_path}")
 
-            if improvement > 0:
+            if use_cl_primary:
+                console.print(
+                    f"\n[bold green]✓ Evolution improved skill "
+                    f"(CL gained +{decision_payload['cl_tasks_gained']} tasks)[/bold green]"
+                )
+                console.print(f"  Review the diff: diff {output_dir}/baseline_skill.md {output_dir}/evolved_skill.md")
+            elif improvement > 0:
                 console.print(f"\n[bold green]✓ Evolution improved skill by {improvement:+.3f} ({improvement/max(0.001, avg_baseline)*100:+.1f}%)[/bold green]")
                 console.print(f"  Review the diff: diff {output_dir}/baseline_skill.md {output_dir}/evolved_skill.md")
             else:

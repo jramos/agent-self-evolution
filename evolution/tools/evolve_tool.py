@@ -1099,6 +1099,12 @@ def evolve(
 
             if not growth_pass:
                 console.print("[red]✗ Evolved description REJECTED by quality gate — not deploying[/red]")
+                if use_cl_primary:
+                    console.print(
+                        f"[yellow]⚠ Evolution rejected: "
+                        f"CL gain {decision_payload['cl_tasks_gained']} < "
+                        f"required {decision_payload['cl_required_gain']}[/yellow]"
+                    )
                 evolved_manifest = manifest.replace_description(tool_name, evolved_description)
                 failed_path = output_dir / "evolved_FAILED.json"
                 failed_path.write_text(json.dumps(_manifest_to_dict(evolved_manifest), indent=2) + "\n")
@@ -1121,13 +1127,28 @@ def evolve(
             table.add_column("Baseline", justify="right")
             table.add_column("Evolved", justify="right")
             table.add_column("Change", justify="right")
-            change_color = "green" if improvement > 0 else "red"
+            # Under CL-primary, the gate verdict — not the synthetic delta —
+            # decides the row color; the synthetic delta is informational.
+            row_color = (
+                ("green" if growth_pass else "yellow")
+                if use_cl_primary
+                else ("green" if improvement > 0 else "red")
+            )
             table.add_row(
                 "Holdout Score",
                 f"{avg_baseline:.3f}",
                 f"{avg_evolved:.3f}",
-                f"[{change_color}]{improvement:+.3f}[/{change_color}]",
+                f"[{row_color}]{improvement:+.3f}[/{row_color}]",
             )
+            if use_cl_primary:
+                baseline_cl = int(sum(cached_baseline_cl_per_example))
+                evolved_cl = int(sum(evolved_cl_per_example))
+                table.add_row(
+                    "Closed-loop (behavioral)",
+                    f"{baseline_cl} tasks",
+                    f"{evolved_cl} tasks",
+                    f"[{row_color}]{evolved_cl - baseline_cl:+d} tasks[/{row_color}]",
+                )
             table.add_row(
                 "Description Size",
                 f"{baseline_chars:,} chars",
@@ -1188,7 +1209,12 @@ def evolve(
                 )
                 console.print(f"  --apply: wrote evolved description to {manifest_path}")
 
-            if improvement > 0:
+            if use_cl_primary:
+                console.print(
+                    f"\n[bold green]✓ Evolution improved tool description "
+                    f"(CL gained +{decision_payload['cl_tasks_gained']} tasks)[/bold green]"
+                )
+            elif improvement > 0:
                 console.print(
                     f"\n[bold green]✓ Evolution improved tool description by "
                     f"{improvement:+.3f} ({improvement/max(0.001, avg_baseline)*100:+.1f}%)[/bold green]"
