@@ -1051,6 +1051,8 @@ def evolve(
                         f"fallback={knee_pick.fallback})"
                     )
                 else:
+                    # val-best no longer walks the band on static failure;
+                    # --knee-point-strategy smallest preserves that behavior.
                     best_text = details.candidates[details.best_idx].skill_text
                     optimized_module = SkillModule(best_text)
                     knee_payload = _deferred_knee_point_payload(
@@ -1652,19 +1654,19 @@ def evolve(
     "--knee-point-epsilon",
     default=None,
     type=float,
-    help="Advanced: ε tolerance for knee-point Pareto selection. Default = "
-    "1/n_val (one valset example's worth of disagreement). Override only when "
-    "you have a calibrated reason — random tightening narrows the band and "
-    "biases selection back toward the GEPA default.",
+    help="Advanced: ε tolerance for the knee-point band. Only used by "
+    "--knee-point-strategy=smallest; the default val-best path defers to "
+    "GEPA's val-argmax and ignores ε. Default = 1/n_val (one valset "
+    "example's worth of disagreement).",
 )
 @click.option(
     "--knee-point-strategy",
     default="val-best",
     type=click.Choice(["val-best", "smallest"]),
-    help="Within the ε-band, which candidate to pick. val-best (default): "
-    "highest val score wins, smallest body as tiebreak. smallest: greedy "
-    "parsimony — picks the smallest body regardless of val cost; "
-    "available for users explicitly chasing compression.",
+    help="How to pick the deployed candidate from GEPA's output. val-best "
+    "(default): defer to GEPA's val-argmax (best_idx) — does not walk an "
+    "ε-band. smallest: walk the ε-band and pick the smallest body, "
+    "accepting val cost for compression.",
 )
 @click.option(
     "--bap-safety-margin",

@@ -69,7 +69,6 @@ from evolution.core.quality_gate import (
 )
 from evolution.core.run_inputs import build_run_inputs
 from evolution.core.stats import paired_bootstrap
-from evolution.skills.knee_point import CandidatePick, select_knee_point
 from evolution.tools.session_mining import (
     HermesToolImporter,
     build_tool_dataset_from_sessions,
@@ -184,24 +183,6 @@ def _compute_win_loss(
         "n_ties": sum(1 for d in deltas if d == 0),
         "worst_regression": min(deltas) if deltas else 0.0,
         "worst_improvement": max(deltas) if deltas else 0.0,
-    }
-
-
-def _knee_point_payload(knee_pick: Optional[CandidatePick]) -> dict[str, Any]:
-    if knee_pick is None:
-        return {"applied": False, "reason": "no_detailed_results"}
-    return {
-        "applied": True,
-        "fallback": knee_pick.fallback,
-        "epsilon": knee_pick.epsilon,
-        "band_size": knee_pick.band_size,
-        "picked_idx": knee_pick.picked_idx,
-        "picked_val_score": knee_pick.val_score,
-        "picked_val_rank_in_band": knee_pick.val_rank_in_band,
-        "picked_body_chars": knee_pick.body_chars,
-        "gepa_default_idx": knee_pick.gepa_default_idx,
-        "gepa_default_body_chars": knee_pick.gepa_default_body_chars,
-        "band_roster": knee_pick.band_roster,
     }
 
 
