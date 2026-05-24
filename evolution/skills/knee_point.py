@@ -40,11 +40,12 @@ def _estimate_val_noise(
     valset scoring rather than the geometric 1/n_val floor, which sits
     an order of magnitude below the actual paired noise at typical
     n_val (8–50).
-    """
-    n_val = len(val_subscores[best_idx])
 
+    Single-candidate fallback: with no competitor to pair against, returns
+    ``0.5 / sqrt(n_val)`` — the worst-case binomial SE at p=0.5.
+    """
     if len(val_subscores) < 2:
-        return 0.5 / math.sqrt(n_val)
+        return 0.5 / math.sqrt(len(val_subscores[best_idx]))
 
     best = val_subscores[best_idx]
     diffs: list[float] = []
