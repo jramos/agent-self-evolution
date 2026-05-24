@@ -12,7 +12,7 @@ import os
 import subprocess
 import time
 from pathlib import Path
-from typing import Any, Optional, Sequence
+from typing import Any, Optional
 
 from rich.console import Console
 
@@ -109,17 +109,11 @@ def append_cl_decision_fields(
     preflight_holdout_score: Optional[float],
     preflight_cl_score: Optional[float],
     closed_loop_agent_model: str,
-    evolved_cl_errored_task_ids: Sequence = (),
 ) -> None:
-    """In-place mutation: adds the 9 closed-loop fields to ``decision_payload``.
-
-    ``evolved_cl_errored_task_ids`` defaults to ``()`` so the deploy-path
-    caller (no errors by construction) can omit the kwarg; future abort-path
-    callers can pass the populated list without a separate code path.
-    """
+    """Append the closed-loop deploy-gate decision fields to ``decision_payload``."""
     decision_payload["baseline_closed_loop_per_example"] = cached_baseline_cl_per_example
     decision_payload["evolved_closed_loop_per_example"] = evolved_cl_per_example
-    decision_payload["evolved_closed_loop_errored_tasks"] = list(evolved_cl_errored_task_ids)
+    decision_payload["evolved_closed_loop_errored_tasks"] = []
     decision_payload["cl_tasks_gained"] = (
         int(sum(evolved_cl_per_example)) - int(sum(cached_baseline_cl_per_example))
     )

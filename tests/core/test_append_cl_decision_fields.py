@@ -53,7 +53,7 @@ class TestAppendClDecisionFields:
         assert sanity["evolved_mean"] == 0.65
         assert sanity["passed"] is True
 
-    def test_errored_task_ids_defaults_to_empty_list(self):
+    def test_errored_tasks_is_empty_list(self):
         payload: dict = {}
         _call(payload)
         assert payload["evolved_closed_loop_errored_tasks"] == []
