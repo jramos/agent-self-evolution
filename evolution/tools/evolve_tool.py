@@ -70,6 +70,7 @@ from evolution.core.quality_gate import (
     write_cost_ceiling_abort,
     write_gate_decision,
 )
+from evolution.core.run_inputs import build_run_inputs
 from evolution.core.stats import paired_bootstrap
 from evolution.skills.knee_point import CandidatePick, select_knee_point
 from evolution.tools.session_mining import (
@@ -791,23 +792,15 @@ def evolve(
                 if not c.passed:
                     static_pass = False
 
-            run_inputs = {
-                "seed": config.seed,
-                "iterations": iterations,
-                "optimizer_model": optimizer_model,
-                "reflection_model": config.reflection_model,
-                "eval_model": config.eval_model,
-                "resolved_lms": resolved_lms_dump(
-                    optimizer=optimizer_model,
-                    reflection=config.reflection_model,
-                    eval_=config.eval_model,
-                ),
-                "eval_dataset_size": config.eval_dataset_size,
-                "holdout_ratio": config.holdout_ratio,
-                "quality_gate_preset": quality_gate,
-                "fitness_profile": fitness_profile,
-                "enable_confusable_bucket": config.enable_confusable_bucket,
-            }
+            run_inputs = build_run_inputs(
+                config=config,
+                iterations=iterations,
+                optimizer_model=optimizer_model,
+                quality_gate_preset=quality_gate,
+                eval_source=eval_source,
+                fitness_profile=fitness_profile,
+                enable_confusable_bucket=config.enable_confusable_bucket,
+            )
             tool_payload_fields = {
                 "artifact_type": "tool_description",
                 "target_tool": tool_name,
@@ -1226,23 +1219,15 @@ def evolve(
         except CostCeilingExceeded as exc:
             # Abort may fire before `run_inputs` is built in the deploy path;
             # fall back to a minimal equivalent so gate_decision.json is still useful.
-            run_inputs_for_abort = locals().get("run_inputs") or {
-                "seed": config.seed,
-                "iterations": iterations,
-                "optimizer_model": optimizer_model,
-                "reflection_model": config.reflection_model,
-                "eval_model": config.eval_model,
-                "resolved_lms": resolved_lms_dump(
-                    optimizer=optimizer_model,
-                    reflection=config.reflection_model,
-                    eval_=config.eval_model,
-                ),
-                "eval_dataset_size": config.eval_dataset_size,
-                "holdout_ratio": config.holdout_ratio,
-                "quality_gate_preset": quality_gate,
-                "fitness_profile": fitness_profile,
-                "eval_source": eval_source,
-            }
+            run_inputs_for_abort = locals().get("run_inputs") or build_run_inputs(
+                config=config,
+                iterations=iterations,
+                optimizer_model=optimizer_model,
+                quality_gate_preset=quality_gate,
+                eval_source=eval_source,
+                fitness_profile=fitness_profile,
+                enable_confusable_bucket=config.enable_confusable_bucket,
+            )
             write_cost_ceiling_abort(
                 exc,
                 output_dir=output_dir,

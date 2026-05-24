@@ -52,6 +52,7 @@ from evolution.core.quality_gate import (
     write_cost_ceiling_abort,
     write_gate_decision,
 )
+from evolution.core.run_inputs import build_run_inputs
 from evolution.core.skill_sources import discover_skill_sources
 
 # Without this, the BudgetAwareProposer + LMTimingCallback logs stay
@@ -1053,22 +1054,13 @@ def evolve(
                     "messages": [c.message for c in static_constraints if not c.passed],
                     "knee_point": _knee_point_payload(knee_pick),
                     "dataset": _dataset_payload(dataset),
-                    "run_inputs": {
-                        "seed": config.seed,
-                        "iterations": iterations,
-                        "optimizer_model": optimizer_model,
-                        "reflection_model": config.reflection_model,
-                        "eval_model": config.eval_model,
-                        "resolved_lms": resolved_lms_dump(
-                            optimizer=optimizer_model,
-                            reflection=config.reflection_model,
-                            eval_=config.eval_model,
-                        ),
-                        "eval_dataset_size": config.eval_dataset_size,
-                        "holdout_ratio": config.holdout_ratio,
-                        "quality_gate_preset": quality_gate,
-                        "eval_source": eval_source,
-                    },
+                    "run_inputs": build_run_inputs(
+                        config=config,
+                        iterations=iterations,
+                        optimizer_model=optimizer_model,
+                        quality_gate_preset=quality_gate,
+                        eval_source=eval_source,
+                    ),
                 })
                 console.print(f"  Saved failed variant to {failed_path}")
                 return
@@ -1104,22 +1096,13 @@ def evolve(
 
             # Hoist run_inputs to a local — referenced from 3 sites (the
             # two CL-primary abort paths + the main decision_payload).
-            run_inputs = {
-                "seed": config.seed,
-                "iterations": iterations,
-                "optimizer_model": optimizer_model,
-                "reflection_model": config.reflection_model,
-                "eval_model": config.eval_model,
-                "resolved_lms": resolved_lms_dump(
-                    optimizer=optimizer_model,
-                    reflection=config.reflection_model,
-                    eval_=config.eval_model,
-                ),
-                "eval_dataset_size": config.eval_dataset_size,
-                "holdout_ratio": config.holdout_ratio,
-                "quality_gate_preset": quality_gate,
-                "eval_source": eval_source,
-            }
+            run_inputs = build_run_inputs(
+                config=config,
+                iterations=iterations,
+                optimizer_model=optimizer_model,
+                quality_gate_preset=quality_gate,
+                eval_source=eval_source,
+            )
 
             use_cl_primary = (
                 preflight_band == "weak_signal"
@@ -1488,22 +1471,13 @@ def evolve(
             write_cost_ceiling_abort(
                 exc,
                 output_dir=output_dir,
-                run_inputs={
-                    "seed": config.seed,
-                    "iterations": iterations,
-                    "optimizer_model": optimizer_model,
-                    "reflection_model": config.reflection_model,
-                    "eval_model": config.eval_model,
-                    "resolved_lms": resolved_lms_dump(
-                        optimizer=optimizer_model,
-                        reflection=config.reflection_model,
-                        eval_=config.eval_model,
-                    ),
-                    "eval_dataset_size": config.eval_dataset_size,
-                    "holdout_ratio": config.holdout_ratio,
-                    "quality_gate_preset": quality_gate,
-                    "eval_source": eval_source,
-                },
+                run_inputs=build_run_inputs(
+                    config=config,
+                    iterations=iterations,
+                    optimizer_model=optimizer_model,
+                    quality_gate_preset=quality_gate,
+                    eval_source=eval_source,
+                ),
                 schema_version="5",
             )
             return
