@@ -803,6 +803,7 @@ def evolve(
                 optimizer_model=optimizer_model,
                 quality_gate_preset=quality_gate,
                 eval_source=eval_source,
+                gepa_acceptance=config.gepa_acceptance,
                 fitness_profile=fitness_profile,
                 enable_confusable_bucket=config.enable_confusable_bucket,
             )
@@ -1242,6 +1243,7 @@ def evolve(
                 optimizer_model=optimizer_model,
                 quality_gate_preset=quality_gate,
                 eval_source=eval_source,
+                gepa_acceptance=config.gepa_acceptance,
                 fitness_profile=fitness_profile,
                 enable_confusable_bucket=config.enable_confusable_bucket,
             )

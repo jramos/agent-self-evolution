@@ -1108,6 +1108,7 @@ def evolve(
                         optimizer_model=optimizer_model,
                         quality_gate_preset=quality_gate,
                         eval_source=eval_source,
+                        gepa_acceptance=config.gepa_acceptance,
                     ),
                 })
                 console.print(f"  Saved failed variant to {failed_path}")
@@ -1148,6 +1149,7 @@ def evolve(
                 optimizer_model=optimizer_model,
                 quality_gate_preset=quality_gate,
                 eval_source=eval_source,
+                gepa_acceptance=config.gepa_acceptance,
             )
 
             use_cl_primary = (
@@ -1538,6 +1540,7 @@ def evolve(
                     optimizer_model=optimizer_model,
                     quality_gate_preset=quality_gate,
                     eval_source=eval_source,
+                    gepa_acceptance=config.gepa_acceptance,
                 ),
                 schema_version="5",
             )
