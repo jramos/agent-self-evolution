@@ -39,9 +39,10 @@ class EvolutionConfig:
 
     # GEPA acceptance criterion. "improvement_or_equal" (default) accepts
     # plateau-equal candidates so noisy LM-judge ties don't reject "true
-    # zero-difference" mutations ~50% of the time; "strict" preserves the
-    # gepa<0.1.2 implicit behavior. Forwarded as the literal kwarg expected
-    # by gepa.optimize via dspy.GEPA's gepa_kwargs passthrough.
+    # zero-difference" mutations ~50% of the time; "strict_improvement"
+    # preserves the gepa<0.1.2 implicit behavior. Forwarded as the literal
+    # kwarg expected by gepa.optimize via dspy.GEPA's gepa_kwargs passthrough
+    # (valid gepa values: "strict_improvement", "improvement_or_equal").
     gepa_acceptance: str = "improvement_or_equal"
 
     # Per-role model overrides. When set, treated as explicit LiteLLM model

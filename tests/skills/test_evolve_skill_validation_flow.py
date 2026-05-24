@@ -954,14 +954,14 @@ class TestGepaAcceptanceFlag:
             f"got {captured['gepa_kwargs']!r}. CLI output: {result.output}"
         )
 
-    def test_gepa_acceptance_strict_passes_strict(self, skill_dir):
+    def test_gepa_acceptance_strict_passes_strict_improvement(self, skill_dir):
         captured, result = self._run_with_capture(
-            skill_dir, extra_cli_args=["--gepa-acceptance", "strict"],
+            skill_dir, extra_cli_args=["--gepa-acceptance", "strict-improvement"],
         )
         assert "gepa_kwargs" in captured, (
             f"dspy.GEPA was never constructed; CLI output: {result.output}"
         )
-        assert captured["gepa_kwargs"].get("acceptance_criterion") == "strict", (
-            f"Expected acceptance_criterion=strict; "
+        assert captured["gepa_kwargs"].get("acceptance_criterion") == "strict_improvement", (
+            f"Expected acceptance_criterion=strict_improvement; "
             f"got {captured['gepa_kwargs']!r}. CLI output: {result.output}"
         )

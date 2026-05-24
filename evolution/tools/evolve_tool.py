@@ -1485,12 +1485,12 @@ def evolve(
     "--gepa-acceptance",
     "gepa_acceptance",
     default="improvement-or-equal",
-    type=click.Choice(["strict", "improvement-or-equal"]),
-    help="GEPA acceptance criterion. 'strict': only accept candidates with "
-         "strictly better minibatch score (legacy gepa<0.1.2 default). "
-         "'improvement-or-equal' (default): allow plateau-equal candidates "
-         "for more lateral exploration — the literature-recommended fix for "
-         "noisy LM-judge fitness where strict acceptance rejects "
+    type=click.Choice(["strict-improvement", "improvement-or-equal"]),
+    help="GEPA acceptance criterion. 'strict-improvement': only accept "
+         "candidates with strictly better minibatch score (legacy gepa<0.1.2 "
+         "default). 'improvement-or-equal' (default): allow plateau-equal "
+         "candidates for more lateral exploration — the literature-recommended "
+         "fix for noisy LM-judge fitness where strict acceptance rejects "
          "~50% of true-equal mutations.",
 )
 @click.option(

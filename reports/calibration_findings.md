@@ -93,7 +93,7 @@ Full campaign artifacts — runbook, analysis scripts, `study_*_results.json`, a
 The framework now defaults `acceptance_criterion` to `improvement_or_equal`
 for the underlying `gepa.optimize` call, replacing the implicit strict
 behavior baked into gepa <0.1.2. Flag: `--gepa-acceptance
-{strict,improvement-or-equal}` on `evolve_skill` and `evolve_tool`.
+{strict-improvement,improvement-or-equal}` on `evolve_skill` and `evolve_tool`.
 
 Why: strict-elitist acceptance under noisy LM-judge fitness rejects
 "true zero-difference" candidates roughly half the time, narrowing

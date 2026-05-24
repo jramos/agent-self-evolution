@@ -53,7 +53,7 @@ class TestBuildRunInputs:
             optimizer_model="openai/gpt-4.1",
             quality_gate_preset="default",
             eval_source="synthetic",
-            gepa_acceptance="strict",
+            gepa_acceptance="strict_improvement",
             fitness_profile="balanced",
             enable_confusable_bucket=True,
         )
@@ -72,7 +72,7 @@ class TestBuildRunInputs:
             "fitness_profile",
             "enable_confusable_bucket",
         }
-        assert result["gepa_acceptance"] == "strict"
+        assert result["gepa_acceptance"] == "strict_improvement"
         assert result["fitness_profile"] == "balanced"
         assert result["enable_confusable_bucket"] is True
 
