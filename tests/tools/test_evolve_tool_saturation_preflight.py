@@ -249,7 +249,7 @@ class TestSaturationPreflightCLI:
         module should NOT be re-scored on the holdout after GEPA finishes.
         This is the 'net cost ~zero' contract."""
         from evolution.core.saturation_check import SaturationReport
-        from evolution.skills.knee_point import CandidatePick
+        from types import SimpleNamespace
         from unittest.mock import MagicMock
 
         # Healthy report so preflight passes without prompting; preflight
@@ -258,14 +258,16 @@ class TestSaturationPreflightCLI:
             band="healthy", holdout_score=0.6, holdout_n=10,
             holdout_per_example=[0.6] * 10, suggestions=[], thresholds={},
         )
-        # Fake knee-point result so execution reaches the holdout site.
-        fake_module = MagicMock()
-        knee_pick = CandidatePick(
-            module=fake_module, skill_text="evolved desc", body_chars=12,
-            val_score=0.8, val_rank_in_band=1, band_size=1, epsilon=0.1,
-            fallback="knee", picked_idx=0, gepa_default_idx=0,
-            gepa_default_body_chars=12, band_roster=[],
+        # Shape the fake GEPA's compile() output so the val-best path's
+        # details.val_aggregate_scores[best_idx] resolves to a real float.
+        gepa_mock = MagicMock()
+        fake_optimized = MagicMock()
+        fake_optimized.detailed_results = SimpleNamespace(
+            candidates=[MagicMock()],
+            val_aggregate_scores=[1.0],
+            best_idx=0,
         )
+        gepa_mock.return_value.compile.return_value = fake_optimized
         fake_builder = MagicMock()
         fake_builder.generate_tool_selection.return_value = _fake_tool_examples()
         with patch(
@@ -274,9 +276,7 @@ class TestSaturationPreflightCLI:
             "evolution.tools.evolve_tool.saturation_preflight", return_value=healthy
         ), patch(
             "evolution.tools.evolve_tool._preflight_lm_credentials"
-        ), patch("evolution.tools.evolve_tool.dspy.GEPA"), patch(
-            "evolution.tools.evolve_tool.select_knee_point", return_value=knee_pick
-        ), patch(
+        ), patch("evolution.tools.evolve_tool.dspy.GEPA", gepa_mock), patch(
             "evolution.tools.evolve_tool._candidate_description", return_value="evolved desc"
         ), patch(
             "evolution.tools.evolve_tool._holdout_evaluate_with_metric"
