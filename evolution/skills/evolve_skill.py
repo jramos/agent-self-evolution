@@ -1094,8 +1094,6 @@ def evolve(
             evolved_chars = len(evolved_full)
             growth_pct = (evolved_chars - baseline_chars) / max(1, baseline_chars)
 
-            # Hoist run_inputs to a local — referenced from 3 sites (the
-            # two CL-primary abort paths + the main decision_payload).
             run_inputs = build_run_inputs(
                 config=config,
                 iterations=iterations,

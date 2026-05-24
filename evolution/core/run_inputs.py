@@ -2,10 +2,6 @@
 
 The block records every input that produced a given run so a third party
 holding only the gate_decision.json artifact can reproduce the result.
-Centralizing construction here keeps the skill and tool sides from
-drifting — the cost-ceiling fallback in `evolve_tool` historically built
-the block by hand and dropped `enable_confusable_bucket`, breaking the
-deploy-gate schema contract.
 """
 
 from __future__ import annotations

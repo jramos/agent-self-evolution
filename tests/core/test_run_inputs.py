@@ -1,13 +1,4 @@
-"""Unit tests for `build_run_inputs`.
-
-The helper centralizes the construction of the `run_inputs` block written
-into every gate_decision.json. Both `evolve_skill` and `evolve_tool` build
-the same nine-key core; the tool side adds two extra keys
-(`fitness_profile`, `enable_confusable_bucket`). Lock the shape so future
-refactors can't silently drop a key — the cost-ceiling fallback in
-`evolve_tool` historically dropped `enable_confusable_bucket`, breaking
-the deploy-gate contract asserted by `TestGateDecisionSchemaOnDeploy`.
-"""
+"""Unit tests for `build_run_inputs`."""
 
 from __future__ import annotations
 
@@ -28,7 +19,7 @@ def _fake_config() -> EvolutionConfig:
 
 
 class TestBuildRunInputs:
-    def test_skill_side_has_nine_keys(self):
+    def test_skill_side_shape(self):
         config = _fake_config()
         result = build_run_inputs(
             config=config,
@@ -49,7 +40,6 @@ class TestBuildRunInputs:
             "quality_gate_preset",
             "eval_source",
         }
-        assert len(result) == 10
 
     def test_tool_side_adds_fitness_profile_and_confusable_bucket(self):
         config = _fake_config()
@@ -77,7 +67,6 @@ class TestBuildRunInputs:
             "fitness_profile",
             "enable_confusable_bucket",
         }
-        assert len(result) == 12
         assert result["fitness_profile"] == "balanced"
         assert result["enable_confusable_bucket"] is True
 
@@ -98,10 +87,9 @@ class TestBuildRunInputs:
         assert result["resolved_lms"] == expected
 
     def test_enable_confusable_bucket_round_trips_when_passed(self):
-        # Regression: the cost-ceiling fallback in evolve_tool historically
-        # built run_inputs without `enable_confusable_bucket`, which broke
-        # `TestGateDecisionSchemaOnDeploy::test_gate_decision_schema_on_deploy`
-        # whenever the cost ceiling tripped on a deploy path.
+        # Helper round-trip only. Call-site coverage that the deploy-gate
+        # paths actually pass this kwarg lives in
+        # `TestGateDecisionSchemaOnDeploy::test_gate_decision_schema_on_deploy`.
         config = _fake_config()
         config.enable_confusable_bucket = True
         result = build_run_inputs(
