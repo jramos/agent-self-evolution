@@ -289,7 +289,16 @@ class TestPRAutomationWiring:
         run_dir = tmp_path / "run"
         self._run(temp_manifest, run_dir, create_pr_flag=False)
         payload = json.loads((run_dir / "gate_decision.json").read_text())
-        assert payload["pr_created"]["status"] == "disabled"
+        # All 5 fields present even when disabled — keeps downstream
+        # consumers free to use payload["pr_created"]["url"] without
+        # special-casing the absence of the key.
+        assert payload["pr_created"] == {
+            "status": "disabled",
+            "reason": None,
+            "branch": None,
+            "commit_sha": None,
+            "url": None,
+        }
         assert payload["run_inputs"]["create_pr"] is False
 
     def test_pr_created_block_records_skip_when_create_pr_true_and_no_repo(

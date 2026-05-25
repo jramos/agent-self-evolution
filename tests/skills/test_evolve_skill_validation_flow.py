@@ -1038,7 +1038,16 @@ class TestPRAutomationWiring:
         result = self._run(skill_dir, extra_cli_args=[], monkeypatch=monkeypatch)
         assert result.exit_code == 0, result.output
         payload = self._read_latest_gate_decision(skill_dir.parent)
-        assert payload["pr_created"]["status"] == "disabled"
+        # All 5 fields present even when disabled — keeps downstream
+        # consumers free to use payload["pr_created"]["url"] without
+        # special-casing the absence of the key.
+        assert payload["pr_created"] == {
+            "status": "disabled",
+            "reason": None,
+            "branch": None,
+            "commit_sha": None,
+            "url": None,
+        }
         assert payload["run_inputs"]["create_pr"] is False
 
     def test_pr_created_block_records_skip_when_create_pr_true_and_no_repo(

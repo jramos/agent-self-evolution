@@ -1115,7 +1115,13 @@ def evolve(
             # outcome lands in the same single-write block — calibration
             # scripts grepping pr_created don't have to special-case a
             # re-write or missing key.
-            pr_created_block: dict[str, Any] = {"status": "disabled"}
+            pr_created_block: dict[str, Any] = {
+                "status": "disabled",
+                "reason": None,
+                "branch": None,
+                "commit_sha": None,
+                "url": None,
+            }
             if growth_pass and create_pr_flag:
                 evolved_manifest_for_pr = manifest.replace_description(
                     tool_name, evolved_description,
