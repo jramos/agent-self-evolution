@@ -65,13 +65,13 @@ def _run_git(
     args: list[str],
     *,
     cwd: Path,
-) -> tuple[bool, subprocess.CompletedProcess | Exception]:
-    """Run a git command. Returns ``(ok, completed_or_exception)``.
-
-    ``ok`` is True only for returncode==0. Subprocess-raised exceptions
-    (timeout, FileNotFoundError) are returned as the second element so the
-    orchestrator can format their reason consistently.
+) -> tuple[bool, str | subprocess.CompletedProcess]:
+    """Run a git command. Returns ``(True, completed)`` on success
+    (returncode==0), or ``(False, formatted_reason)`` on any failure mode
+    (timeout, missing git binary, non-zero exit). Centralizing the reason
+    formatting keeps every callsite to a one-line ``return PRResult(... reason=res)``.
     """
+    cmd_name = args[0] if args else "git"
     try:
         result = subprocess.run(
             ["git", *args],
@@ -80,19 +80,18 @@ def _run_git(
             text=True,
             timeout=_GIT_TIMEOUT_SECONDS,
         )
-    except subprocess.TimeoutExpired as exc:
-        return False, exc
-    except FileNotFoundError as exc:
-        return False, exc
-    return result.returncode == 0, result
+    except subprocess.TimeoutExpired:
+        return False, f"git {cmd_name} timed out after {_GIT_TIMEOUT_SECONDS}s"
+    except FileNotFoundError:
+        return False, "git not found on PATH"
+    if result.returncode != 0:
+        return False, f"git {cmd_name} failed: {_tail(result.stderr)}"
+    return True, result
 
 
-def _branch_name(prefix: str, artifact_name: str, timestamp: datetime | str) -> str:
+def _branch_name(prefix: str, artifact_name: str, timestamp: datetime) -> str:
     sanitized = _BRANCH_SANITIZE_RE.sub("-", artifact_name).strip("-")
-    if isinstance(timestamp, datetime):
-        ts = timestamp.strftime("%Y%m%d-%H%M%S")
-    else:
-        ts = timestamp
+    ts = timestamp.strftime("%Y%m%d-%H%M%S")
     suffix = secrets.token_hex(2)
     return f"{prefix}{sanitized}-{ts}-{suffix}"
 
@@ -143,14 +142,9 @@ def _format_pr_body(gate_decision: dict[str, Any], metrics: dict[str, Any]) -> s
             "### Holdout score",
             f"- baseline: `{baseline:.2f}`",
             f"- evolved:  `{evolved:.2f}`",
-            f"- delta:    `{sign}{delta:.2f}`" if delta is not None else "",
+            f"- delta:    `{sign}{delta:.2f}`",
             "",
         ]
-
-    if signal == "closed_loop":
-        gained = gate_decision.get("cl_tasks_gained")
-        if gained is not None:
-            lines += ["### Closed-loop tasks", f"- gained: `+{gained}`", ""]
 
     bootstrap = gate_decision.get("bootstrap")
     if isinstance(bootstrap, dict) and "ci_low" in bootstrap and "ci_high" in bootstrap:
@@ -222,11 +216,7 @@ def create_pr(
     # 1. Dirty-tree check
     ok, res = _run_git(["status", "--porcelain"], cwd=source_repo_root)
     if not ok:
-        if isinstance(res, FileNotFoundError):
-            return PRResult(status="failed", reason="git not found on PATH")
-        if isinstance(res, subprocess.TimeoutExpired):
-            return PRResult(status="failed", reason=f"git status timed out after {_GIT_TIMEOUT_SECONDS}s")
-        return PRResult(status="failed", reason=f"git status failed: {_tail(res.stderr)}")
+        return PRResult(status="failed", reason=res)  # type: ignore[arg-type]
     if res.stdout.strip() and not allow_dirty:
         console.print("[yellow]Dirty working tree detected:[/yellow]")
         console.print(res.stdout.rstrip())
@@ -238,11 +228,7 @@ def create_pr(
     # 2. Fetch origin
     ok, res = _run_git(["fetch", "origin", base_branch], cwd=source_repo_root)
     if not ok:
-        if isinstance(res, FileNotFoundError):
-            return PRResult(status="failed", reason="git not found on PATH")
-        if isinstance(res, subprocess.TimeoutExpired):
-            return PRResult(status="failed", reason=f"git fetch timed out after {_GIT_TIMEOUT_SECONDS}s")
-        return PRResult(status="failed", reason=f"git fetch failed: {_tail(res.stderr)}")
+        return PRResult(status="failed", reason=res)  # type: ignore[arg-type]
 
     # 3. Branch from origin/<base>
     branch = _branch_name(branch_prefix, artifact_name, datetime.now())
@@ -250,12 +236,7 @@ def create_pr(
         ["checkout", "-b", branch, f"origin/{base_branch}"], cwd=source_repo_root
     )
     if not ok:
-        reason = (
-            f"git branch failed: {_tail(res.stderr)}"
-            if isinstance(res, subprocess.CompletedProcess)
-            else f"git checkout error: {res}"
-        )
-        return PRResult(status="failed", reason=reason, branch=branch)
+        return PRResult(status="failed", reason=res, branch=branch)  # type: ignore[arg-type]
 
     # 4. Atomic copy
     dst = source_repo_root / source_artifact_relpath
@@ -267,23 +248,13 @@ def create_pr(
     # 5. Stage + commit
     ok, res = _run_git(["add", source_artifact_relpath], cwd=source_repo_root)
     if not ok:
-        reason = (
-            f"git add failed: {_tail(res.stderr)}"
-            if isinstance(res, subprocess.CompletedProcess)
-            else f"git add error: {res}"
-        )
-        return PRResult(status="failed", reason=reason, branch=branch)
+        return PRResult(status="failed", reason=res, branch=branch)  # type: ignore[arg-type]
 
     signal = gate_decision.get("decision_signal", "synthetic")
     message = _commit_message(artifact_name, metrics, signal, gate_decision)
     ok, res = _run_git(["commit", "-m", message], cwd=source_repo_root)
     if not ok:
-        reason = (
-            f"git commit failed: {_tail(res.stderr)}"
-            if isinstance(res, subprocess.CompletedProcess)
-            else f"git commit error: {res}"
-        )
-        return PRResult(status="failed", reason=reason, branch=branch)
+        return PRResult(status="failed", reason=res, branch=branch)  # type: ignore[arg-type]
 
     ok, res = _run_git(["rev-parse", "HEAD"], cwd=source_repo_root)
     commit_sha: Optional[str] = None
@@ -293,12 +264,7 @@ def create_pr(
     # 6. Push
     ok, res = _run_git(["push", "origin", branch], cwd=source_repo_root)
     if not ok:
-        reason = (
-            f"git push failed: {_tail(res.stderr)}"
-            if isinstance(res, subprocess.CompletedProcess)
-            else f"git push error: {res}"
-        )
-        return PRResult(status="failed", reason=reason, branch=branch, commit_sha=commit_sha)
+        return PRResult(status="failed", reason=res, branch=branch, commit_sha=commit_sha)  # type: ignore[arg-type]
 
     # 7. gh pr create
     title = _commit_message(artifact_name, metrics, signal, gate_decision)
