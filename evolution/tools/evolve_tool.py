@@ -58,7 +58,12 @@ from evolution.core.lm_timing_callback import (
     register_litellm_cost_callback,
     register_litellm_failure_callback,
 )
-from evolution.core.pr_automation import create_pr, find_git_root
+from evolution.core.pr_automation import (
+    create_pr,
+    disabled_pr_block,
+    find_git_root,
+    pr_block_from_result,
+)
 from evolution.core.quality_gate import (
     QUALITY_GATE_PRESETS,
     _check_cl_primary_gate,
@@ -1111,28 +1116,25 @@ def evolve(
                 # 'preflight didn't run.'
                 decision_payload["reason_synthetic"] = "preflight_skipped"
 
-            # Run PR automation BEFORE writing gate_decision.json so the PR
-            # outcome lands in the same single-write block — calibration
-            # scripts grepping pr_created don't have to special-case a
-            # re-write or missing key.
-            pr_created_block: dict[str, Any] = {
-                "status": "disabled",
-                "reason": None,
-                "branch": None,
-                "commit_sha": None,
-                "url": None,
-            }
-            if growth_pass and create_pr_flag:
-                evolved_manifest_for_pr = manifest.replace_description(
-                    tool_name, evolved_description,
-                )
+            # Compute evolved_manifest + persist baseline/evolved manifest
+            # artifacts once on the deploy path. The PR hook, the patch
+            # emitter, and the apply call all reference these.
+            if growth_pass:
+                evolved_manifest = manifest.replace_description(tool_name, evolved_description)
                 evolved_manifest_path = output_dir / "evolved_manifest.json"
                 evolved_manifest_path.write_text(
-                    json.dumps(_manifest_to_dict(evolved_manifest_for_pr), indent=2) + "\n"
+                    json.dumps(_manifest_to_dict(evolved_manifest), indent=2) + "\n"
                 )
                 (output_dir / "baseline_manifest.json").write_text(
                     json.dumps(_manifest_to_dict(manifest), indent=2) + "\n"
                 )
+
+            # Run PR automation BEFORE writing gate_decision.json so the PR
+            # outcome lands in the same single-write block — calibration
+            # scripts grepping pr_created don't have to special-case a
+            # re-write or missing key.
+            pr_created_block: dict[str, Any] = disabled_pr_block()
+            if growth_pass and create_pr_flag:
                 source_repo_root = find_git_root(manifest_path)
                 source_artifact_relpath = (
                     str(manifest_path.relative_to(source_repo_root))
@@ -1156,13 +1158,7 @@ def evolve(
                     allow_dirty=pr_allow_dirty,
                     console=console,
                 )
-                pr_created_block = {
-                    "status": pr_result.status,
-                    "reason": pr_result.reason,
-                    "branch": pr_result.branch,
-                    "commit_sha": pr_result.commit_sha,
-                    "url": pr_result.url,
-                }
+                pr_created_block = pr_block_from_result(pr_result)
             decision_payload["pr_created"] = pr_created_block
 
             gate_path = write_gate_decision(output_dir, decision_payload)
@@ -1239,13 +1235,6 @@ def evolve(
             console.print()
             console.print(table)
 
-            evolved_manifest = manifest.replace_description(tool_name, evolved_description)
-            (output_dir / "baseline_manifest.json").write_text(
-                json.dumps(_manifest_to_dict(manifest), indent=2) + "\n"
-            )
-            (output_dir / "evolved_manifest.json").write_text(
-                json.dumps(_manifest_to_dict(evolved_manifest), indent=2) + "\n"
-            )
             metrics = {
                 "tool_name": tool_name,
                 "manifest_path": str(manifest_path),

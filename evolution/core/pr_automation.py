@@ -37,6 +37,26 @@ class PRResult:
     url: Optional[str] = None
 
 
+def disabled_pr_block() -> dict[str, Any]:
+    """The `pr_created` block written when `--create-pr` is off.
+
+    Shape-stable with `pr_block_from_result` so downstream consumers can
+    index ``payload["pr_created"]["url"]`` without checking the status.
+    """
+    return {"status": "disabled", "reason": None, "branch": None, "commit_sha": None, "url": None}
+
+
+def pr_block_from_result(result: PRResult) -> dict[str, Any]:
+    """Convert a `PRResult` into the `gate_decision.json::pr_created` block."""
+    return {
+        "status": result.status,
+        "reason": result.reason,
+        "branch": result.branch,
+        "commit_sha": result.commit_sha,
+        "url": result.url,
+    }
+
+
 def find_git_root(path: Path) -> Optional[Path]:
     """Return the git worktree root for ``path``, or ``None`` if not in a repo."""
     start = path if path.is_dir() else path.parent
