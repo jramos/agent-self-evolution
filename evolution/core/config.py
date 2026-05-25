@@ -108,7 +108,7 @@ class EvolutionConfig:
     enable_confusable_bucket: bool = False
 
     output_dir: Path = field(default_factory=lambda: Path("./output"))
-    create_pr: bool = True
+    create_pr: bool = False
 
     seed: int = 42
 
