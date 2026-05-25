@@ -284,7 +284,7 @@ Per-run directory: `output/<skill_name>/<YYYYMMDD_HHMMSS>/`. Contents vary by ou
 These are technically internal but tested directly because downstream calibration scripts depend on them:
 
 - `_write_gate_decision(output_dir, payload) -> Path` — keep filename `gate_decision.json`.
-- `gate_decision.json` schema fields — `tests/skills/test_evolve_skill_validation_flow.py:TestGrowthGateDecisionSchema` and `TestStaticValidationShortCircuitsBeforeHoldout` lock `schema_version="4"` plus the full key list. See [data_models.md](data_models.md).
+- `gate_decision.json` schema fields — `tests/skills/test_evolve_skill_validation_flow.py:TestGrowthGateDecisionSchema` and `TestStaticValidationShortCircuitsBeforeHoldout` lock `schema_version="5"` plus the full key list. See [data_models.md](data_models.md).
 - `_dataset_payload(dataset)` — `size_total`, `size_train`, `size_val`, `size_holdout`, `sources` (per-source counter; "unknown" bucket for `source=""`). Locked by `TestDatasetPayloadHelper`.
 - `_knee_point_payload(pick)` — applied/skipped shapes both locked by `TestKneePointPayloadHelper`.
 - `paired_bootstrap()` return shape — `mean`, `lower_bound`, `upper_bound`, `n_examples`, `n_resamples`, `confidence`. Calibration scripts depend on these key names.

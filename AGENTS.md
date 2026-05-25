@@ -210,7 +210,7 @@ Per-run dir: `output/<skill>/<YYYYMMDD_HHMMSS>/`. Contents vary by outcome:
 | File | When | Purpose |
 |---|---|---|
 | `run.log` | always | Every LM call (start, end, heartbeats), every retry |
-| `gate_decision.json` | always | Structured deploy decision (schema_version `"4"`) |
+| `gate_decision.json` | always | Structured deploy decision (schema_version `"5"`) |
 | `evolved_skill.md` | deploy only | New SKILL.md ready to ship |
 | `baseline_skill.md` | deploy only | Original (for diffing) |
 | `metrics.json` | deploy only | Top-level run summary |
