@@ -56,7 +56,6 @@ The codebase is mid-sized (~9K LOC of source + 55 test files / ~1076 tests) and 
 | [`workflows.md`](workflows.md) | Step-by-step workflows with mermaid sequence diagrams: skill deploy path, reject paths, GEPA→MIPROv2 fallback, sessiondb mining, tool evolution, closed-loop validation, closed-loop signal during evolution |
 | [`dependencies.md`](dependencies.md) | Each external package — what it's used for, why it's pinned, what we don't depend on |
 | [`framework_advantages.md`](framework_advantages.md) | User-facing explainer of how this framework's selection layer, deploy gate, proposer, and composite fitness differ from raw DSPy + GEPA — and when raw GEPA is the right choice |
-| [`review_notes.md`](review_notes.md) | Consistency + completeness gaps found during this docs pass |
 
 ## Documents elsewhere worth knowing about
 
