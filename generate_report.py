@@ -116,6 +116,27 @@ def _extract_run_data(run_dir: Path) -> dict[str, Any]:
     else:
         knee_default_match_phrase = ""
 
+    # CL-primary fields (v5 schema; absent on synthetic-only runs)
+    decision_signal = gate.get("decision_signal", "synthetic")
+    cl_tasks_gained = gate.get("cl_tasks_gained")
+    cl_required_gain = gate.get("cl_required_gain")
+    baseline_cl_per_example = gate.get("baseline_closed_loop_per_example") or []
+    evolved_cl_per_example = gate.get("evolved_closed_loop_per_example") or []
+    cl_baseline_pass = int(sum(baseline_cl_per_example)) if baseline_cl_per_example else None
+    cl_evolved_pass = int(sum(evolved_cl_per_example)) if evolved_cl_per_example else None
+    cl_total_tasks = len(baseline_cl_per_example) if baseline_cl_per_example else None
+    validator_agent_model = gate.get("validator_agent_model")
+    cl_eval_cost_usd = gate.get("evolved_cl_eval_cost_usd")
+    synth_sanity = gate.get("synthetic_sanity_check") or {}
+    synth_sanity_passed = synth_sanity.get("passed")
+    synth_sanity_passed_phrase = (
+        "passed" if synth_sanity_passed else ("failed" if synth_sanity_passed is False else "n/a")
+    )
+    decision_signal_phrase = {
+        "closed_loop": "the closed-loop behavioral signal",
+        "synthetic": "the synthetic holdout signal",
+    }.get(decision_signal, decision_signal)
+
     return {
         "skill_name": skill_name,
         "baseline_chars": int(gate["baseline_chars"]),
@@ -154,6 +175,17 @@ def _extract_run_data(run_dir: Path) -> dict[str, Any]:
         "knee_band_size": int(knee.get("band_size", 0)),
         "knee_default_idx": knee_default_idx,
         "knee_default_match_phrase": knee_default_match_phrase,
+        "decision_signal": decision_signal,
+        "decision_signal_phrase": decision_signal_phrase,
+        "cl_tasks_gained": cl_tasks_gained,
+        "cl_required_gain": cl_required_gain,
+        "cl_baseline_pass": cl_baseline_pass,
+        "cl_evolved_pass": cl_evolved_pass,
+        "cl_total_tasks": cl_total_tasks,
+        "validator_agent_model": validator_agent_model,
+        "cl_eval_cost_usd": cl_eval_cost_usd,
+        "synth_sanity_passed": synth_sanity_passed,
+        "synth_sanity_passed_phrase": synth_sanity_passed_phrase,
     }
 
 
