@@ -65,6 +65,12 @@ def _extract_run_data(run_dir: Path) -> dict[str, Any]:
     log = (run_dir / "run.log").read_text() if (run_dir / "run.log").is_file() else ""
     lm_calls_judge = len(re.findall(r"LM #\d+ start.*model=openai/gpt-4\.1-mini", log))
     lm_calls_reflection = len(re.findall(r"LM #\d+ start.*model=openai/gpt-5-mini", log))
+    # Sum of calls reported by metrics.json's per-model cost summary — model-agnostic
+    # (correct even when the run uses an LM other than the legacy gpt-4.1-mini / gpt-5-mini pair).
+    lm_calls_metrics = sum(
+        int(m.get("calls", 0))
+        for m in (metrics.get("cost", {}).get("by_model") or {}).values()
+    )
 
     skill_name = metrics.get("skill_name") or run_dir.parent.name
 
@@ -165,9 +171,11 @@ def _extract_run_data(run_dir: Path) -> dict[str, Any]:
         "bootstrap_interpretation": bootstrap_interpretation,
         "elapsed_seconds": int(metrics.get("elapsed_seconds", 0)),
         "elapsed_minutes": int(metrics.get("elapsed_seconds", 0) // 60),
+        "cost_total_usd": float((metrics.get("cost") or {}).get("total_usd", 0.0)),
         "lm_calls_judge": lm_calls_judge,
         "lm_calls_reflection": lm_calls_reflection,
         "lm_calls_total": lm_calls_judge + lm_calls_reflection,
+        "lm_calls_metrics": lm_calls_metrics,
         "knee_picked_idx": knee_picked_idx,
         "knee_picked_val_score": float(knee.get("picked_val_score", 0.0)),
         "knee_picked_rank": int(knee.get("picked_val_rank_in_band", 0)),
@@ -445,6 +453,17 @@ def _experiment(prose: dict, ctx: dict, styles, examples: list[tuple[str, str]])
     exp = prose["experiment"]
     overrides = exp["config_overrides"]
 
+    # Phase 1 runs counted gpt-4.1-mini + gpt-5-mini explicitly via run.log grep;
+    # Phase 2 runs use a single optimizer LM tier (e.g., gpt-5.4-mini), so fall
+    # back to the metrics.json per-model summary when the legacy regex matches nothing.
+    if ctx["lm_calls_total"] > 0:
+        lm_calls_cell = (
+            f'~{ctx["lm_calls_total"]:,} ({ctx["lm_calls_judge"]:,} gpt-4.1-mini '
+            f'+ {ctx["lm_calls_reflection"]} gpt-5-mini)'
+        )
+    else:
+        lm_calls_cell = f'{ctx["lm_calls_metrics"]:,} (from metrics.json per-model summary)'
+
     config_rows = [
         ['Target Skill', _fmt(overrides["target_skill_label"], ctx)],
         ['Baseline Size', f'{ctx["baseline_chars"]:,} characters'],
@@ -456,11 +475,19 @@ def _experiment(prose: dict, ctx: dict, styles, examples: list[tuple[str, str]])
          f'{ctx["n_examples"]} examples ({ctx["n_train"]} train / {ctx["n_val"]} val / {ctx["n_holdout"]} holdout)'],
         ['Total Optimization Time',
          f'{ctx["elapsed_seconds"]:,} seconds (~{ctx["elapsed_minutes"]} minutes)'],
-        ['Total LM Calls',
-         f'~{ctx["lm_calls_total"]:,} ({ctx["lm_calls_judge"]:,} gpt-4.1-mini + {ctx["lm_calls_reflection"]} gpt-5-mini)'],
+        ['Total LM Calls', lm_calls_cell],
+        ['Total Cost (USD)', f'${ctx["cost_total_usd"]:.2f}'],
         ['Quality Gate', overrides["quality_gate_label"]],
         ['Knee-point Strategy', overrides["knee_point_strategy_label"]],
     ]
+    # Phase 2: surface the closed-loop validator + benchmark when present.
+    if ctx.get("validator_agent_model"):
+        config_rows.append(['Closed-loop Validator', ctx["validator_agent_model"]])
+    if ctx.get("cl_total_tasks"):
+        config_rows.append([
+            'Closed-loop Suite',
+            f'{ctx["cl_total_tasks"]} tasks (behavioral benchmark, scored end-to-end)',
+        ])
     config_table = Table([['Parameter', 'Value']] + config_rows, colWidths=[2.2 * inch, 3.8 * inch])
     config_table.setStyle(TableStyle([
         ('BACKGROUND', (0, 0), (-1, 0), HexColor('#1a1a2e')),
@@ -495,7 +522,7 @@ def _experiment(prose: dict, ctx: dict, styles, examples: list[tuple[str, str]])
     ]))
 
     return [
-        Paragraph("Phase 1 Experiment", styles['SectionHead']),
+        Paragraph(exp.get("section_title", "Phase 1 Experiment"), styles['SectionHead']),
         Paragraph("Configuration", styles['SubSection']),
         config_table,
         Paragraph("Evaluation Dataset", styles['SubSection']),
@@ -516,7 +543,12 @@ def _results(prose: dict, ctx: dict, styles) -> list:
     res = prose["results"]
     if ctx["decision"] == "deploy":
         decision_cell = "DEPLOYED"
-        decision_note = "CI excludes 0" if ctx["bootstrap_lower"] > 0 else "non-inferiority"
+        if ctx.get("decision_signal") == "closed_loop":
+            decision_note = "via closed-loop"
+        elif ctx["bootstrap_lower"] > 0:
+            decision_note = "CI excludes 0"
+        else:
+            decision_note = "non-inferiority"
         accent_bg = HexColor('#e8f5e9')
         accent_fg = HexColor('#2e7d32')
     else:
@@ -533,8 +565,17 @@ def _results(prose: dict, ctx: dict, styles) -> list:
         ['Bootstrap mean diff', '—', f'{ctx["bootstrap_mean"]:+.3f}', '—'],
         ['Bootstrap 90% CI lower', '—', f'{ctx["bootstrap_lower"]:+.3f}', '—'],
         ['Bootstrap 90% CI upper', '—', f'{ctx["bootstrap_upper"]:+.3f}', '—'],
-        ['Decision', '—', decision_cell, decision_note],
     ]
+    # Phase 2: surface the closed-loop behavioral signal when the v5 schema
+    # exposed it (absent on synthetic-only runs).
+    if ctx.get("cl_total_tasks"):
+        results_rows.append([
+            f'Closed-loop tasks (n={ctx["cl_total_tasks"]})',
+            f'{ctx["cl_baseline_pass"]}/{ctx["cl_total_tasks"]}',
+            f'{ctx["cl_evolved_pass"]}/{ctx["cl_total_tasks"]}',
+            f'+{ctx["cl_tasks_gained"]} (req ≥{ctx["cl_required_gain"]})',
+        ])
+    results_rows.append(['Decision', '—', decision_cell, decision_note])
     results_table = Table(results_rows, colWidths=[1.9 * inch, 1.3 * inch, 1.7 * inch, 1.1 * inch])
     results_table.setStyle(TableStyle([
         ('BACKGROUND', (0, 0), (-1, 0), HexColor('#1a1a2e')),
