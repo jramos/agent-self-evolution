@@ -6,7 +6,9 @@
 
 meta:
   title: "Agent Self-Evolution"
-  subtitle: "Phase 2 Validation Report — Closed-loop-aware deploy gate + tool-side parity"
+  # <br/> is a reportlab Paragraph line break; renders the second line
+  # below the first on the title page. _footer strips it before joining.
+  subtitle: "Phase 2 Validation Report<br/>Closed-loop-aware deploy gate + tool-side parity"
   # Cover-page organization line. Set to "" to omit.
   organization: ""
   repository: "github.com/jramos/agent-self-evolution"

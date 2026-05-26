@@ -697,7 +697,9 @@ def _next_steps(prose: dict, ctx: dict, styles) -> list:
 
 def _footer(prose: dict, styles) -> list:
     meta = prose["meta"]
-    parts = [meta['title'], meta['subtitle'], datetime.now().strftime('%B %d, %Y')]
+    # Strip title-page-only line breaks so the footer reads as one row.
+    footer_subtitle = meta['subtitle'].replace('<br/>', ' — ')
+    parts = [meta['title'], footer_subtitle, datetime.now().strftime('%B %d, %Y')]
     if meta.get("organization"):
         parts.append(meta["organization"])
     return [
