@@ -447,7 +447,7 @@ def _approach(prose: dict, ctx: dict, styles) -> list:
         _highlight_table(
             header=engines["header"],
             rows=engines["rows"],
-            col_widths=[1.4 * inch, 2.4 * inch, 0.6 * inch, 1.8 * inch],
+            col_widths=[1.4 * inch, 2.3 * inch, 0.7 * inch, 1.8 * inch],
             styles=styles,
         ),
         Spacer(1, 0.15 * inch),
