@@ -502,11 +502,8 @@ def _experiment(prose: dict, ctx: dict, styles, examples: list[tuple[str, str]])
             f'{ctx["cl_total_tasks"]} tasks (behavioral benchmark, scored end-to-end)',
         ])
     config_data = [[_wrap_cell(c, styles['TableHeaderCell']) for c in ['Parameter', 'Value']]]
-    # Use the bold header cell style for the left-column labels too (they're
-    # the row's "key"); right column uses the plain body cell style.
     config_data += [
-        [_wrap_cell(row[0], styles['TableHeaderCell']), _wrap_cell(row[1], styles['TableCell'])]
-        for row in config_rows
+        [_wrap_cell(c, styles['TableCell']) for c in row] for row in config_rows
     ]
     # Labels are short; the Value column is where overflow happens, so widen it.
     config_table = Table(config_data, colWidths=[1.8 * inch, 4.2 * inch])
