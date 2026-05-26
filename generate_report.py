@@ -450,6 +450,7 @@ def _approach(prose: dict, ctx: dict, styles) -> list:
             col_widths=[1.4 * inch, 2.4 * inch, 0.6 * inch, 1.8 * inch],
             styles=styles,
         ),
+        Spacer(1, 0.15 * inch),
         Paragraph(_fmt(ap["gepa_narrative"], ctx), styles['BodyJust']),
         Paragraph("The Optimization Pipeline", styles['SubSection']),
     ]
