@@ -93,3 +93,20 @@ def test_write_unknown_section_raises(fake_hermes_repo: Path):
     source = HermesPromptSource(hermes_repo=fake_hermes_repo)
     with pytest.raises(KeyError, match="NONEXISTENT"):
         source.write("NONEXISTENT", "x")
+
+
+def test_list_sections_enumerates_string_constants(fake_hermes_repo: Path):
+    source = HermesPromptSource(hermes_repo=fake_hermes_repo)
+    sections = source.list_sections()
+    names = {s.name for s in sections}
+    assert "MEMORY_GUIDANCE" in names
+    assert "SKILLS_GUIDANCE" in names
+    assert "PLATFORM_HINTS" not in names  # dict-typed → excluded
+
+
+def test_list_sections_populates_descriptors(fake_hermes_repo: Path):
+    source = HermesPromptSource(hermes_repo=fake_hermes_repo)
+    by_name = {s.name: s for s in source.list_sections()}
+    skills = by_name["SKILLS_GUIDANCE"]
+    assert skills.current_text == "After completing a complex task, save the approach."
+    assert skills.source_path == fake_hermes_repo / "agent" / "prompt_builder.py"

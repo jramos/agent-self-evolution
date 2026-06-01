@@ -43,6 +43,17 @@ class HermesPromptSource:
             )
         return constants[section_name][0]
 
+    def list_sections(self) -> list[SectionDescriptor]:
+        constants = self._parse_string_constants()
+        return [
+            SectionDescriptor(
+                name=name,
+                current_text=text,
+                source_path=self.prompt_builder_path,
+            )
+            for name, (text, _node) in sorted(constants.items())
+        ]
+
     def _parse_string_constants(self) -> dict[str, tuple[str, ast.Constant]]:
         """Return ``{name: (value, value_ast_node)}`` for every top-level
         string-typed assignment in prompt_builder.py.
