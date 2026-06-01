@@ -98,10 +98,17 @@ class PromptModule(dspy.Module):
         task: str,
         closed_loop_task_id: Optional[str] = None,
     ) -> dspy.Prediction:
-        # Always route behaviorally — there is no cheap predictor score for
-        # a prompt section. The metric reads these via getattr.
+        # Invoke the passthrough predictor so GEPA captures a trace for
+        # ``passthrough.predict``. Without a traced predictor call, GEPA's
+        # make_reflective_dataset finds "no valid predictions" and never
+        # proposes a mutation (the tool path gets traces from synthetic
+        # examples; prompt sections are pure-behavioral, so the trace has
+        # to come from here). The predictor's output is a placeholder — the
+        # real score comes from the metric's behavioral branch, which reads
+        # the candidate text + task id attached below.
+        result = self.passthrough(task=task)
         return dspy.Prediction(
-            response="",
+            response=getattr(result, "response", ""),
             _closed_loop_task_id=closed_loop_task_id,
             _candidate_text=self.section_text,
         )

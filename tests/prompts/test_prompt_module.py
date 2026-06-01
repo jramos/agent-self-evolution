@@ -27,11 +27,18 @@ def test_section_text_extracts_current_candidate():
     assert module.section_text == "v2-mutated"
 
 
-def test_forward_routes_behavioral():
-    """forward always returns the candidate + task id for behavioral scoring —
-    there's no cheap predictor score for a prompt section."""
+def test_forward_invokes_predictor_and_attaches_behavioral_fields():
+    """forward calls the passthrough predictor (so GEPA gets a trace) and
+    attaches the candidate text + task id for the metric's behavioral branch."""
+    import dspy
+    from dspy.utils.dummies import DummyLM
+
     module = PromptModule(section_name="MEMORY_GUIDANCE", candidate_text="evolved body")
-    pred = module.forward(task="anything", closed_loop_task_id="task-001")
+    # DummyLM lets the real predictor run offline (no network), so section_text
+    # still resolves while a predictor trace is produced for GEPA.
+    with dspy.context(lm=DummyLM([{"reasoning": "n/a", "response": "placeholder"}])):
+        pred = module.forward(task="anything", closed_loop_task_id="task-001")
+
     assert pred._candidate_text == "evolved body"
     assert pred._closed_loop_task_id == "task-001"
 
