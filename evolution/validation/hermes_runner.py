@@ -210,6 +210,7 @@ def parse_session_result(
 
     messages = data.get("messages") or []
     tool_calls_seq = _extract_tool_call_names(messages)
+    tool_calls_with_args = _extract_tool_calls_with_args(messages)
     final_text_tail = _extract_final_text_tail(messages)
     model_name = data.get("model")
 
@@ -219,6 +220,7 @@ def parse_session_result(
         duration_seconds=duration_seconds,
         model_name=model_name,
         session_path=session_path,
+        tool_calls_with_args=tool_calls_with_args,
     )
 
 
@@ -254,6 +256,52 @@ def _call_name(call: dict) -> Optional[str]:
             return str(nested)
     flat = call.get("name")
     return str(flat) if flat else None
+
+
+def _extract_tool_calls_with_args(messages: list[dict]) -> list[dict]:
+    """Return ``[{name, arguments}, ...]`` for each assistant tool call.
+
+    Arguments are parsed from the LLM-emitted JSON string. Malformed or
+    non-object arguments fall back to ``{}`` rather than dropping the
+    call — the Layer 2 judge can still treat "memory was invoked with
+    empty args" as a behavior signal. Handles both OpenAI-nested and flat
+    tool_call shapes, mirroring ``_extract_tool_call_names``.
+    """
+    out: list[dict] = []
+    for msg in messages:
+        if msg.get("role") != "assistant":
+            continue
+        for call in msg.get("tool_calls") or []:
+            if not isinstance(call, dict):
+                continue
+            name = _call_name(call)
+            if not name:
+                continue
+            args_raw = _call_arguments_raw(call)
+            try:
+                args = json.loads(args_raw) if args_raw else {}
+            except (json.JSONDecodeError, TypeError):
+                args = {}
+            if not isinstance(args, dict):
+                args = {}
+            out.append({"name": name, "arguments": args})
+    return out
+
+
+def _call_arguments_raw(call: dict) -> str:
+    fn = call.get("function")
+    if isinstance(fn, dict):
+        nested = fn.get("arguments")
+        if isinstance(nested, str):
+            return nested
+        if isinstance(nested, dict):
+            return json.dumps(nested)
+    flat = call.get("arguments")
+    if isinstance(flat, str):
+        return flat
+    if isinstance(flat, dict):
+        return json.dumps(flat)
+    return ""
 
 
 def _extract_final_text_tail(messages: list[dict]) -> str:

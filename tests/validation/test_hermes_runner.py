@@ -173,6 +173,58 @@ class TestParseSessionResult:
         assert result.tool_calls_seq == ["patch"]
 
 
+class TestParseToolCallArgs:
+    def test_captures_tool_call_args(self, tmp_path):
+        """Sessions with tool calls must surface name AND parsed args."""
+        p = tmp_path / "session.json"
+        _write_session(p, [
+            {"role": "user", "content": "save a fact"},
+            {"role": "assistant", "content": "", "tool_calls": [
+                {"function": {
+                    "name": "memory",
+                    "arguments": json.dumps({
+                        "action": "save",
+                        "content": "user prefers terse responses",
+                    }),
+                }}
+            ]},
+            {"role": "tool", "content": "ok"},
+            {"role": "assistant", "content": "Saved."},
+        ])
+        result = parse_session_result(p, duration_seconds=1.0)
+        assert result.tool_calls_seq == ["memory"]
+        assert len(result.tool_calls_with_args) == 1
+        call = result.tool_calls_with_args[0]
+        assert call["name"] == "memory"
+        assert call["arguments"]["action"] == "save"
+        assert call["arguments"]["content"] == "user prefers terse responses"
+
+    def test_handles_malformed_args(self, tmp_path):
+        """Malformed tool-call arguments JSON must not crash — fall back to {}."""
+        p = tmp_path / "session.json"
+        _write_session(p, [
+            {"role": "assistant", "tool_calls": [
+                {"function": {"name": "memory", "arguments": "{not-json"}}
+            ]},
+        ])
+        result = parse_session_result(p, duration_seconds=1.0)
+        assert result.tool_calls_seq == ["memory"]
+        assert result.tool_calls_with_args == [{"name": "memory", "arguments": {}}]
+
+    def test_handles_flat_dict_args(self, tmp_path):
+        """Flat tool_call shape with an already-parsed dict argument."""
+        p = tmp_path / "session.json"
+        _write_session(p, [
+            {"role": "assistant", "tool_calls": [
+                {"name": "memory", "arguments": {"action": "delete", "key": "x"}}
+            ]},
+        ])
+        result = parse_session_result(p, duration_seconds=1.0)
+        assert result.tool_calls_with_args == [
+            {"name": "memory", "arguments": {"action": "delete", "key": "x"}}
+        ]
+
+
 class TestHermesAgentRunnerSubprocess:
     """The subprocess invocation layer: env + cwd + args plumbing."""
 

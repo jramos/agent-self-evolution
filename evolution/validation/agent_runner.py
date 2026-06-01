@@ -21,6 +21,12 @@ class AgentRunResult:
     tool_call dicts) the agent invoked during the session. The validator
     only needs names for the expected / forbidden membership tests.
 
+    ``tool_calls_with_args`` carries the same calls in order as
+    ``{"name", "arguments"}`` dicts (arguments parsed from the
+    LLM-emitted JSON). The compound-verdict Layer 2 judge needs the
+    argument payloads — e.g. the content of a ``memory(action='save')``
+    call — which ``tool_calls_seq`` discards.
+
     ``error`` is set when the runner itself failed to drive the agent
     (subprocess timeout, no session JSON written, parse failure). It's
     distinct from "agent invoked a tool that failed" — that's still a
@@ -35,6 +41,7 @@ class AgentRunResult:
     model_name: Optional[str] = None
     error: Optional[str] = None
     session_path: Optional[Path] = None
+    tool_calls_with_args: list[dict] = field(default_factory=list)
 
 
 @dataclass(frozen=True)
