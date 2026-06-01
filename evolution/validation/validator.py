@@ -22,7 +22,7 @@ import tempfile
 from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Iterator, Optional
+from typing import Callable, Iterator, Optional
 
 from evolution.validation.agent_runner import AgentRunner, TaskRunContext
 from evolution.validation.artifact_installer import (
@@ -80,9 +80,21 @@ class ClosedLoopValidator:
     times and aggregate.
     """
 
-    def __init__(self, installer: ArtifactInstaller, runner: AgentRunner) -> None:
+    def __init__(
+        self,
+        installer: ArtifactInstaller,
+        runner: AgentRunner,
+        *,
+        layer2_judge_fn: Optional[Callable[[list[dict]], float]] = None,
+        layer2_threshold: float = 0.7,
+    ) -> None:
         self.installer = installer
         self.runner = runner
+        # Optional compound-verdict Layer 2 (prompt-section suites). When
+        # unset, scoring is Layer 1 only — the tool-description path is
+        # unchanged.
+        self.layer2_judge_fn = layer2_judge_fn
+        self.layer2_threshold = layer2_threshold
 
     def validate(self, inputs: ValidationInputs) -> ValidationReport:
         target = self.installer.target_path
@@ -149,6 +161,8 @@ class ClosedLoopValidator:
                 run=run,
                 test_command=task.test_command,
                 fixture_dir=fixture_dir,
+                layer2_judge_fn=self.layer2_judge_fn,
+                layer2_threshold=self.layer2_threshold,
             )
             return TaskResult(
                 task_id=task.task_id,

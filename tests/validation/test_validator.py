@@ -54,6 +54,55 @@ def _write_suite(tmp_path: Path, tasks: list[dict]) -> TaskSuite:
     return TaskSuite.from_jsonl(p)
 
 
+class TestClosedLoopValidatorLayer2:
+    def test_layer2_judge_threaded_into_scoring(self, tmp_path):
+        """A configured Layer 2 judge runs per scored task and can fail a
+        task whose Layer 1 trigger passed."""
+        target = tmp_path / "prompt_builder.py"
+        target.write_text("MEMORY_GUIDANCE = 'orig'\n")
+        baseline = tmp_path / "baseline.txt"
+        baseline.write_text("baseline body")
+        evolved = tmp_path / "evolved.txt"
+        evolved.write_text("evolved body")
+
+        suite = _write_suite(tmp_path, [
+            {"task_id": "t1", "user_message": "save", "expected_tools": ["memory"]},
+        ])
+
+        class _MemoryRunner:
+            def __init__(self, target_path):
+                self.target_path = target_path
+
+            def run(self, ctx):
+                return AgentRunResult(
+                    tool_calls_seq=["memory"], final_text_tail="ok",
+                    duration_seconds=0.1, model_name="test-model",
+                    tool_calls_with_args=[
+                        {"name": "memory", "arguments": {"action": "save", "content": "x"}}
+                    ],
+                )
+
+        judged = []
+
+        def judge_fn(memory_calls):
+            judged.append(memory_calls)
+            return 0.2  # below threshold → Layer 2 fails the task
+
+        validator = ClosedLoopValidator(
+            _StubInstaller(target), _MemoryRunner(target),
+            layer2_judge_fn=judge_fn, layer2_threshold=0.7,
+        )
+        report = validator.validate(ValidationInputs(
+            tool_name="MEMORY_GUIDANCE", suite=suite,
+            baseline_artifact=baseline, evolved_artifact=evolved,
+        ))
+        # Judge invoked once per phase (baseline + evolved) on the one task.
+        assert len(judged) == 2
+        # Both phases fail Layer 2 → 0 pass rate, no regression decision.
+        assert report.baseline.pass_rate == 0.0
+        assert report.evolved.pass_rate == 0.0
+
+
 class TestClosedLoopValidatorHappyPath:
     def test_pass_when_evolved_strictly_improves(self, tmp_path):
         target = tmp_path / "tool.py"
