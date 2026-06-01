@@ -83,14 +83,20 @@ class TestClosedLoopValidatorLayer2:
                 )
 
         judged = []
+        tasks_seen = []
 
-        def judge_fn(memory_calls):
-            judged.append(memory_calls)
-            return 0.2  # below threshold → Layer 2 fails the task
+        def judge_factory(task):
+            tasks_seen.append(task.task_id)
+
+            def judge_fn(memory_calls):
+                judged.append(memory_calls)
+                return 0.2  # below threshold → Layer 2 fails the task
+
+            return judge_fn
 
         validator = ClosedLoopValidator(
             _StubInstaller(target), _MemoryRunner(target),
-            layer2_judge_fn=judge_fn, layer2_threshold=0.7,
+            layer2_judge_factory=judge_factory, layer2_threshold=0.7,
         )
         report = validator.validate(ValidationInputs(
             tool_name="MEMORY_GUIDANCE", suite=suite,
@@ -98,6 +104,8 @@ class TestClosedLoopValidatorLayer2:
         ))
         # Judge invoked once per phase (baseline + evolved) on the one task.
         assert len(judged) == 2
+        # Factory received the task each phase.
+        assert tasks_seen == ["t1", "t1"]
         # Both phases fail Layer 2 → 0 pass rate, no regression decision.
         assert report.baseline.pass_rate == 0.0
         assert report.evolved.pass_rate == 0.0

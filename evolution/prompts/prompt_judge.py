@@ -7,6 +7,7 @@ by ``score_task``'s existing expected_tools / forbidden_tools logic.
 from __future__ import annotations
 
 import logging
+import threading
 from typing import Any, Callable, Optional
 
 import dspy
@@ -164,6 +165,7 @@ def make_memoizing_splice_scorer(
     *,
     install_fn: Callable[[str], None],
     score_fn: Callable[[str], float],
+    lock: Optional[threading.Lock] = None,
 ) -> Callable[[str, str], float]:
     """Build ``closed_loop_scorer(task_id, candidate_text) -> float`` that
     splices a candidate only when it changes.
@@ -174,16 +176,25 @@ def make_memoizing_splice_scorer(
     tasks for the same candidate reuse the live splice. ``score_fn(task_id)``
     runs the task through the agent with whatever candidate is installed.
 
+    The splice + run is serialized under ``lock`` (a fresh ``threading.Lock``
+    by default). ``dspy.Evaluate`` scores with a thread pool, but the spliced
+    ``prompt_builder.py`` is one shared mutable file — without serialization a
+    second thread could re-splice a different candidate while the first thread's
+    ``hermes -z`` subprocess is mid-read. Behavioral scoring is therefore
+    effectively serial; that's an accepted v1 cost of splice-and-restore.
+
     Backup/restore of the mutated source is the caller's responsibility — wrap
     the whole GEPA run, not each call (the per-run guard mirrors
     ``ClosedLoopValidator``'s splice-once-per-phase shape).
     """
     state: dict[str, Any] = {"installed": _UNSET}
+    lock = lock if lock is not None else threading.Lock()
 
     def scorer(task_id: str, candidate_text: str) -> float:
-        if state["installed"] != candidate_text:
-            install_fn(candidate_text)
-            state["installed"] = candidate_text
-        return score_fn(task_id)
+        with lock:
+            if state["installed"] != candidate_text:
+                install_fn(candidate_text)
+                state["installed"] = candidate_text
+            return score_fn(task_id)
 
     return scorer
