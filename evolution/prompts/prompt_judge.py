@@ -7,7 +7,7 @@ by ``score_task``'s existing expected_tools / forbidden_tools logic.
 from __future__ import annotations
 
 import logging
-from typing import Any
+from typing import Any, Callable, Optional
 
 import dspy
 
@@ -105,3 +105,85 @@ def judge_save_calls(
         ))
     scores.extend([0.0] * unjudged_count)
     return sum(scores) / len(scores)
+
+
+def make_prompt_fitness_metric(
+    *,
+    baseline_text: str,
+    max_growth: float,
+    closed_loop_scorer: Optional[Callable[[str, str], float]] = None,
+) -> Callable:
+    """Build the GEPA-shaped 5-arg fitness metric for a prompt section.
+
+    All prompt-section eval is behavioral (a real Hermes subprocess), so
+    every prediction must carry ``_closed_loop_task_id`` (set by the
+    dataset builder) and ``_candidate_text`` (set by ``PromptModule``).
+    Predictions missing the task id are degenerate — they score 0 with a
+    diagnostic so the misconfiguration is visible in GEPA feedback rather
+    than silently scoring well.
+
+    ``closed_loop_scorer(task_id, candidate_text) -> float`` runs one
+    closed-loop trial and returns its [0, 1] score. ``None`` disables
+    behavioral scoring (predictions score 0) — useful for dry-run wiring
+    tests that don't want to spawn agents.
+    """
+    baseline_len = len(baseline_text or "")
+    target_len = int(baseline_len * (1 + max_growth)) if baseline_len else 0
+
+    def metric(gold, pred, trace=None, pred_name=None, pred_trace=None):
+        task_id = getattr(pred, "_closed_loop_task_id", None)
+        if task_id is None:
+            return dspy.Prediction(
+                score=0.0,
+                feedback=(
+                    "No closed_loop_task_id on prediction — prompt-section eval "
+                    "requires behavioral routing. Check that the dataset builder "
+                    "set the closed_loop_task_id input field."
+                ),
+            )
+        candidate_text = getattr(pred, "_candidate_text", "") or ""
+        score = 0.0
+        if closed_loop_scorer is not None:
+            score = closed_loop_scorer(task_id, candidate_text)
+
+        feedback = ""
+        if baseline_len:
+            feedback = (
+                f"[BUDGET] candidate={len(candidate_text)} chars, "
+                f"baseline={baseline_len} chars, ceiling={target_len} chars"
+            )
+        return dspy.Prediction(score=score, feedback=feedback)
+
+    return metric
+
+
+_UNSET = object()
+
+
+def make_memoizing_splice_scorer(
+    *,
+    install_fn: Callable[[str], None],
+    score_fn: Callable[[str], float],
+) -> Callable[[str, str], float]:
+    """Build ``closed_loop_scorer(task_id, candidate_text) -> float`` that
+    splices a candidate only when it changes.
+
+    GEPA evaluates a candidate across many tasks in a row. Splice-and-restore
+    is expensive, so this scorer calls ``install_fn(candidate_text)`` only when
+    ``candidate_text`` differs from the currently-installed value; consecutive
+    tasks for the same candidate reuse the live splice. ``score_fn(task_id)``
+    runs the task through the agent with whatever candidate is installed.
+
+    Backup/restore of the mutated source is the caller's responsibility — wrap
+    the whole GEPA run, not each call (the per-run guard mirrors
+    ``ClosedLoopValidator``'s splice-once-per-phase shape).
+    """
+    state: dict[str, Any] = {"installed": _UNSET}
+
+    def scorer(task_id: str, candidate_text: str) -> float:
+        if state["installed"] != candidate_text:
+            install_fn(candidate_text)
+            state["installed"] = candidate_text
+        return score_fn(task_id)
+
+    return scorer

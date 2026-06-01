@@ -59,3 +59,74 @@ def test_none_judge_or_expected_is_vacuous_pass():
     fake = MagicMock(spec=SaveCallJudge)
     assert judge_save_calls(judge=fake, calls=calls, expected_content=None) == 1.0
     fake.score.assert_not_called()
+
+
+# ---- make_prompt_fitness_metric ----
+
+from evolution.prompts.prompt_judge import (
+    make_memoizing_splice_scorer,
+    make_prompt_fitness_metric,
+)
+
+
+def _behavioral_pred(task_id="task-001", candidate="evolved body"):
+    pred = type("Pred", (), {})()
+    pred._closed_loop_task_id = task_id
+    pred._candidate_text = candidate
+    return pred
+
+
+def test_metric_routes_behavioral_through_scorer():
+    seen = []
+
+    def fake_scorer(task_id, candidate_text):
+        seen.append((task_id, candidate_text))
+        return 0.85
+
+    metric = make_prompt_fitness_metric(
+        baseline_text="baseline", max_growth=0.2, closed_loop_scorer=fake_scorer,
+    )
+    result = metric(gold=object(), pred=_behavioral_pred())
+    assert result.score == 0.85
+    assert seen == [("task-001", "evolved body")]
+    assert "BUDGET" in result.feedback  # length feedback present
+
+
+def test_metric_without_task_id_scores_zero():
+    metric = make_prompt_fitness_metric(
+        baseline_text="b", max_growth=0.2, closed_loop_scorer=lambda *_: 1.0,
+    )
+    pred = type("Pred", (), {})()  # no _closed_loop_task_id
+    result = metric(gold=object(), pred=pred)
+    assert result.score == 0.0
+    assert "behavioral" in result.feedback.lower()
+
+
+def test_metric_without_scorer_scores_zero():
+    metric = make_prompt_fitness_metric(
+        baseline_text="b", max_growth=0.2, closed_loop_scorer=None,
+    )
+    result = metric(gold=object(), pred=_behavioral_pred())
+    assert result.score == 0.0
+
+
+# ---- make_memoizing_splice_scorer ----
+
+def test_memoizing_scorer_splices_only_on_candidate_change():
+    installs: list[str] = []
+    scores = {"task-a": 0.7, "task-b": 0.9}
+
+    scorer = make_memoizing_splice_scorer(
+        install_fn=lambda text: installs.append(text),
+        score_fn=lambda task_id: scores[task_id],
+    )
+    # Same candidate across two tasks → one install.
+    assert scorer("task-a", "cand-1") == 0.7
+    assert scorer("task-b", "cand-1") == 0.9
+    assert installs == ["cand-1"]
+    # New candidate → re-splice.
+    assert scorer("task-a", "cand-2") == 0.7
+    assert installs == ["cand-1", "cand-2"]
+    # Back to a prior candidate is NOT cached across changes → re-splice.
+    assert scorer("task-a", "cand-1") == 0.7
+    assert installs == ["cand-1", "cand-2", "cand-1"]
