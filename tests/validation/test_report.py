@@ -75,7 +75,7 @@ class TestScoreTaskLayer2:
         return AgentRunResult(
             tool_calls_seq=["memory"], final_text_tail="", duration_seconds=0.0,
             tool_calls_with_args=[
-                {"name": "memory", "arguments": {"action": "save", "content": content}}
+                {"name": "memory", "arguments": {"action": "add", "content": content}}
             ],
         )
 
@@ -123,7 +123,7 @@ class TestScoreTaskLayer2:
             tool_calls_seq=["read_file", "memory"], final_text_tail="", duration_seconds=0.0,
             tool_calls_with_args=[
                 {"name": "read_file", "arguments": {"path": "x"}},
-                {"name": "memory", "arguments": {"action": "save", "content": "c"}},
+                {"name": "memory", "arguments": {"action": "add", "content": "c"}},
             ],
         )
         received = []
@@ -136,7 +136,7 @@ class TestScoreTaskLayer2:
             expected_tools=("memory",), forbidden_tools=(), run=run,
             layer2_judge_fn=judge_fn, layer2_threshold=0.7,
         )
-        assert received == [[{"action": "save", "content": "c"}]]
+        assert received == [[{"action": "add", "content": "c"}]]
 
 
 class TestScoreTaskTestCommandMode:

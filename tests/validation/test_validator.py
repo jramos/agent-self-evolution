@@ -78,7 +78,7 @@ class TestClosedLoopValidatorLayer2:
                     tool_calls_seq=["memory"], final_text_tail="ok",
                     duration_seconds=0.1, model_name="test-model",
                     tool_calls_with_args=[
-                        {"name": "memory", "arguments": {"action": "save", "content": "x"}}
+                        {"name": "memory", "arguments": {"action": "add", "content": "x"}}
                     ],
                 )
 
