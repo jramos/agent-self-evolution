@@ -22,6 +22,12 @@ MAX_JUDGED_CALLS_PER_TASK = 5
 beyond the cap score 0 each — bounds cost on pathological cases where the
 agent saves on every turn."""
 
+SAVE_ACTIONS = frozenset({"add", "replace"})
+"""Hermes ``memory`` tool actions that persist content worth judging. The
+tool's full action set is add / replace / remove / read (see
+``tools/memory_tool.py``); only ``add`` and ``replace`` carry a ``content``
+payload, so only those are content-judged. ``remove`` / ``read`` are not saves."""
+
 
 class SaveCallSignature(dspy.Signature):
     """Score a memory-save call against MEMORY_GUIDANCE's rules.
@@ -81,14 +87,14 @@ def judge_save_calls(
     """Aggregate the Layer 2 score across a task's memory-save calls.
 
     ``calls`` is the subset of ``tool_calls_with_args`` whose name is
-    ``memory`` — each item the call's ``arguments`` dict. Only
-    ``action == 'save'`` calls are judged.
+    ``memory`` — each item the call's ``arguments`` dict. Only content-bearing
+    save actions (``add`` / ``replace``, see ``SAVE_ACTIONS``) are judged.
 
     Returns 1.0 when no save calls were made (Layer 1 catches the
     "should-have-saved-but-didn't" failure; Layer 2 only scores what
     actually happened) and also when no judge/rubric is configured.
     """
-    save_calls = [c for c in calls if c.get("action") == "save"]
+    save_calls = [c for c in calls if c.get("action") in SAVE_ACTIONS]
     if not save_calls:
         return 1.0
     if judge is None or expected_content is None:
