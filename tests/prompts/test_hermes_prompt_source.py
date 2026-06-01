@@ -64,3 +64,32 @@ def test_read_unknown_constant_raises(fake_hermes_repo: Path):
 def test_missing_prompt_builder_raises(tmp_path: Path):
     with pytest.raises(FileNotFoundError, match="prompt_builder.py"):
         HermesPromptSource(hermes_repo=tmp_path)
+
+
+def test_write_replaces_string_constant(fake_hermes_repo: Path):
+    source = HermesPromptSource(hermes_repo=fake_hermes_repo)
+    new_text = "Replacement guidance for memory."
+    source.write("MEMORY_GUIDANCE", new_text)
+    assert source.read("MEMORY_GUIDANCE") == new_text
+    # Confirm SKILLS_GUIDANCE was untouched.
+    assert source.read("SKILLS_GUIDANCE") == (
+        "After completing a complex task, save the approach."
+    )
+
+
+def test_write_preserves_file_parseability(fake_hermes_repo: Path):
+    source = HermesPromptSource(hermes_repo=fake_hermes_repo)
+    # A value with newlines, quotes, and backslashes — repr() must
+    # produce a literal that round-trips byte-equal.
+    tricky = 'line one\nline two with "quotes" and \\ backslash'
+    source.write("MEMORY_GUIDANCE", tricky)
+    assert source.read("MEMORY_GUIDANCE") == tricky
+    # File must still be valid Python.
+    import ast as _ast
+    _ast.parse((fake_hermes_repo / "agent" / "prompt_builder.py").read_text())
+
+
+def test_write_unknown_section_raises(fake_hermes_repo: Path):
+    source = HermesPromptSource(hermes_repo=fake_hermes_repo)
+    with pytest.raises(KeyError, match="NONEXISTENT"):
+        source.write("NONEXISTENT", "x")
