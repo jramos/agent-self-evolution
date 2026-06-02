@@ -347,7 +347,7 @@ Cost: each task is one `hermes -z` run (~$0.05–$0.50). The bundled `patch.json
 |-------|--------|--------|--------|
 | **Phase 1** | Skill files (SKILL.md) | DSPy + GEPA | ✅ [Validated](reports/phase1_validation_report.pdf) |
 | **Phase 2** | Tool descriptions + dual-signal deploy gate | DSPy + GEPA | ✅ [Validated](reports/phase2_validation_report.pdf) |
-| **Phase 3** | System prompt sections | DSPy + GEPA | ✅ Complete |
+| **Phase 3** | System prompt sections | DSPy + GEPA | ✅ [Validated](reports/phase3_validation_report.pdf) |
 | **Phase 4** | Tool implementation code | Darwinian Evolver | 🔲 Planned |
 | **Phase 5** | Continuous improvement loop | Automated pipeline | 🔲 Planned |
 
