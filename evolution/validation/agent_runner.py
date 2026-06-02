@@ -24,11 +24,11 @@ class AgentRunResult:
     ``tool_calls_with_args`` carries the same calls in order as
     ``{"name", "arguments"}`` dicts (arguments parsed from the
     LLM-emitted JSON). The compound-verdict Layer 2 judge needs the
-    argument payloads — e.g. the content of a ``memory(action='save')``
+    argument payloads — e.g. the content of a ``memory(action='add')``
     call — which ``tool_calls_seq`` discards.
 
     ``error`` is set when the runner itself failed to drive the agent
-    (subprocess timeout, no session JSON written, parse failure). It's
+    (subprocess timeout, no session written, parse failure). It's
     distinct from "agent invoked a tool that failed" — that's still a
     valid run, just one where the agent struggled. Tasks with ``error``
     are counted as *abstentions* in the report, not as failures, so a

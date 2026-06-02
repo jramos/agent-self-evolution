@@ -24,9 +24,9 @@ agent saves on every turn."""
 
 SAVE_ACTIONS = frozenset({"add", "replace"})
 """Hermes ``memory`` tool actions that persist content worth judging. The
-tool's full action set is add / replace / remove / read (see
-``tools/memory_tool.py``); only ``add`` and ``replace`` carry a ``content``
-payload, so only those are content-judged. ``remove`` / ``read`` are not saves."""
+tool's schema enum is add / replace / remove (see ``tools/memory_tool.py``);
+only ``add`` and ``replace`` carry a ``content`` payload, so only those are
+content-judged. ``remove`` is not a save."""
 
 
 class SaveCallSignature(dspy.Signature):
@@ -74,6 +74,17 @@ class SaveCallJudge:
                 expected_content=expected_content,
                 saved_content=saved_content,
             )
+        # _clamp_to_unit returns a neutral 0.5 on unparseable output. A 0.5 is
+        # below the default 0.7 threshold, so a garbled judge response silently
+        # fails an otherwise-good save — log the raw value so that's debuggable
+        # rather than indistinguishable from a real mediocre score.
+        try:
+            float(str(result.quality).strip())
+        except (ValueError, TypeError):
+            logger.warning(
+                "SaveCallJudge: unparseable quality %r from judge LM; "
+                "falling back to neutral 0.5", result.quality,
+            )
         return _clamp_to_unit(result.quality)
 
 
@@ -90,12 +101,22 @@ def judge_save_calls(
     ``memory`` — each item the call's ``arguments`` dict. Only content-bearing
     save actions (``add`` / ``replace``, see ``SAVE_ACTIONS``) are judged.
 
-    Returns 1.0 when no save calls were made (Layer 1 catches the
-    "should-have-saved-but-didn't" failure; Layer 2 only scores what
-    actually happened) and also when no judge/rubric is configured.
+    Returns 1.0 when no save calls were made (Layer 1 catches the case where
+    ``memory`` was never invoked; note it does NOT backstop a ``memory`` call
+    with a non-save action like ``remove`` — that still scores a vacuous 1.0
+    here) and also when no judge/rubric is configured.
     """
     save_calls = [c for c in calls if c.get("action") in SAVE_ACTIONS]
     if not save_calls:
+        # Distinguish "no memory call" (expected, silent) from "memory was
+        # invoked but nothing matched SAVE_ACTIONS" (worth surfacing — a save
+        # we can't score, e.g. an action rename or malformed empty-args call).
+        if calls:
+            logger.info(
+                "judge_save_calls: %d memory call(s) but no save action "
+                "(actions=%s); returning vacuous 1.0",
+                len(calls), [c.get("action") for c in calls],
+            )
         return 1.0
     if judge is None or expected_content is None:
         return 1.0
@@ -123,9 +144,11 @@ def make_prompt_fitness_metric(
     """Build the GEPA-shaped 5-arg fitness metric for a prompt section.
 
     All prompt-section eval is behavioral (a real Hermes subprocess), so
-    every prediction must carry ``_closed_loop_task_id`` (set by the
-    dataset builder) and ``_candidate_text`` (set by ``PromptModule``).
-    Predictions missing the task id are degenerate — they score 0 with a
+    every prediction must carry ``_closed_loop_task_id`` and
+    ``_candidate_text`` — both attached by ``PromptModule.forward`` (the task
+    id flows in as the ``closed_loop_task_id`` input field built by
+    ``_behavioral_examples``). Predictions missing the task id are degenerate
+    — they score 0 with a
     diagnostic so the misconfiguration is visible in GEPA feedback rather
     than silently scoring well.
 
@@ -190,8 +213,9 @@ def make_memoizing_splice_scorer(
     effectively serial; that's an accepted v1 cost of splice-and-restore.
 
     Backup/restore of the mutated source is the caller's responsibility — wrap
-    the whole GEPA run, not each call (the per-run guard mirrors
-    ``ClosedLoopValidator``'s splice-once-per-phase shape).
+    the whole GEPA run, not each call. This mirrors ``ClosedLoopValidator``,
+    which backs up once and restores once around both phases (it re-splices the
+    artifact on every task inside a phase, not once per phase).
     """
     state: dict[str, Any] = {"installed": _UNSET}
     lock = lock if lock is not None else threading.Lock()

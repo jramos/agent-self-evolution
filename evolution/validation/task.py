@@ -34,7 +34,7 @@ class Task:
       set, takes precedence over the tool-call rule.
 
     ``expected_save_content`` is an optional rubric (not exact text)
-    describing what a good ``memory(action='save')`` would contain. It
+    describing what a good ``memory(action='add')`` would contain. It
     feeds the prompt-section compound verdict's Layer 2 content judge; it
     has no effect on the Layer 1 tool-call rule above.
     """

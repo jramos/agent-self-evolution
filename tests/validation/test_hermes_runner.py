@@ -319,6 +319,44 @@ class TestParseSessionFromDb:
         result = parse_session_from_db(db, duration_seconds=1.0)
         assert result.tool_calls_seq == ["write_file"]
 
+    def test_malformed_tool_calls_column_abstains(self, tmp_path):
+        """A corrupt tool_calls column must abstain (error set), not read as
+        'agent invoked no tools' (which would score a hard behavioral fail)."""
+        db = tmp_path / "state.db"
+        _make_state_db(db, session_id="s1", model="m",
+                       messages=[{"role": "user", "content": "hi"}])
+        conn = sqlite3.connect(db)
+        conn.execute(
+            "INSERT INTO messages (session_id, role, content, tool_calls) VALUES (?,?,?,?)",
+            ("s1", "assistant", "", "{not-valid-json"),
+        )
+        conn.commit()
+        conn.close()
+        result = parse_session_from_db(db, duration_seconds=1.0)
+        assert result.error is not None
+        assert "malformed tool_calls" in result.error
+        assert result.tool_calls_seq == []
+
+    def test_corrupt_db_file_errors(self, tmp_path):
+        bad = tmp_path / "state.db"
+        bad.write_bytes(b"this is not a sqlite database at all")
+        result = parse_session_from_db(bad, duration_seconds=1.0)
+        assert result.error is not None
+        assert "could not" in result.error  # open or read, depending on sqlite
+
+    def test_missing_messages_table_errors(self, tmp_path):
+        db = tmp_path / "state.db"
+        conn = sqlite3.connect(db)
+        conn.executescript(
+            "CREATE TABLE sessions (id TEXT, model TEXT, started_at REAL);"
+            "INSERT INTO sessions VALUES ('s1', 'm', 1.0);"
+        )
+        conn.commit()
+        conn.close()
+        result = parse_session_from_db(db, duration_seconds=1.0)
+        assert result.error is not None
+        assert "could not read" in result.error
+
 
 class TestHermesAgentRunnerSubprocess:
     """The subprocess invocation layer: env + cwd + args plumbing."""

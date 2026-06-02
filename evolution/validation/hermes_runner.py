@@ -219,8 +219,14 @@ def parse_session_from_db(
     Modern hermes persists each session to SQLite. We read the most-recent
     session's messages and normalize them into the same message-dict shape the
     legacy JSON path produced, so the existing extractors work unchanged. The
-    ``messages.tool_calls`` column holds the OpenAI-nested
-    ``{"function": {"name", "arguments"}}`` list verbatim.
+    ``messages.tool_calls`` column holds the tool-call list verbatim — current
+    hermes writes the flat ``{"name", "arguments"}`` shape; the extractors also
+    accept the older OpenAI-nested ``{"function": {...}}`` shape.
+
+    A row whose ``tool_calls`` column won't parse as JSON aborts with an
+    ``error`` result (the task abstains) rather than being silently read as
+    "agent invoked no tools" — that would score a DB-format regression as a
+    behavioral failure and contaminate the fitness signal.
     """
     try:
         conn = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True)
@@ -268,8 +274,19 @@ def parse_session_from_db(
         if raw_calls:
             try:
                 parsed_calls = json.loads(raw_calls)
-            except (json.JSONDecodeError, TypeError):
-                parsed_calls = None
+            except (json.JSONDecodeError, TypeError) as exc:
+                logger.warning(
+                    "malformed tool_calls JSON in session %s at %s (%s); "
+                    "abstaining rather than scoring the task as a no-op",
+                    session["id"], db_path, exc,
+                )
+                return AgentRunResult(
+                    tool_calls_seq=[],
+                    final_text_tail="",
+                    duration_seconds=duration_seconds,
+                    error=f"malformed tool_calls JSON in session DB at {db_path}: {exc}",
+                    session_path=db_path,
+                )
         messages.append({
             "role": row["role"],
             "content": row["content"] or "",
@@ -358,6 +375,11 @@ def _extract_tool_calls_with_args(messages: list[dict]) -> list[dict]:
             try:
                 args = json.loads(args_raw) if args_raw else {}
             except (json.JSONDecodeError, TypeError):
+                logger.warning(
+                    "malformed arguments for tool call %r (%r); using {} — a "
+                    "content judge will see an empty-args call",
+                    name, args_raw[:120],
+                )
                 args = {}
             if not isinstance(args, dict):
                 args = {}

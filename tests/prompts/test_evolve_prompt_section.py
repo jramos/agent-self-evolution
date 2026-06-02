@@ -7,8 +7,15 @@ from pathlib import Path
 
 from click.testing import CliRunner
 
+import fcntl
+
+import pytest
+
 from evolution.prompts.evolve_prompt_section import (
+    _BACKUP_SUFFIX,
+    _LOCK_FILENAME,
     _make_layer2_factory,
+    _prompt_builder_guard,
     _section_text_from_candidate,
     _split_train_holdout,
     evolve_prompt_section,
@@ -112,6 +119,53 @@ def test_baseline_override_file_replaces_live_section(tmp_path):
     assert "Save durable facts about the user." in (
         repo / "agent" / "prompt_builder.py"
     ).read_text()
+
+
+class TestPromptBuilderGuard:
+    def test_restores_bytes_even_on_exception(self, tmp_path):
+        target = tmp_path / "pb.py"
+        target.write_text("ORIGINAL = 1\n")
+        original = target.read_bytes()
+        with pytest.raises(RuntimeError, match="boom"):
+            with _prompt_builder_guard(target):
+                target.write_text("MUTATED = 2\n")
+                raise RuntimeError("boom")
+        assert target.read_bytes() == original
+        assert not target.with_suffix(target.suffix + _BACKUP_SUFFIX).exists()
+
+    def test_refuses_stale_backup(self, tmp_path):
+        target = tmp_path / "pb.py"
+        target.write_text("X = 1\n")
+        target.with_suffix(target.suffix + _BACKUP_SUFFIX).write_text("stale")
+        with pytest.raises(RuntimeError, match="[Ss]tale backup"):
+            with _prompt_builder_guard(target):
+                pass
+
+    def test_refuses_when_another_run_holds_the_lock(self, tmp_path):
+        target = tmp_path / "pb.py"
+        target.write_text("X = 1\n")
+        other = open(target.parent / _LOCK_FILENAME, "w")
+        fcntl.flock(other.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+        try:
+            with pytest.raises(RuntimeError, match="holds"):
+                with _prompt_builder_guard(target):
+                    pass
+        finally:
+            fcntl.flock(other.fileno(), fcntl.LOCK_UN)
+            other.close()
+
+
+def test_rejects_single_task_suite(tmp_path):
+    repo = _fake_repo(tmp_path)
+    suite = tmp_path / "one.jsonl"
+    suite.write_text(json.dumps({
+        "task_id": "only", "user_message": "x", "expected_tools": ["memory"],
+    }) + "\n")
+    with pytest.raises(ValueError, match="at least 2"):
+        evolve_prompt_section(
+            section_name="MEMORY_GUIDANCE", hermes_repo=repo, tasks_path=suite,
+            dry_run=True, output_dir=tmp_path / "out",
+        )
 
 
 def test_cli_dry_run_exits_zero(tmp_path):

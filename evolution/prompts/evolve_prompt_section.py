@@ -153,9 +153,11 @@ def _section_text_from_candidate(candidate: Any, section_name: str) -> str:
 @contextmanager
 def _prompt_builder_guard(target_path: Path) -> Iterator[None]:
     """Back up ``prompt_builder.py`` + hold the shared closed-loop flock for the
-    duration of GEPA evolution, then restore the original bytes on exit.
+    duration of the saturation pre-flight + GEPA evolution, then restore the
+    original bytes on exit.
 
-    The GEPA inner loop splices candidates directly into the live file; this
+    The pre-flight and GEPA inner loop splice candidates directly into the live
+    file; this
     guard guarantees the user's checkout is byte-restored afterward and that no
     concurrent harness run (which uses the same lock + backup names) mutates it
     mid-flight. Sequenced before the deploy-gate ``ClosedLoopValidator``, which
@@ -264,6 +266,12 @@ def evolve_prompt_section(
     baseline_chars = len(baseline_text)
 
     suite = TaskSuite.from_jsonl(tasks_path)
+    if len(suite.tasks) < 2:
+        raise ValueError(
+            f"{tasks_path} has {len(suite.tasks)} task(s); need at least 2 so the "
+            f"split yields a non-empty GEPA trainset and a non-empty deploy-gate "
+            f"holdout."
+        )
     train_tasks, holdout_tasks = _split_train_holdout(
         suite.tasks, holdout_ratio=holdout_ratio, seed=seed
     )
