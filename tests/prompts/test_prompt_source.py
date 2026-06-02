@@ -22,19 +22,15 @@ def test_section_descriptor_is_frozen():
 
 
 def test_prompt_source_protocol_runtime_checkable():
-    """A concrete class implementing the three methods satisfies isinstance()."""
+    """read + write are the whole contract — a class with just those satisfies
+    isinstance(), with no need to enumerate or carry a name."""
 
     class StubSource:
-        name = "stub"
-
         def read(self, section_name: str) -> str:
             return "stub"
 
         def write(self, section_name: str, new_text: str) -> None:
             return None
-
-        def list_sections(self) -> list[SectionDescriptor]:
-            return []
 
     assert isinstance(StubSource(), PromptSource)
 
@@ -43,12 +39,7 @@ def test_prompt_source_protocol_rejects_incomplete():
     """Missing a required method => not a PromptSource."""
 
     class MissingWrite:
-        name = "incomplete"
-
         def read(self, section_name: str) -> str:
             return "x"
-
-        def list_sections(self) -> list[SectionDescriptor]:
-            return []
 
     assert not isinstance(MissingWrite(), PromptSource)

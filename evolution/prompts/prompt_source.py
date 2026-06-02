@@ -1,9 +1,13 @@
-"""PromptSource Protocol — adapters that read, write, and enumerate named prompt sections.
+"""PromptSource Protocol — adapters that read and write named prompt sections.
 
 Phase 3 integrates via in-place splice-and-restore (see
 ``HermesPromptSectionInstaller``), so the runtime override seam lives in
-the installer, not here. A PromptSource only needs to read the baseline,
-persist an evolved value, and enumerate what's targetable.
+the installer, not here. The contract is deliberately just read + write: the
+driver reads the baseline and persists/splices an evolved value, and nothing
+more is shared across implementers. Enumeration (``list_sections`` →
+``SectionDescriptor``) is a concrete convenience on ``HermesPromptSource`` for
+a future ``--list-sections`` affordance, not part of the contract every
+adapter must satisfy.
 """
 
 from __future__ import annotations
@@ -31,9 +35,12 @@ class SectionDescriptor:
 
 @runtime_checkable
 class PromptSource(Protocol):
-    """Adapter contract for prompt-section evolution targets."""
+    """Adapter contract for prompt-section evolution targets: read + write.
 
-    name: str
+    Kept minimal on purpose — these are the only members the evolution driver
+    exercises. Concrete adapters may offer more (e.g. ``HermesPromptSource``
+    also enumerates sections), but those are not part of the shared contract.
+    """
 
     def read(self, section_name: str) -> str:
         """Return the canonical baseline text of the named section."""
@@ -46,8 +53,4 @@ class PromptSource(Protocol):
         closed-loop installer drives during validation (the installer
         owns the backup/restore around the mutation).
         """
-        ...
-
-    def list_sections(self) -> list[SectionDescriptor]:
-        """Enumerate all evolvable sections this source can target."""
         ...
