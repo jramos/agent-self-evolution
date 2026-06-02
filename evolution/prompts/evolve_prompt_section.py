@@ -39,6 +39,7 @@ from evolution.core.hermes_provider import instantiate_lm, resolve_default_lm
 from evolution.core.lm_timing_callback import (
     COST_LEDGER,
     CostCeilingExceeded,
+    LMTimingCallback,
     register_litellm_cost_callback,
     register_litellm_failure_callback,
 )
@@ -362,6 +363,15 @@ def evolve_prompt_section(
     eval_lm = instantiate_lm(
         resolve_default_lm(role="eval", explicit_model=eval_model),
         temperature=0.0, request_timeout=120, num_retries=3,
+    )
+    # Set the global default LM so the passthrough predictor resolves an LM
+    # inside GEPA's worker threads (dspy.context only covers the saturation
+    # pre-flight's own eval). Without this, forward()'s passthrough call raises
+    # "No LM is loaded" in GEPA threads → no trajectories → no proposal.
+    dspy.configure(
+        lm=eval_lm,
+        warn_on_type_mismatch=False,
+        callbacks=[LMTimingCallback()],
     )
     reflection_lm = instantiate_lm(
         resolve_default_lm(
