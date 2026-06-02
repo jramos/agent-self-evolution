@@ -246,11 +246,21 @@ def evolve_prompt_section(
     create_pr_flag: bool = False,
     dry_run: bool = False,
     output_dir: Optional[Path] = None,
+    baseline_override_file: Optional[Path] = None,
 ) -> dict[str, Any]:
     """Evolve one prompt section end-to-end. Returns a summary dict."""
     hermes_repo = Path(hermes_repo).resolve()
     source = HermesPromptSource(hermes_repo)
-    baseline_text = source.read(section_name)
+    # The live section is always the splice/restore target. ``baseline_override``
+    # lets evolution START from different text (e.g. a deliberately-weakened
+    # baseline to create headroom, or a regression-injection ablation) without
+    # touching the real file — the guard still backs up and restores the live
+    # section. ``--apply`` writes the evolved text into the live section as usual.
+    source.read(section_name)  # validate the section exists / is a string constant
+    if baseline_override_file is not None:
+        baseline_text = Path(baseline_override_file).read_text(encoding="utf-8")
+    else:
+        baseline_text = source.read(section_name)
     baseline_chars = len(baseline_text)
 
     suite = TaskSuite.from_jsonl(tasks_path)
@@ -605,11 +615,17 @@ def evolve_prompt_section(
               help="Exercise wiring without any LM/agent calls.")
 @click.option("--output-dir", default=None,
               type=click.Path(file_okay=False, dir_okay=True, path_type=Path))
+@click.option("--baseline-override-file", default=None,
+              type=click.Path(exists=True, file_okay=True, dir_okay=False, path_type=Path),
+              help="Start evolution from this text instead of the live section "
+                   "(e.g. a weakened baseline to create headroom). The live file "
+                   "is still backed up + restored; --apply writes the evolved text.")
 def main(section_name, hermes_repo, tasks_path, iterations, holdout_ratio, seed,
          max_growth, optimizer_model, reflection_model, eval_model, agent_model,
          layer2_threshold, task_timeout_seconds, max_total_cost_usd,
          gepa_minibatch_size, gepa_acceptance, skip_saturation_check,
-         force_saturation_check, apply, create_pr_flag, dry_run, output_dir):
+         force_saturation_check, apply, create_pr_flag, dry_run, output_dir,
+         baseline_override_file):
     """Evolve one Hermes system-prompt section via GEPA + closed-loop validation."""
     result = evolve_prompt_section(
         section_name=section_name,
@@ -634,6 +650,7 @@ def main(section_name, hermes_repo, tasks_path, iterations, holdout_ratio, seed,
         create_pr_flag=create_pr_flag,
         dry_run=dry_run,
         output_dir=output_dir,
+        baseline_override_file=baseline_override_file,
     )
     sys.exit(0 if result["decision"] in {"deploy", "dry_run"} else 1)
 

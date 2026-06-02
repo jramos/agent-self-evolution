@@ -96,6 +96,24 @@ def test_dry_run_writes_gate_decision(tmp_path):
     ).read_text()
 
 
+def test_baseline_override_file_replaces_live_section(tmp_path):
+    repo = _fake_repo(tmp_path)
+    suite = _suite(tmp_path)
+    override = tmp_path / "weak.txt"
+    override.write_text("a deliberately weak baseline")
+    out = tmp_path / "out"
+    evolve_prompt_section(
+        section_name="MEMORY_GUIDANCE", hermes_repo=repo, tasks_path=suite,
+        dry_run=True, output_dir=out, baseline_override_file=override,
+    )
+    gate = json.loads((out / "gate_decision.json").read_text())
+    assert gate["baseline_chars"] == len("a deliberately weak baseline")
+    # The live file is never touched by an override dry run.
+    assert "Save durable facts about the user." in (
+        repo / "agent" / "prompt_builder.py"
+    ).read_text()
+
+
 def test_cli_dry_run_exits_zero(tmp_path):
     repo = _fake_repo(tmp_path)
     suite = _suite(tmp_path)
