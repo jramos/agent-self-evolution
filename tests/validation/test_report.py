@@ -307,6 +307,57 @@ class TestComputeWinLoss:
         assert wl.n_ties == 2
 
 
+class TestComputeWinLossRateBased:
+    """Win/loss compares pass_rate, not the bool. At reps=1 (rates in
+    {0.0, 1.0}) this reduces to the legacy bool comparison."""
+
+    def _tr_rate(self, task_id, rate):
+        return TaskResult(
+            task_id=task_id, passed=(rate >= 0.5), pass_rate=rate,
+            abstained=False, tool_calls_seq=[], duration_seconds=0.0,
+        )
+
+    def test_higher_rate_is_win(self):
+        b = summarize_phase([self._tr_rate("t", 0.0)])
+        e = summarize_phase([self._tr_rate("t", 0.8)])
+        wl = compute_win_loss(b, e)
+        assert wl.n_wins == 1 and wl.n_losses == 0
+
+    def test_win_even_below_pass_threshold(self):
+        # 0.4 vs 0.0 is a win even though neither side "passes" (>=0.5).
+        b = summarize_phase([self._tr_rate("t", 0.0)])
+        e = summarize_phase([self._tr_rate("t", 0.4)])
+        wl = compute_win_loss(b, e)
+        assert wl.n_wins == 1 and wl.n_losses == 0
+
+    def test_equal_rate_is_neither(self):
+        b = summarize_phase([self._tr_rate("t", 0.0)])
+        e = summarize_phase([self._tr_rate("t", 0.0)])
+        wl = compute_win_loss(b, e)
+        assert wl.n_wins == 0 and wl.n_losses == 0 and wl.n_ties == 1
+
+    def test_lower_rate_is_loss(self):
+        b = summarize_phase([self._tr_rate("t", 0.8)])
+        e = summarize_phase([self._tr_rate("t", 0.0)])
+        wl = compute_win_loss(b, e)
+        assert wl.n_losses == 1 and wl.n_wins == 0
+
+    def test_reps1_rates_reduce_to_legacy_bool(self):
+        # At reps=1 every rate is 0.0 or 1.0. Compare rate-based win/loss
+        # against the legacy bool-based outcome for all 4 combinations.
+        for b_pass in (False, True):
+            for e_pass in (False, True):
+                b_rate = 1.0 if b_pass else 0.0
+                e_rate = 1.0 if e_pass else 0.0
+                b = summarize_phase([self._tr_rate("t", b_rate)])
+                e = summarize_phase([self._tr_rate("t", e_rate)])
+                wl = compute_win_loss(b, e)
+                legacy_win = int(e_pass and not b_pass)
+                legacy_loss = int(b_pass and not e_pass)
+                assert wl.n_wins == legacy_win
+                assert wl.n_losses == legacy_loss
+
+
 class TestDecisionRule:
     """Two-condition rule: pass-rate no-regression AND no per-task regression
     unless wins are 2x losses."""

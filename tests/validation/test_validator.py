@@ -111,6 +111,116 @@ class TestClosedLoopValidatorLayer2:
         assert report.evolved.pass_rate == 0.0
 
 
+class TestClosedLoopValidatorReps:
+    """Multi-rep rate-based gating. reps=1 (the default, shared with the
+    tool/skill paths) must be byte-for-byte identical to legacy behavior.
+    """
+
+    def _suite(self, tmp_path):
+        return _write_suite(tmp_path, [
+            {"task_id": "t1", "user_message": "do",
+             "expected_tools": ["patch"], "forbidden_tools": []},
+        ])
+
+    def test_reps1_default_matches_legacy_decision(self, tmp_path):
+        """reps=1 (default) over a scripted runner produces the same
+        per-task passed values, win/loss counts, and decision as legacy.
+
+        Hand-computed legacy expectation: baseline doesn't pick patch
+        (fail), evolved picks patch (pass) → 1 win, 0 losses, decision
+        pass. With reps=1 pass_rate ∈ {0.0, 1.0} so passed == (rate>=0.5).
+        """
+        target = tmp_path / "tool.py"
+        target.write_text("# original\n")
+        baseline = tmp_path / "baseline.py"
+        baseline.write_text("# baseline\n")
+        evolved = tmp_path / "evolved.py"
+        evolved.write_text("# evolved\n")
+
+        installer = _StubInstaller(target)
+        runner = _ScriptedRunner(target, {
+            b"# baseline\n": ["read_file"],
+            b"# evolved\n": ["patch"],
+        })
+        # Default reps (no kwarg) == reps=1 explicitly: both must agree.
+        for validator in (
+            ClosedLoopValidator(installer, runner),
+            ClosedLoopValidator(installer, runner, reps=1),
+        ):
+            report = validator.validate(ValidationInputs(
+                tool_name="patch", suite=self._suite(tmp_path),
+                baseline_artifact=baseline, evolved_artifact=evolved,
+            ))
+            b = report.baseline.tasks[0]
+            e = report.evolved.tasks[0]
+            assert b.passed is False and b.pass_rate == 0.0
+            assert e.passed is True and e.pass_rate == 1.0
+            assert report.delta.n_wins == 1
+            assert report.delta.n_losses == 0
+            assert report.decision == "pass"
+
+    def test_reps4_pass_rate_one_of_four(self, tmp_path):
+        """reps=4, a task passing 1 of 4 reps → pass_rate 0.25, passed False
+        (0.25 >= 0.5 is False)."""
+        target = tmp_path / "tool.py"
+        target.write_text("# original\n")
+        baseline = tmp_path / "baseline.py"
+        baseline.write_text("# baseline\n")
+        evolved = tmp_path / "evolved.py"
+        evolved.write_text("# evolved\n")
+
+        class _OneOfFourRunner:
+            target_path = target
+            calls = 0
+
+            def run(self_, ctx):
+                self_.calls += 1
+                # 1st rep picks patch (pass), reps 2-4 don't (fail).
+                seq = ["patch"] if self_.calls == 1 else ["read_file"]
+                return AgentRunResult(
+                    tool_calls_seq=seq, final_text_tail="",
+                    duration_seconds=0.1,
+                )
+
+        installer = _StubInstaller(target)
+        validator = ClosedLoopValidator(installer, _OneOfFourRunner(), reps=4)
+        report = validator.validate(ValidationInputs(
+            tool_name="patch", suite=self._suite(tmp_path),
+            baseline_artifact=baseline, evolved_artifact=evolved,
+        ))
+        # First phase run is baseline: 1 pass of 4 reps.
+        assert report.baseline.tasks[0].pass_rate == 0.25
+        assert report.baseline.tasks[0].passed is False
+
+    def test_reps4_all_abstain_yields_zero_rate(self, tmp_path):
+        """All reps abstaining → pass_rate 0.0 and the task is marked
+        abstained (denominator excludes abstentions; all-abstain → 0.0)."""
+        target = tmp_path / "tool.py"
+        target.write_text("# original\n")
+        baseline = tmp_path / "baseline.py"
+        baseline.write_text("# baseline\n")
+        evolved = tmp_path / "evolved.py"
+        evolved.write_text("# evolved\n")
+
+        class _AlwaysErrorRunner:
+            target_path = target
+
+            def run(self_, ctx):
+                return AgentRunResult(
+                    tool_calls_seq=[], final_text_tail="",
+                    duration_seconds=0.1, error="timed out",
+                )
+
+        installer = _StubInstaller(target)
+        validator = ClosedLoopValidator(installer, _AlwaysErrorRunner(), reps=4)
+        report = validator.validate(ValidationInputs(
+            tool_name="patch", suite=self._suite(tmp_path),
+            baseline_artifact=baseline, evolved_artifact=evolved,
+        ))
+        assert report.baseline.tasks[0].pass_rate == 0.0
+        assert report.baseline.tasks[0].abstained is True
+
+
 class TestClosedLoopValidatorHappyPath:
     def test_pass_when_evolved_strictly_improves(self, tmp_path):
         target = tmp_path / "tool.py"

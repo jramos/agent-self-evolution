@@ -89,9 +89,16 @@ class ClosedLoopValidator:
             Callable[[Task], Optional[Callable[[list[dict]], float]]]
         ] = None,
         layer2_threshold: float = 0.7,
+        reps: int = 1,
     ) -> None:
         self.installer = installer
         self.runner = runner
+        # Per-task repetitions. reps=1 (the default, shared with the
+        # tool/skill paths) is byte-for-byte the legacy single-run gate:
+        # pass_rate collapses to 0.0/1.0 and passed == (pass_rate >= 0.5).
+        # reps>1 turns each per-task verdict into a rate so a stochastic
+        # trigger isn't decided by a single coin-flip run.
+        self.reps = reps
         # Optional compound-verdict Layer 2 (prompt-section suites). The
         # factory builds a per-task scorer from the task — prompt-section
         # judging needs the task's expected_save_content rubric and message,
@@ -150,38 +157,53 @@ class ClosedLoopValidator:
         return results
 
     def _run_one_task(self, task: Task) -> TaskResult:
-        with tempfile.TemporaryDirectory(prefix="cl_fixture_") as fixture_tmp:
-            fixture_dir = Path(fixture_tmp)
-            _materialize_fixture(fixture_dir, task.fixture_setup)
-            ctx = TaskRunContext(
-                user_message=task.render_message(fixture_dir),
-                fixture_dir=fixture_dir,
-                skills_src=getattr(self.installer, "skills_src", None),
-            )
-            run = self.runner.run(ctx)
-            layer2_judge_fn = (
-                self.layer2_judge_factory(task)
-                if self.layer2_judge_factory is not None
-                else None
-            )
-            passed, abstained = score_task(
-                expected_tools=task.expected_tools,
-                forbidden_tools=task.forbidden_tools,
-                run=run,
-                test_command=task.test_command,
-                fixture_dir=fixture_dir,
-                layer2_judge_fn=layer2_judge_fn,
-                layer2_threshold=self.layer2_threshold,
-            )
-            return TaskResult(
-                task_id=task.task_id,
-                passed=passed,
-                abstained=abstained,
-                tool_calls_seq=list(run.tool_calls_seq),
-                duration_seconds=run.duration_seconds,
-                model_name=run.model_name,
-                error=run.error,
-            )
+        layer2_judge_fn = (
+            self.layer2_judge_factory(task)
+            if self.layer2_judge_factory is not None
+            else None
+        )
+        n_pass = 0
+        n_abstain = 0
+        last_run = None
+        for _ in range(self.reps):
+            with tempfile.TemporaryDirectory(prefix="cl_fixture_") as fixture_tmp:
+                fixture_dir = Path(fixture_tmp)
+                _materialize_fixture(fixture_dir, task.fixture_setup)
+                ctx = TaskRunContext(
+                    user_message=task.render_message(fixture_dir),
+                    fixture_dir=fixture_dir,
+                    skills_src=getattr(self.installer, "skills_src", None),
+                )
+                run = self.runner.run(ctx)
+                passed, abstained = score_task(
+                    expected_tools=task.expected_tools,
+                    forbidden_tools=task.forbidden_tools,
+                    run=run,
+                    test_command=task.test_command,
+                    fixture_dir=fixture_dir,
+                    layer2_judge_fn=layer2_judge_fn,
+                    layer2_threshold=self.layer2_threshold,
+                )
+            last_run = run
+            if abstained:
+                n_abstain += 1
+            elif passed:
+                n_pass += 1
+
+        n_scored = self.reps - n_abstain
+        pass_rate = (n_pass / n_scored) if n_scored else 0.0
+        return TaskResult(
+            task_id=task.task_id,
+            passed=pass_rate >= 0.5,
+            pass_rate=pass_rate,
+            # A task abstains only if every rep abstained — partial
+            # abstention still yields a rate over the reps that ran.
+            abstained=n_scored == 0,
+            tool_calls_seq=list(last_run.tool_calls_seq),
+            duration_seconds=last_run.duration_seconds,
+            model_name=last_run.model_name,
+            error=last_run.error,
+        )
 
 
 def _refuse_if_stale_backup_exists(

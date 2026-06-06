@@ -28,6 +28,14 @@ class TaskResult:
     duration_seconds: float
     model_name: Optional[str] = None
     error: Optional[str] = None
+    pass_rate: Optional[float] = None
+
+    def __post_init__(self) -> None:
+        # Single-run (reps=1) callers construct with `passed` only; derive
+        # the rate so win/loss can compare pass_rate uniformly. At reps=1
+        # the rate is exactly 0.0 or 1.0, so passed == (pass_rate >= 0.5).
+        if self.pass_rate is None:
+            object.__setattr__(self, "pass_rate", 1.0 if self.passed else 0.0)
 
 
 @dataclass(frozen=True)
@@ -154,9 +162,11 @@ def compute_win_loss(baseline: PhaseResult, evolved: PhaseResult) -> WinLoss:
         if b is None or e is None or b.abstained or e.abstained:
             n_ties += 1
             continue
-        if e.passed and not b.passed:
+        # Rate-based: a win/loss is any movement in pass_rate. At reps=1
+        # rates are 0.0/1.0, so this reduces to the legacy bool comparison.
+        if e.pass_rate > b.pass_rate:
             n_wins += 1
-        elif b.passed and not e.passed:
+        elif e.pass_rate < b.pass_rate:
             n_losses += 1
         else:
             n_ties += 1
