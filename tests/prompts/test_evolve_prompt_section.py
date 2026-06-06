@@ -21,6 +21,7 @@ from evolution.prompts.evolve_prompt_section import (
     _split_train_holdout,
     evolve_prompt_section,
     main,
+    val_signal_warning,
 )
 from evolution.prompts.prompt_judge import ScoreResult
 from evolution.prompts.prompt_module import PromptModule
@@ -373,6 +374,89 @@ def test_rejects_single_task_suite(tmp_path):
             section_name="MEMORY_GUIDANCE", hermes_repo=repo, tasks_path=suite,
             dry_run=True, output_dir=tmp_path / "out",
         )
+
+
+class TestValSignalWarning:
+    def test_all_zero_rates_warns(self):
+        w = val_signal_warning({"t1": 0.0, "t2": 0.05})
+        assert w is not None
+        assert set(w["task_ids"]) == {"t1", "t2"}
+        assert w["rates"] == {"t1": 0.0, "t2": 0.05}
+
+    def test_all_one_rates_warns(self):
+        w = val_signal_warning({"t1": 1.0, "t2": 0.97})
+        assert w is not None
+        assert set(w["task_ids"]) == {"t1", "t2"}
+
+    def test_mixed_rates_no_warning(self):
+        assert val_signal_warning({"t1": 0.0, "t2": 0.5, "t3": 1.0}) is None
+
+    def test_single_midrange_rate_no_warning(self):
+        assert val_signal_warning({"t1": 0.4}) is None
+
+    def test_empty_input_no_warning(self):
+        assert val_signal_warning({}) is None
+
+    def test_warning_dict_includes_reason(self):
+        w = val_signal_warning({"t1": 0.0})
+        assert w is not None
+        assert "reason" in w
+
+
+class TestRepsFlags:
+    def _common(self, repo, suite, tmp_path):
+        return [
+            "--section", "MEMORY_GUIDANCE",
+            "--hermes-repo", str(repo),
+            "--tasks", str(suite),
+            "--dry-run",
+            "--output-dir", str(tmp_path / "out"),
+        ]
+
+    def test_default_reps_passed_through(self, tmp_path, monkeypatch):
+        repo = _fake_repo(tmp_path)
+        suite = _suite(tmp_path)
+        captured = {}
+        import evolution.prompts.evolve_prompt_section as mod
+
+        def fake(**kwargs):
+            captured.update(kwargs)
+            return {"decision": "dry_run"}
+
+        monkeypatch.setattr(mod, "evolve_prompt_section", fake)
+        res = CliRunner().invoke(mod.main, self._common(repo, suite, tmp_path))
+        assert res.exit_code == 0, res.output
+        assert captured["fitness_reps"] == 3
+        assert captured["gate_reps"] == 5
+
+    def test_explicit_reps_passed_through(self, tmp_path, monkeypatch):
+        repo = _fake_repo(tmp_path)
+        suite = _suite(tmp_path)
+        captured = {}
+        import evolution.prompts.evolve_prompt_section as mod
+
+        def fake(**kwargs):
+            captured.update(kwargs)
+            return {"decision": "dry_run"}
+
+        monkeypatch.setattr(mod, "evolve_prompt_section", fake)
+        res = CliRunner().invoke(mod.main, self._common(repo, suite, tmp_path) + [
+            "--fitness-reps", "2", "--gate-reps", "9",
+        ])
+        assert res.exit_code == 0, res.output
+        assert captured["fitness_reps"] == 2
+        assert captured["gate_reps"] == 9
+
+
+def test_evolve_accepts_gate_reps_and_wires_validator():
+    """gate_reps is a param defaulting to 1, and the deploy-gate validator is
+    constructed with reps=gate_reps (asserted statically — the construction is
+    deep inside an LM/agent path we don't pay for here)."""
+    import inspect
+    sig = inspect.signature(evolve_prompt_section)
+    assert sig.parameters["gate_reps"].default == 1
+    src = inspect.getsource(evolve_prompt_section)
+    assert "reps=gate_reps" in src
 
 
 def test_cli_dry_run_exits_zero(tmp_path):

@@ -141,6 +141,44 @@ def _make_layer2_factory(judge: Optional[SaveCallJudge]):
     return factory
 
 
+_VAL_SIGNAL_LOW = 0.05
+_VAL_SIGNAL_HIGH = 0.95
+
+
+def val_signal_warning(
+    holdout_baseline_rates: dict[str, float],
+) -> Optional[dict]:
+    """Flag a holdout with no discriminating signal for the deploy gate.
+
+    When every holdout task's baseline pass rate sits at one extreme — all
+    ≤ 0.05 (uniform failure) or all ≥ 0.95 (uniform success) — the gate has no
+    gradient to measure improvement against, so a "pass" is uninformative.
+    Returns a warning dict (offending task ids + their rates) in that case; a
+    single mid-range task is enough signal, so any rate strictly between the
+    bounds returns ``None``. Empty input → ``None``.
+    """
+    if not holdout_baseline_rates:
+        return None
+
+    rates = holdout_baseline_rates
+    all_low = all(r <= _VAL_SIGNAL_LOW for r in rates.values())
+    all_high = all(r >= _VAL_SIGNAL_HIGH for r in rates.values())
+    if not (all_low or all_high):
+        return None
+
+    kind = "uniform_failure" if all_low else "uniform_success"
+    return {
+        "kind": kind,
+        "reason": (
+            "All holdout baseline pass rates are at one extreme "
+            f"({'≤ %.2f' % _VAL_SIGNAL_LOW if all_low else '≥ %.2f' % _VAL_SIGNAL_HIGH}); "
+            "the deploy gate has no discriminating gradient on this suite."
+        ),
+        "task_ids": sorted(rates.keys()),
+        "rates": dict(rates),
+    }
+
+
 def _section_text_from_candidate(candidate: Any, section_name: str) -> str:
     """Extract the section body from a GEPA-built candidate (module or
     component dict), reading the sentinel-delimited region."""
@@ -287,6 +325,7 @@ def evolve_prompt_section(
     output_dir: Optional[Path] = None,
     baseline_override_file: Optional[Path] = None,
     fitness_reps: int = 1,
+    gate_reps: int = 1,
 ) -> dict[str, Any]:
     """Evolve one prompt section end-to-end. Returns a summary dict."""
     hermes_repo = Path(hermes_repo).resolve()
@@ -381,6 +420,13 @@ def evolve_prompt_section(
     COST_LEDGER.set_ceiling(max_total_cost_usd)
     if max_total_cost_usd is not None:
         console.print(f"  Cost ceiling: ${max_total_cost_usd:.2f}")
+    rep_multiplier = max(fitness_reps, gate_reps)
+    if rep_multiplier > 1:
+        console.print(
+            f"  [dim]Each task runs up to {rep_multiplier}× "
+            f"(fitness_reps={fitness_reps}, gate_reps={gate_reps}); "
+            f"scale per-task agent-run cost estimates accordingly.[/dim]"
+        )
 
     installer = HermesPromptSectionInstaller(hermes_repo, section_name)
     runner = HermesAgentRunner(
@@ -445,6 +491,10 @@ def evolve_prompt_section(
     trainset = _behavioral_examples(train_tasks)
     valset = _behavioral_examples(holdout_tasks)
 
+    # Derived from the saturation pre-flight's per-example baseline scores (no
+    # extra agent runs); stays None when the pre-flight is skipped.
+    val_warning: Optional[dict] = None
+
     try:
         start_time = time.time()
         with _prompt_builder_guard(installer.target_path):
@@ -458,6 +508,23 @@ def evolve_prompt_section(
                     baseline_artifact_text=baseline_text,
                 )
                 render_saturation_panel(sat_report, console=console)
+
+                # The pre-flight already scored the baseline per holdout
+                # example; its ``holdout_per_example`` list is order-aligned
+                # with ``holdout_tasks`` (both derive from the same
+                # _behavioral_examples call). Reuse it to flag a no-signal
+                # holdout — no additional runs.
+                holdout_baseline_rates = {
+                    t.task_id: rate
+                    for t, rate in zip(
+                        holdout_tasks, sat_report.holdout_per_example
+                    )
+                }
+                val_warning = val_signal_warning(holdout_baseline_rates)
+                if val_warning is not None:
+                    console.print(
+                        f"[yellow]⚠ Weak val signal: {val_warning['reason']}[/yellow]"
+                    )
                 if sat_report.band != "healthy" and not force_saturation_check:
                     if is_non_interactive():
                         console.print(
@@ -533,6 +600,7 @@ def evolve_prompt_section(
             runner=runner,
             layer2_judge_factory=layer2_factory,
             layer2_threshold=layer2_threshold,
+            reps=gate_reps,
         )
         report = validator.validate(ValidationInputs(
             tool_name=section_name,
@@ -591,6 +659,7 @@ def evolve_prompt_section(
         "cost": COST_LEDGER.summary(),
         "run_inputs": run_inputs,
         "pr_created": pr_block,
+        **({"val_signal_warning": val_warning} if val_warning is not None else {}),
         **section_payload,
     }
     gate_path = write_gate_decision(output_dir, decision_payload)
@@ -650,6 +719,10 @@ def evolve_prompt_section(
               type=click.IntRange(min=1))
 @click.option("--max-cost-usd", "max_total_cost_usd", default=150.0, type=float,
               help="Abort if cumulative spend exceeds this (default $150).")
+@click.option("--fitness-reps", default=3, type=click.IntRange(min=1),
+              help="Per-task agent runs during GEPA fitness scoring (default 3).")
+@click.option("--gate-reps", default=5, type=click.IntRange(min=1),
+              help="Per-task agent runs in the closed-loop deploy gate (default 5).")
 @click.option("--gepa-minibatch-size", default=3, type=click.IntRange(min=1))
 @click.option("--gepa-acceptance", default="improvement-or-equal",
               type=click.Choice(["improvement-or-equal", "strict-improvement"]))
@@ -672,6 +745,7 @@ def evolve_prompt_section(
 def main(section_name, hermes_repo, tasks_path, iterations, holdout_ratio, seed,
          max_growth, optimizer_model, reflection_model, eval_model, agent_model,
          layer2_threshold, task_timeout_seconds, max_total_cost_usd,
+         fitness_reps, gate_reps,
          gepa_minibatch_size, gepa_acceptance, skip_saturation_check,
          force_saturation_check, apply, create_pr_flag, dry_run, output_dir,
          baseline_override_file):
@@ -691,6 +765,8 @@ def main(section_name, hermes_repo, tasks_path, iterations, holdout_ratio, seed,
         layer2_threshold=layer2_threshold,
         task_timeout_seconds=task_timeout_seconds,
         max_total_cost_usd=max_total_cost_usd,
+        fitness_reps=fitness_reps,
+        gate_reps=gate_reps,
         gepa_minibatch_size=gepa_minibatch_size,
         gepa_acceptance=gepa_acceptance,
         skip_saturation_check=skip_saturation_check,
