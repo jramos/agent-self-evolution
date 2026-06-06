@@ -139,6 +139,152 @@ class TestScoreTaskLayer2:
         assert received == [[{"action": "add", "content": "c"}]]
 
 
+class TestScoreTaskActionPatch:
+    """Action-level verdict: expected_action='patch' + target_skill + stale_token."""
+
+    @staticmethod
+    def _run_with_skill_manage(
+        skill_name: str,
+        action: str,
+        old_string: str = "",
+        content: str = "",
+    ) -> AgentRunResult:
+        args: dict = {"action": action, "skill_name": skill_name}
+        if action in ("patch", "edit"):
+            if action == "patch":
+                args["old_string"] = old_string
+                args["new_string"] = old_string.replace("stale", "fresh")
+            else:
+                args["content"] = content
+        return AgentRunResult(
+            tool_calls_seq=["skill_manage"],
+            final_text_tail="",
+            duration_seconds=1.0,
+            tool_calls_with_args=[{"name": "skill_manage", "arguments": args}],
+        )
+
+    def test_patch_touching_stale_token_passes(self):
+        run = self._run_with_skill_manage(
+            "SKILLS_GUIDANCE", "patch", old_string="stale text here"
+        )
+        passed, abstained = score_task(
+            expected_tools=(),
+            forbidden_tools=(),
+            run=run,
+            expected_action="patch",
+            target_skill="SKILLS_GUIDANCE",
+            stale_token="stale",
+        )
+        assert passed and not abstained
+
+    def test_patch_not_touching_stale_token_fails(self):
+        run = self._run_with_skill_manage(
+            "SKILLS_GUIDANCE", "patch", old_string="completely different text"
+        )
+        passed, abstained = score_task(
+            expected_tools=(),
+            forbidden_tools=(),
+            run=run,
+            expected_action="patch",
+            target_skill="SKILLS_GUIDANCE",
+            stale_token="stale",
+        )
+        assert not passed and not abstained
+
+    def test_patch_wrong_skill_fails(self):
+        run = self._run_with_skill_manage(
+            "OTHER_SKILL", "patch", old_string="stale text here"
+        )
+        passed, abstained = score_task(
+            expected_tools=(),
+            forbidden_tools=(),
+            run=run,
+            expected_action="patch",
+            target_skill="SKILLS_GUIDANCE",
+            stale_token="stale",
+        )
+        assert not passed and not abstained
+
+    def test_edit_with_stale_token_absent_from_content_passes(self):
+        # edit action: content must NOT contain stale_token (it was replaced)
+        run = self._run_with_skill_manage(
+            "SKILLS_GUIDANCE", "edit", content="fresh text here"
+        )
+        passed, abstained = score_task(
+            expected_tools=(),
+            forbidden_tools=(),
+            run=run,
+            expected_action="patch",
+            target_skill="SKILLS_GUIDANCE",
+            stale_token="stale",
+        )
+        assert passed and not abstained
+
+    def test_edit_with_stale_token_still_in_content_fails(self):
+        # edit action: if stale_token still in content, the skill wasn't updated
+        run = self._run_with_skill_manage(
+            "SKILLS_GUIDANCE", "edit", content="still stale text here"
+        )
+        passed, abstained = score_task(
+            expected_tools=(),
+            forbidden_tools=(),
+            run=run,
+            expected_action="patch",
+            target_skill="SKILLS_GUIDANCE",
+            stale_token="stale",
+        )
+        assert not passed and not abstained
+
+    def test_no_skill_manage_call_fails(self):
+        run = AgentRunResult(
+            tool_calls_seq=["read_file"],
+            final_text_tail="",
+            duration_seconds=1.0,
+            tool_calls_with_args=[{"name": "read_file", "arguments": {"path": "x"}}],
+        )
+        passed, abstained = score_task(
+            expected_tools=(),
+            forbidden_tools=(),
+            run=run,
+            expected_action="patch",
+            target_skill="SKILLS_GUIDANCE",
+            stale_token="stale",
+        )
+        assert not passed and not abstained
+
+    def test_runner_error_abstains(self):
+        run = AgentRunResult(
+            tool_calls_seq=[],
+            final_text_tail="",
+            duration_seconds=1.0,
+            error="hermes timed out",
+        )
+        passed, abstained = score_task(
+            expected_tools=(),
+            forbidden_tools=(),
+            run=run,
+            expected_action="patch",
+            target_skill="SKILLS_GUIDANCE",
+            stale_token="stale",
+        )
+        assert not passed and abstained
+
+    def test_expected_action_none_leaves_existing_membership_path_unchanged(self):
+        # Regression guard: when expected_action is None, behavior is identical
+        # to today's tool-membership scoring.
+        run = AgentRunResult(
+            tool_calls_seq=["patch"],
+            final_text_tail="",
+            duration_seconds=1.0,
+        )
+        passed, abstained = score_task(
+            expected_tools=("patch",),
+            forbidden_tools=("write_file",),
+            run=run,
+        )
+        assert passed and not abstained
+
+
 class TestScoreTaskTestCommandMode:
     """When ``test_command`` is set on a task, the verdict is exit-code-driven,
     not tool-call-driven. Used by skill-side suites (e.g., planted-bug:
