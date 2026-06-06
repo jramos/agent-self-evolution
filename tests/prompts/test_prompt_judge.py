@@ -123,14 +123,14 @@ def test_memoizing_scorer_splices_only_on_candidate_change():
         score_fn=lambda task_id: scores[task_id],
     )
     # Same candidate across two tasks → one install.
-    assert scorer("task-a", "cand-1") == 0.7
-    assert scorer("task-b", "cand-1") == 0.9
+    assert scorer("task-a", "cand-1").score == pytest.approx(0.7)
+    assert scorer("task-b", "cand-1").score == pytest.approx(0.9)
     assert installs == ["cand-1"]
     # New candidate → re-splice.
-    assert scorer("task-a", "cand-2") == 0.7
+    assert scorer("task-a", "cand-2").score == pytest.approx(0.7)
     assert installs == ["cand-1", "cand-2"]
     # Back to a prior candidate is NOT cached across changes → re-splice.
-    assert scorer("task-a", "cand-1") == 0.7
+    assert scorer("task-a", "cand-1").score == pytest.approx(0.7)
     assert installs == ["cand-1", "cand-2", "cand-1"]
 
 
@@ -219,3 +219,98 @@ def test_score_with_feedback_empty_feedback_when_judge_returns_empty():
         )
     assert result.score == pytest.approx(1.0)
     assert result.feedback == ""
+
+
+# ---- make_memoizing_splice_scorer: ScoreResult propagation ----
+
+def test_memoizing_scorer_propagates_score_result():
+    """score_fn returning ScoreResult → scorer returns that ScoreResult (score + feedback)."""
+    installs: list[str] = []
+
+    def score_fn(task_id: str):
+        return ScoreResult(0.4, "patched 1/4")
+
+    scorer = make_memoizing_splice_scorer(
+        install_fn=lambda text: installs.append(text),
+        score_fn=score_fn,
+    )
+    result = scorer("task-a", "cand-x")
+    assert isinstance(result, ScoreResult)
+    assert result.score == pytest.approx(0.4)
+    assert result.feedback == "patched 1/4"
+
+
+def test_memoizing_scorer_propagates_install_memoization_with_score_result():
+    """Install-memoization still works when score_fn returns ScoreResult."""
+    installs: list[str] = []
+    call_count = [0]
+
+    def score_fn(task_id: str):
+        call_count[0] += 1
+        return ScoreResult(0.5, "ok")
+
+    scorer = make_memoizing_splice_scorer(
+        install_fn=lambda text: installs.append(text),
+        score_fn=score_fn,
+    )
+    scorer("task-a", "cand-1")
+    scorer("task-b", "cand-1")  # same candidate → no re-install
+    assert installs == ["cand-1"]
+    scorer("task-a", "cand-2")  # new candidate → re-install
+    assert installs == ["cand-1", "cand-2"]
+
+
+def test_memoizing_scorer_normalizes_bare_float():
+    """score_fn returning a bare float → scorer returns ScoreResult(score=x, feedback="")."""
+    scorer = make_memoizing_splice_scorer(
+        install_fn=lambda text: None,
+        score_fn=lambda task_id: 0.7,
+    )
+    result = scorer("task-a", "cand-x")
+    assert isinstance(result, ScoreResult)
+    assert result.score == pytest.approx(0.7)
+    assert result.feedback == ""
+
+
+# ---- make_prompt_fitness_metric: ScoreResult propagation ----
+
+def test_metric_merges_behavioral_feedback_with_budget_note():
+    """closed_loop_scorer returning ScoreResult → metric combines agent feedback + budget note."""
+    def fake_scorer(task_id, candidate_text):
+        return ScoreResult(0.4, "agent patched 0/4 reps")
+
+    metric = make_prompt_fitness_metric(
+        baseline_text="baseline body",
+        max_growth=0.2,
+        closed_loop_scorer=fake_scorer,
+    )
+    result = metric(gold=object(), pred=_behavioral_pred(task_id="t1", candidate="..."))
+    assert result.score == pytest.approx(0.4)
+    assert "agent patched 0/4 reps" in result.feedback
+    assert "BUDGET" in result.feedback
+
+
+def test_metric_bare_float_scorer_feedback_is_budget_only():
+    """closed_loop_scorer returning bare float → feedback is just the budget note."""
+    metric = make_prompt_fitness_metric(
+        baseline_text="baseline",
+        max_growth=0.2,
+        closed_loop_scorer=lambda task_id, candidate_text: 0.8,
+    )
+    result = metric(gold=object(), pred=_behavioral_pred())
+    assert result.score == pytest.approx(0.8)
+    assert "BUDGET" in result.feedback
+    # no extra behavioral feedback prefix
+    assert result.feedback.startswith("[BUDGET]")
+
+
+def test_metric_task_id_none_degenerate_path_unchanged():
+    """Degenerate path (no task_id) still scores 0 with diagnostic feedback."""
+    metric = make_prompt_fitness_metric(
+        baseline_text="b", max_growth=0.2,
+        closed_loop_scorer=lambda *_: ScoreResult(1.0, "should not appear"),
+    )
+    pred = type("Pred", (), {})()  # no _closed_loop_task_id
+    result = metric(gold=object(), pred=pred)
+    assert result.score == 0.0
+    assert "behavioral" in result.feedback.lower()
