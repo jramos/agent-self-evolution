@@ -197,6 +197,7 @@ def _run_one_task_score(
     layer2_factory,
     layer2_threshold: float,
     reps: int = 1,
+    suite_dir: Optional[Path] = None,
 ) -> ScoreResult:
     """Run a task through the agent ``reps`` times, returning mean pass rate.
 
@@ -205,6 +206,13 @@ def _run_one_task_score(
     """
     n_pass = 0
     n_abstain = 0
+
+    # ``skills_src`` is a path relative to the suite file's directory.
+    skills_src = (
+        (suite_dir / task.skills_src)
+        if (task.skills_src and suite_dir is not None)
+        else None
+    )
 
     for _ in range(reps):
         with tempfile.TemporaryDirectory(prefix="ps_inner_") as fixture_tmp:
@@ -216,6 +224,7 @@ def _run_one_task_score(
             ctx = TaskRunContext(
                 user_message=task.render_message(fixture_dir),
                 fixture_dir=fixture_dir,
+                skills_src=skills_src,
             )
             run = runner.run(ctx)
             passed, abstained = score_task(
@@ -226,6 +235,9 @@ def _run_one_task_score(
                 fixture_dir=fixture_dir,
                 layer2_judge_fn=layer2_factory(task),
                 layer2_threshold=layer2_threshold,
+                expected_action=task.expected_action,
+                target_skill=task.target_skill,
+                stale_token=task.stale_token,
             )
             if abstained:
                 n_abstain += 1
@@ -378,6 +390,7 @@ def evolve_prompt_section(
     layer2_factory = _make_layer2_factory(judge)
 
     tasks_by_id = {t.task_id: t for t in suite.tasks}
+    suite_dir = suite.path.parent if suite.path is not None else None
 
     def install_candidate(candidate_text: str) -> None:
         source.write(section_name, candidate_text)
@@ -389,6 +402,7 @@ def evolve_prompt_section(
             layer2_factory=layer2_factory,
             layer2_threshold=layer2_threshold,
             reps=fitness_reps,
+            suite_dir=suite_dir,
         )
 
     # One lock serializes splice+run across dspy.Evaluate's thread pool — the

@@ -112,6 +112,11 @@ class ClosedLoopValidator:
         backup_path = target.with_suffix(target.suffix + _BACKUP_SUFFIX)
         _refuse_if_stale_backup_exists(backup_path, self.installer)
 
+        # ``skills_src`` on a task is a path relative to the suite file's
+        # directory; tasks without a suite path on disk (synthetic suites) get
+        # no skill staging.
+        suite_dir = inputs.suite.path.parent if inputs.suite.path is not None else None
+
         with _exclusive_lock(target.parent):
             atomic_write_bytes(backup_path, target.read_bytes())
             self.installer.verify_backup(backup_path)
@@ -119,10 +124,12 @@ class ClosedLoopValidator:
                 baseline_results = self._run_phase(
                     inputs.suite,
                     artifact=inputs.baseline_artifact,
+                    suite_dir=suite_dir,
                 )
                 evolved_results = self._run_phase(
                     inputs.suite,
                     artifact=inputs.evolved_artifact,
+                    suite_dir=suite_dir,
                 )
             finally:
                 atomic_write_bytes(target, backup_path.read_bytes())
@@ -144,11 +151,13 @@ class ClosedLoopValidator:
             decision_reasons=reasons,
         )
 
-    def _run_phase(self, suite: TaskSuite, *, artifact: Path) -> list[TaskResult]:
+    def _run_phase(
+        self, suite: TaskSuite, *, artifact: Path, suite_dir: Optional[Path]
+    ) -> list[TaskResult]:
         results: list[TaskResult] = []
         for task in suite.tasks:
             expected_sha = self.installer.install(artifact)
-            result = self._run_one_task(task)
+            result = self._run_one_task(task, suite_dir=suite_dir)
             # Verify the agent didn't write to the tool file during the task.
             # Drift here means later tasks would silently run a corrupt baseline,
             # so we abort the phase before that happens.
@@ -156,10 +165,17 @@ class ClosedLoopValidator:
             results.append(result)
         return results
 
-    def _run_one_task(self, task: Task) -> TaskResult:
+    def _run_one_task(
+        self, task: Task, *, suite_dir: Optional[Path] = None
+    ) -> TaskResult:
         layer2_judge_fn = (
             self.layer2_judge_factory(task)
             if self.layer2_judge_factory is not None
+            else None
+        )
+        skills_src = (
+            (suite_dir / task.skills_src)
+            if (task.skills_src and suite_dir is not None)
             else None
         )
         n_pass = 0
@@ -172,7 +188,7 @@ class ClosedLoopValidator:
                 ctx = TaskRunContext(
                     user_message=task.render_message(fixture_dir),
                     fixture_dir=fixture_dir,
-                    skills_src=getattr(self.installer, "skills_src", None),
+                    skills_src=skills_src,
                 )
                 run = self.runner.run(ctx)
                 passed, abstained = score_task(
@@ -183,6 +199,9 @@ class ClosedLoopValidator:
                     fixture_dir=fixture_dir,
                     layer2_judge_fn=layer2_judge_fn,
                     layer2_threshold=self.layer2_threshold,
+                    expected_action=task.expected_action,
+                    target_skill=task.target_skill,
+                    stale_token=task.stale_token,
                 )
             last_run = run
             if abstained:

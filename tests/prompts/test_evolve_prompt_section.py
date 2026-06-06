@@ -144,6 +144,101 @@ class TestRunOneTaskScore:
         assert result.score == 1.0
 
 
+class _RecordingRunner:
+    """Records each TaskRunContext it receives; returns a fixed pass result."""
+
+    def __init__(self):
+        self.contexts = []
+
+    def run(self, ctx: TaskRunContext) -> AgentRunResult:
+        self.contexts.append(ctx)
+        return _pass_result()
+
+
+class TestRunOneTaskScoreSkillsSrc:
+    def test_skills_src_resolved_relative_to_suite_dir(self, tmp_path):
+        task = Task(task_id="t1", user_message="m", expected_tools=("memory",),
+                    skills_src="myfix")
+        runner = _RecordingRunner()
+        _run_one_task_score(
+            task, runner=runner, layer2_factory=_no_layer2_factory,
+            layer2_threshold=0.7, suite_dir=tmp_path,
+        )
+        assert runner.contexts
+        assert runner.contexts[0].skills_src == tmp_path / "myfix"
+
+    def test_skills_src_none_when_no_field(self, tmp_path):
+        task = _task("t1")
+        runner = _RecordingRunner()
+        _run_one_task_score(
+            task, runner=runner, layer2_factory=_no_layer2_factory,
+            layer2_threshold=0.7, suite_dir=tmp_path,
+        )
+        assert runner.contexts
+        assert runner.contexts[0].skills_src is None
+
+    def test_skills_src_none_when_no_suite_dir(self):
+        """skills_src set but no suite_dir threaded → ctx.skills_src is None."""
+        task = Task(task_id="t1", user_message="m", expected_tools=("memory",),
+                    skills_src="myfix")
+        runner = _RecordingRunner()
+        _run_one_task_score(
+            task, runner=runner, layer2_factory=_no_layer2_factory,
+            layer2_threshold=0.7,
+        )
+        assert runner.contexts
+        assert runner.contexts[0].skills_src is None
+
+
+class TestRunOneTaskScoreActionVerdict:
+    def test_action_params_forwarded_to_score_task(self, monkeypatch):
+        task = Task(task_id="t1", user_message="m", expected_action="patch",
+                    target_skill="s", stale_token="tok")
+        runner = _RecordingRunner()
+
+        captured = []
+        import evolution.prompts.evolve_prompt_section as mod
+        real = mod.score_task
+
+        def spy(**kwargs):
+            captured.append(kwargs)
+            return real(**kwargs)
+
+        monkeypatch.setattr(mod, "score_task", spy)
+        _run_one_task_score(
+            task, runner=runner, layer2_factory=_no_layer2_factory,
+            layer2_threshold=0.7,
+        )
+        assert captured
+        for kw in captured:
+            assert kw["expected_action"] == "patch"
+            assert kw["target_skill"] == "s"
+            assert kw["stale_token"] == "tok"
+
+    def test_no_new_fields_forwards_none(self, monkeypatch):
+        task = _task("t1")
+        runner = _RecordingRunner()
+
+        captured = []
+        import evolution.prompts.evolve_prompt_section as mod
+        real = mod.score_task
+
+        def spy(**kwargs):
+            captured.append(kwargs)
+            return real(**kwargs)
+
+        monkeypatch.setattr(mod, "score_task", spy)
+        _run_one_task_score(
+            task, runner=runner, layer2_factory=_no_layer2_factory,
+            layer2_threshold=0.7,
+        )
+        assert captured
+        for kw in captured:
+            assert kw["expected_action"] is None
+            assert kw["target_skill"] is None
+            assert kw["stale_token"] is None
+
+
 def test_split_is_deterministic_and_non_empty():
     tasks = tuple(_task(f"t{i}") for i in range(10))
     train1, holdout1 = _split_train_holdout(tasks, holdout_ratio=0.5, seed=42)

@@ -348,3 +348,144 @@ class TestClosedLoopValidatorHappyPath:
         assert report.delta.n_losses == 0
         assert report.delta.n_ties == 1
         assert report.evolved.n_abstained == 1
+
+
+class _RecordingRunner:
+    """Records every TaskRunContext it receives; returns a fixed result."""
+
+    def __init__(self, target_path: Path, result: AgentRunResult):
+        self.target_path = target_path
+        self._result = result
+        self.contexts: list[TaskRunContext] = []
+
+    def run(self, ctx: TaskRunContext) -> AgentRunResult:
+        self.contexts.append(ctx)
+        return self._result
+
+
+def _ok_result() -> AgentRunResult:
+    return AgentRunResult(
+        tool_calls_seq=["memory"], final_text_tail="ok", duration_seconds=0.1,
+    )
+
+
+class TestClosedLoopValidatorSkillsSrc:
+    def _artifacts(self, tmp_path):
+        target = tmp_path / "tool.py"
+        target.write_text("# original\n")
+        baseline = tmp_path / "baseline.py"
+        baseline.write_text("# baseline\n")
+        evolved = tmp_path / "evolved.py"
+        evolved.write_text("# evolved\n")
+        return target, baseline, evolved
+
+    def test_skills_src_resolved_relative_to_suite_dir(self, tmp_path):
+        """A task with skills_src='myfix' → the runner's ctx.skills_src is
+        <suite_dir>/myfix (resolved against the suite file's directory)."""
+        target, baseline, evolved = self._artifacts(tmp_path)
+        suite_dir = tmp_path / "suite_home"
+        suite_dir.mkdir()
+        suite_path = suite_dir / "suite.jsonl"
+        suite_path.write_text(json.dumps(
+            {"task_id": "t1", "user_message": "do",
+             "expected_tools": ["memory"], "skills_src": "myfix"}
+        ) + "\n")
+        suite = TaskSuite.from_jsonl(suite_path)
+
+        runner = _RecordingRunner(target, _ok_result())
+        validator = ClosedLoopValidator(_StubInstaller(target), runner)
+        validator.validate(ValidationInputs(
+            tool_name="memory", suite=suite,
+            baseline_artifact=baseline, evolved_artifact=evolved,
+        ))
+        assert runner.contexts, "runner was never called"
+        for ctx in runner.contexts:
+            assert ctx.skills_src == suite_dir / "myfix"
+
+    def test_skills_src_none_leaves_ctx_unchanged(self, tmp_path):
+        """A task without skills_src → ctx.skills_src is None."""
+        target, baseline, evolved = self._artifacts(tmp_path)
+        suite = _write_suite(tmp_path, [
+            {"task_id": "t1", "user_message": "do", "expected_tools": ["memory"]},
+        ])
+        runner = _RecordingRunner(target, _ok_result())
+        validator = ClosedLoopValidator(_StubInstaller(target), runner)
+        validator.validate(ValidationInputs(
+            tool_name="memory", suite=suite,
+            baseline_artifact=baseline, evolved_artifact=evolved,
+        ))
+        assert runner.contexts
+        for ctx in runner.contexts:
+            assert ctx.skills_src is None
+
+
+class TestClosedLoopValidatorActionVerdict:
+    def _artifacts(self, tmp_path):
+        target = tmp_path / "tool.py"
+        target.write_text("# original\n")
+        baseline = tmp_path / "baseline.py"
+        baseline.write_text("# baseline\n")
+        evolved = tmp_path / "evolved.py"
+        evolved.write_text("# evolved\n")
+        return target, baseline, evolved
+
+    def test_action_params_forwarded_to_score_task(self, tmp_path, monkeypatch):
+        """expected_action/target_skill/stale_token are forwarded into every
+        score_task call."""
+        target, baseline, evolved = self._artifacts(tmp_path)
+        suite = _write_suite(tmp_path, [
+            {"task_id": "t1", "user_message": "patch it",
+             "expected_action": "patch", "target_skill": "s",
+             "stale_token": "tok"},
+        ])
+
+        captured: list[dict] = []
+        import evolution.validation.validator as validator_mod
+        real_score_task = validator_mod.score_task
+
+        def spy(**kwargs):
+            captured.append(kwargs)
+            return real_score_task(**kwargs)
+
+        monkeypatch.setattr(validator_mod, "score_task", spy)
+
+        runner = _RecordingRunner(target, _ok_result())
+        validator = ClosedLoopValidator(_StubInstaller(target), runner)
+        validator.validate(ValidationInputs(
+            tool_name="s", suite=suite,
+            baseline_artifact=baseline, evolved_artifact=evolved,
+        ))
+        assert captured, "score_task was never called"
+        for kw in captured:
+            assert kw["expected_action"] == "patch"
+            assert kw["target_skill"] == "s"
+            assert kw["stale_token"] == "tok"
+
+    def test_no_new_fields_forwards_none(self, tmp_path, monkeypatch):
+        """A task without the action fields forwards None for all three."""
+        target, baseline, evolved = self._artifacts(tmp_path)
+        suite = _write_suite(tmp_path, [
+            {"task_id": "t1", "user_message": "do", "expected_tools": ["memory"]},
+        ])
+
+        captured: list[dict] = []
+        import evolution.validation.validator as validator_mod
+        real_score_task = validator_mod.score_task
+
+        def spy(**kwargs):
+            captured.append(kwargs)
+            return real_score_task(**kwargs)
+
+        monkeypatch.setattr(validator_mod, "score_task", spy)
+
+        runner = _RecordingRunner(target, _ok_result())
+        validator = ClosedLoopValidator(_StubInstaller(target), runner)
+        validator.validate(ValidationInputs(
+            tool_name="memory", suite=suite,
+            baseline_artifact=baseline, evolved_artifact=evolved,
+        ))
+        assert captured
+        for kw in captured:
+            assert kw["expected_action"] is None
+            assert kw["target_skill"] is None
+            assert kw["stale_token"] is None
