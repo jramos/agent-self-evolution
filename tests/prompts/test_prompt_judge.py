@@ -1,11 +1,11 @@
 """Tests for the SaveCallJudge — scores memory-save args against MEMORY_GUIDANCE rules."""
 from __future__ import annotations
 
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, patch
 
 import pytest
 
-from evolution.prompts.prompt_judge import SaveCallJudge, judge_save_calls
+from evolution.prompts.prompt_judge import SaveCallJudge, ScoreResult, judge_save_calls
 
 
 def test_no_save_calls_yields_default():
@@ -132,3 +132,90 @@ def test_memoizing_scorer_splices_only_on_candidate_change():
     # Back to a prior candidate is NOT cached across changes → re-splice.
     assert scorer("task-a", "cand-1") == 0.7
     assert installs == ["cand-1", "cand-2", "cand-1"]
+
+
+# ---- ScoreResult + SaveCallJudge.score_with_feedback ----
+
+def _make_fake_prediction(quality: str, feedback: str):
+    pred = MagicMock()
+    pred.quality = quality
+    pred.feedback = feedback
+    return pred
+
+
+def _make_judge_with_fake_lm(quality: str, feedback: str):
+    """Build a SaveCallJudge whose dspy ChainOfThought call is monkeypatched.
+
+    The patch targets ``SaveCallJudge.judge`` (the bound ChainOfThought instance)
+    so that calling it returns a fake prediction with the given quality/feedback
+    fields — exactly the approach used by the existing judge_save_calls tests
+    (which mock the judge at the SaveCallJudge level via MagicMock(spec=...)).
+    No real LM call is made.
+    """
+    from evolution.core.config import EvolutionConfig
+
+    cfg = MagicMock(spec=EvolutionConfig)
+    lm_cfg = MagicMock()
+    lm_cfg.model = "openai/gpt-4o-mini"
+    lm_cfg.lm_kwargs = {}
+    cfg.get_lm.return_value = lm_cfg
+
+    judge = SaveCallJudge(config=cfg)
+    fake_pred = _make_fake_prediction(quality=quality, feedback=feedback)
+    judge.judge = MagicMock(return_value=fake_pred)
+    return judge
+
+
+def test_score_result_is_dataclass():
+    r = ScoreResult(score=0.8, feedback="x")
+    assert r.score == 0.8
+    assert r.feedback == "x"
+
+
+def test_score_result_feedback_defaults_to_empty():
+    r = ScoreResult(score=0.5)
+    assert r.feedback == ""
+
+
+def test_score_with_feedback_returns_score_and_feedback():
+    judge = _make_judge_with_fake_lm(quality="0.9", feedback="good save")
+    with patch("dspy.LM", return_value=MagicMock()), \
+         patch("dspy.context") as mock_ctx:
+        mock_ctx.return_value.__enter__ = lambda s: s
+        mock_ctx.return_value.__exit__ = MagicMock(return_value=False)
+        result = judge.score_with_feedback(
+            task="store user preference",
+            expected_content="durable preference fact",
+            saved_content="user prefers dark mode",
+        )
+    assert isinstance(result, ScoreResult)
+    assert result.score == pytest.approx(0.9)
+    assert result.feedback == "good save"
+
+
+def test_score_still_returns_bare_float():
+    judge = _make_judge_with_fake_lm(quality="0.75", feedback="minor issue")
+    with patch("dspy.LM", return_value=MagicMock()), \
+         patch("dspy.context") as mock_ctx:
+        mock_ctx.return_value.__enter__ = lambda s: s
+        mock_ctx.return_value.__exit__ = MagicMock(return_value=False)
+        result = judge.score(
+            task="store user preference",
+            expected_content="durable preference fact",
+            saved_content="user prefers dark mode",
+        )
+    assert isinstance(result, float)
+    assert result == pytest.approx(0.75)
+
+
+def test_score_with_feedback_empty_feedback_when_judge_returns_empty():
+    judge = _make_judge_with_fake_lm(quality="1.0", feedback="")
+    with patch("dspy.LM", return_value=MagicMock()), \
+         patch("dspy.context") as mock_ctx:
+        mock_ctx.return_value.__enter__ = lambda s: s
+        mock_ctx.return_value.__exit__ = MagicMock(return_value=False)
+        result = judge.score_with_feedback(
+            task="t", expected_content="e", saved_content="s",
+        )
+    assert result.score == pytest.approx(1.0)
+    assert result.feedback == ""

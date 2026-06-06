@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import logging
 import threading
+from dataclasses import dataclass, field
 from typing import Any, Callable, Optional
 
 import dspy
@@ -16,6 +17,13 @@ from evolution.core.config import EvolutionConfig
 from evolution.core.fitness import _clamp_to_unit
 
 logger = logging.getLogger(__name__)
+
+
+@dataclass
+class ScoreResult:
+    score: float
+    feedback: str = ""
+
 
 MAX_JUDGED_CALLS_PER_TASK = 5
 """Cap on how many save calls per task the judge will score. Excess calls
@@ -58,7 +66,9 @@ class SaveCallJudge:
         self.config = config
         self.judge = dspy.ChainOfThought(SaveCallSignature)
 
-    def score(self, *, task: str, expected_content: str, saved_content: str) -> float:
+    def score_with_feedback(
+        self, *, task: str, expected_content: str, saved_content: str
+    ) -> ScoreResult:
         _lm = self.config.get_lm("eval")
         lm = dspy.LM(
             _lm.model,
@@ -85,7 +95,15 @@ class SaveCallJudge:
                 "SaveCallJudge: unparseable quality %r from judge LM; "
                 "falling back to neutral 0.5", result.quality,
             )
-        return _clamp_to_unit(result.quality)
+        return ScoreResult(
+            score=_clamp_to_unit(result.quality),
+            feedback=str(result.feedback) if result.feedback else "",
+        )
+
+    def score(self, *, task: str, expected_content: str, saved_content: str) -> float:
+        return self.score_with_feedback(
+            task=task, expected_content=expected_content, saved_content=saved_content
+        ).score
 
 
 def judge_save_calls(
