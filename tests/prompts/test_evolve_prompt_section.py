@@ -471,3 +471,33 @@ def test_cli_dry_run_exits_zero(tmp_path):
         "--output-dir", str(tmp_path / "out"),
     ])
     assert res.exit_code == 0, res.output
+
+
+def test_synth_feedback_action_task_states_patch_objective():
+    from evolution.prompts.evolve_prompt_section import _synth_feedback
+    from evolution.validation.task import Task
+    task = Task(
+        task_id="patch-stale-flag", user_message="use it",
+        expected_tools=("skill_manage",), expected_action="patch",
+        target_skill="line-counter", stale_token="wc --lines",
+    )
+    fb = _synth_feedback(task, "passed 0/4")
+    assert "line-counter" in fb and "wc --lines" in fb
+    assert "PROACTIVELY" in fb and "skill_manage(action='patch')" in fb
+    assert "passed 0/4" in fb
+
+
+def test_synth_feedback_control_states_do_not_patch():
+    from evolution.prompts.evolve_prompt_section import _synth_feedback
+    from evolution.validation.task import Task
+    task = Task(task_id="ctl", user_message="use it", forbidden_tools=("skill_manage",))
+    fb = _synth_feedback(task, "passed 4/4")
+    assert "CORRECT" in fb and "NOT patch" in fb
+
+
+def test_synth_feedback_generic_membership_task():
+    from evolution.prompts.evolve_prompt_section import _synth_feedback
+    from evolution.validation.task import Task
+    task = Task(task_id="mem", user_message="x", expected_tools=("memory",))
+    fb = _synth_feedback(task, "passed 3/4")
+    assert "memory" in fb and "objective" in fb

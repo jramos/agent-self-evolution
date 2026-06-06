@@ -285,18 +285,42 @@ def _run_one_task_score(
     scored = reps - n_abstain
     rate = (n_pass / scored) if scored else 0.0
 
+    observed = (
+        f"all {reps} runs abstained" if scored == 0
+        else f"passed {n_pass}/{scored}"
+        + (f" ({n_abstain} abstained)" if n_abstain else "")
+    )
+    return ScoreResult(score=rate, feedback=_synth_feedback(task, observed))
+
+
+def _synth_feedback(task: Task, observed: str) -> str:
+    """Outcome-grounded feedback for GEPA's reflection LM. For action tasks it
+    states the patch objective + the stale token the skill carries (so the LM
+    knows what behavior to instill); for controls it states the do-not-act
+    objective. Neutral — describes the eval rubric and observed behavior, never
+    any target-prompt wording."""
+    if task.expected_action and task.target_skill:
+        return (
+            f"Objective: while doing the task the agent uses the "
+            f"'{task.target_skill}' skill, whose written instructions are STALE "
+            f"(they tell it to use '{task.stale_token}', which fails). After "
+            f"working around the failure it should PROACTIVELY call "
+            f"skill_manage(action='{task.expected_action}') to fix the skill's "
+            f"instructions, unprompted. Observed over the runs: {observed}. "
+            f"Improve the prompt so the agent reliably fixes a skill it discovers "
+            f"is wrong while using it — without touching skills that are correct."
+        )
+    if "skill_manage" in task.forbidden_tools:
+        return (
+            f"Objective: the skill here is CORRECT; the agent must NOT patch or "
+            f"modify it. Observed over the runs: {observed} (a pass means it "
+            f"correctly refrained). Do not induce edits to skills that are fine."
+        )
     objective = (
         f"expected={list(task.expected_tools) or '[]'}, "
         f"forbidden={list(task.forbidden_tools) or '[]'}"
     )
-    if scored == 0:
-        feedback = f"pass 0/{reps} (all abstained); objective: {objective}"
-    elif n_abstain:
-        feedback = f"pass {n_pass}/{scored} scored ({n_abstain} abstained); objective: {objective}"
-    else:
-        feedback = f"pass {n_pass}/{reps}; objective: {objective}"
-
-    return ScoreResult(score=rate, feedback=feedback)
+    return f"{observed}; objective: {objective}"
 
 
 def evolve_prompt_section(
