@@ -16,12 +16,15 @@ from evolution.prompts.evolve_prompt_section import (
     _LOCK_FILENAME,
     _make_layer2_factory,
     _prompt_builder_guard,
+    _run_one_task_score,
     _section_text_from_candidate,
     _split_train_holdout,
     evolve_prompt_section,
     main,
 )
+from evolution.prompts.prompt_judge import ScoreResult
 from evolution.prompts.prompt_module import PromptModule
+from evolution.validation.agent_runner import AgentRunResult, TaskRunContext
 from evolution.validation.task import Task
 
 
@@ -30,6 +33,115 @@ def _task(task_id: str, rubric: str | None = None) -> Task:
         task_id=task_id, user_message="m", expected_tools=("memory",),
         expected_save_content=rubric,
     )
+
+
+# ---------------------------------------------------------------------------
+# Fake runner helpers for _run_one_task_score tests
+# ---------------------------------------------------------------------------
+
+def _pass_result() -> AgentRunResult:
+    return AgentRunResult(tool_calls_seq=["memory"], final_text_tail="", duration_seconds=0.0)
+
+
+def _fail_result() -> AgentRunResult:
+    return AgentRunResult(tool_calls_seq=[], final_text_tail="", duration_seconds=0.0)
+
+
+def _abstain_result() -> AgentRunResult:
+    return AgentRunResult(tool_calls_seq=[], final_text_tail="", duration_seconds=0.0, error="timeout")
+
+
+class _ScriptedRunner:
+    """Returns scripted AgentRunResults in order (cycling if exhausted)."""
+
+    def __init__(self, results: list[AgentRunResult]):
+        self._results = results
+        self._idx = 0
+
+    def run(self, ctx: TaskRunContext) -> AgentRunResult:
+        result = self._results[self._idx % len(self._results)]
+        self._idx += 1
+        return result
+
+
+def _no_layer2_factory(task):
+    return None
+
+
+class TestRunOneTaskScore:
+    def test_reps1_pass_returns_score_result_1(self, tmp_path):
+        task = _task("t1")
+        runner = _ScriptedRunner([_pass_result()])
+        result = _run_one_task_score(
+            task, runner=runner, layer2_factory=_no_layer2_factory, layer2_threshold=0.7, reps=1
+        )
+        assert isinstance(result, ScoreResult)
+        assert result.score == 1.0
+
+    def test_reps1_fail_returns_score_result_0(self):
+        task = _task("t1")
+        runner = _ScriptedRunner([_fail_result()])
+        result = _run_one_task_score(
+            task, runner=runner, layer2_factory=_no_layer2_factory, layer2_threshold=0.7, reps=1
+        )
+        assert isinstance(result, ScoreResult)
+        assert result.score == 0.0
+
+    def test_reps1_abstain_returns_score_result_0(self):
+        task = _task("t1")
+        runner = _ScriptedRunner([_abstain_result()])
+        result = _run_one_task_score(
+            task, runner=runner, layer2_factory=_no_layer2_factory, layer2_threshold=0.7, reps=1
+        )
+        assert isinstance(result, ScoreResult)
+        assert result.score == 0.0
+
+    def test_reps4_one_pass_gives_quarter(self):
+        # 1 pass, 3 fails → 1/4 = 0.25
+        runner = _ScriptedRunner([_pass_result(), _fail_result(), _fail_result(), _fail_result()])
+        result = _run_one_task_score(
+            _task("t1"), runner=runner,
+            layer2_factory=_no_layer2_factory, layer2_threshold=0.7, reps=4,
+        )
+        assert result.score == pytest.approx(0.25)
+        assert "1/4" in result.feedback
+
+    def test_abstentions_excluded_from_denominator(self):
+        # 4 reps: abstain, abstain, pass, fail → scored=2, 1 pass → 0.5
+        runner = _ScriptedRunner([
+            _abstain_result(), _abstain_result(), _pass_result(), _fail_result(),
+        ])
+        result = _run_one_task_score(
+            _task("t1"), runner=runner,
+            layer2_factory=_no_layer2_factory, layer2_threshold=0.7, reps=4,
+        )
+        assert result.score == pytest.approx(0.5)
+
+    def test_all_abstain_gives_zero(self):
+        runner = _ScriptedRunner([_abstain_result()])
+        result = _run_one_task_score(
+            _task("t1"), runner=runner,
+            layer2_factory=_no_layer2_factory, layer2_threshold=0.7, reps=3,
+        )
+        assert result.score == 0.0
+
+    def test_feedback_contains_ratio_and_is_neutral(self):
+        runner = _ScriptedRunner([_pass_result(), _fail_result(), _fail_result(), _fail_result()])
+        result = _run_one_task_score(
+            _task("t1"), runner=runner,
+            layer2_factory=_no_layer2_factory, layer2_threshold=0.7, reps=4,
+        )
+        # Ratio present; no production-prompt wording (just a neutral summary)
+        assert "1/4" in result.feedback
+        assert result.feedback  # non-empty
+
+    def test_reps_default_is_1(self):
+        runner = _ScriptedRunner([_pass_result()])
+        result = _run_one_task_score(
+            _task("t1"), runner=runner,
+            layer2_factory=_no_layer2_factory, layer2_threshold=0.7,
+        )
+        assert result.score == 1.0
 
 
 def test_split_is_deterministic_and_non_empty():

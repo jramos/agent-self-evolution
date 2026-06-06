@@ -55,6 +55,7 @@ from evolution.core.saturation_check import (
 from evolution.prompts.hermes_prompt_source import HermesPromptSource
 from evolution.prompts.prompt_judge import (
     SaveCallJudge,
+    ScoreResult,
     judge_save_calls,
     make_memoizing_splice_scorer,
     make_prompt_fitness_metric,
@@ -195,33 +196,57 @@ def _run_one_task_score(
     runner: HermesAgentRunner,
     layer2_factory,
     layer2_threshold: float,
-) -> float:
-    """Run a single task through the agent with whatever section is currently
-    spliced, returning 1.0 on pass else 0.0 (abstentions score 0.0 in-loop —
-    the deploy gate handles abstentions properly)."""
-    with tempfile.TemporaryDirectory(prefix="ps_inner_") as fixture_tmp:
-        fixture_dir = Path(fixture_tmp)
-        for relative_path, content in task.fixture_setup.items():
-            dest = fixture_dir / relative_path
-            dest.parent.mkdir(parents=True, exist_ok=True)
-            dest.write_text(content)
-        ctx = TaskRunContext(
-            user_message=task.render_message(fixture_dir),
-            fixture_dir=fixture_dir,
-        )
-        run = runner.run(ctx)
-        passed, abstained = score_task(
-            expected_tools=task.expected_tools,
-            forbidden_tools=task.forbidden_tools,
-            run=run,
-            test_command=task.test_command,
-            fixture_dir=fixture_dir,
-            layer2_judge_fn=layer2_factory(task),
-            layer2_threshold=layer2_threshold,
-        )
-        if abstained:
-            return 0.0
-        return 1.0 if passed else 0.0
+    reps: int = 1,
+) -> ScoreResult:
+    """Run a task through the agent ``reps`` times, returning mean pass rate.
+
+    Abstentions are excluded from the denominator; all-abstain scores 0.0.
+    reps=1 reproduces the legacy single-run verdict (score ∈ {0.0, 1.0}).
+    """
+    n_pass = 0
+    n_abstain = 0
+
+    for _ in range(reps):
+        with tempfile.TemporaryDirectory(prefix="ps_inner_") as fixture_tmp:
+            fixture_dir = Path(fixture_tmp)
+            for relative_path, content in task.fixture_setup.items():
+                dest = fixture_dir / relative_path
+                dest.parent.mkdir(parents=True, exist_ok=True)
+                dest.write_text(content)
+            ctx = TaskRunContext(
+                user_message=task.render_message(fixture_dir),
+                fixture_dir=fixture_dir,
+            )
+            run = runner.run(ctx)
+            passed, abstained = score_task(
+                expected_tools=task.expected_tools,
+                forbidden_tools=task.forbidden_tools,
+                run=run,
+                test_command=task.test_command,
+                fixture_dir=fixture_dir,
+                layer2_judge_fn=layer2_factory(task),
+                layer2_threshold=layer2_threshold,
+            )
+            if abstained:
+                n_abstain += 1
+            elif passed:
+                n_pass += 1
+
+    scored = reps - n_abstain
+    rate = (n_pass / scored) if scored else 0.0
+
+    objective = (
+        f"expected={list(task.expected_tools) or '[]'}, "
+        f"forbidden={list(task.forbidden_tools) or '[]'}"
+    )
+    if scored == 0:
+        feedback = f"pass 0/{reps} (all abstained); objective: {objective}"
+    elif n_abstain:
+        feedback = f"pass {n_pass}/{scored} scored ({n_abstain} abstained); objective: {objective}"
+    else:
+        feedback = f"pass {n_pass}/{reps}; objective: {objective}"
+
+    return ScoreResult(score=rate, feedback=feedback)
 
 
 def evolve_prompt_section(
@@ -249,6 +274,7 @@ def evolve_prompt_section(
     dry_run: bool = False,
     output_dir: Optional[Path] = None,
     baseline_override_file: Optional[Path] = None,
+    fitness_reps: int = 1,
 ) -> dict[str, Any]:
     """Evolve one prompt section end-to-end. Returns a summary dict."""
     hermes_repo = Path(hermes_repo).resolve()
@@ -356,12 +382,13 @@ def evolve_prompt_section(
     def install_candidate(candidate_text: str) -> None:
         source.write(section_name, candidate_text)
 
-    def score_task_id(task_id: str) -> float:
+    def score_task_id(task_id: str) -> ScoreResult:
         return _run_one_task_score(
             tasks_by_id[task_id],
             runner=runner,
             layer2_factory=layer2_factory,
             layer2_threshold=layer2_threshold,
+            reps=fitness_reps,
         )
 
     # One lock serializes splice+run across dspy.Evaluate's thread pool — the
