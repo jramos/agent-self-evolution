@@ -24,13 +24,21 @@ SUITE_PATH = (
 
 SUITE_DIR = SUITE_PATH.parent
 
-_PATCH_TASK_IDS = {"patch-stale-path", "patch-stale-api", "patch-stale-flag"}
+_PATCH_TASK_IDS = {
+    "patch-stale-path",
+    "patch-stale-api",
+    "patch-stale-flag",
+    "patch-stale-sortflag",
+    "patch-stale-headcount",
+}
 _CONTROL_TASK_IDS = {"ctl-healthy", "ctl-cosmetic"}
 
 _SKILL_NAME_BY_TASK: dict[str, str] = {
     "patch-stale-path": "csv-summarizer",
     "patch-stale-flag": "line-counter",
     "patch-stale-api": "parse-int",
+    "patch-stale-sortflag": "record-sorter",
+    "patch-stale-headcount": "top-lines",
     "ctl-healthy": "word-counter",
     "ctl-cosmetic": "greeter",
 }
@@ -42,15 +50,12 @@ def suite() -> TaskSuite:
 
 
 class TestSuiteShape:
-    def test_loads_five_tasks(self, suite):
-        assert len(suite.tasks) == 5
+    def test_loads_seven_tasks(self, suite):
+        assert len(suite.tasks) == 7
 
     def test_task_ids_match_expected(self, suite):
         ids = {t.task_id for t in suite.tasks}
         assert ids == _PATCH_TASK_IDS | _CONTROL_TASK_IDS
-
-    def test_patch_stale_flag_is_last(self, suite):
-        assert suite.tasks[-1].task_id == "patch-stale-flag"
 
 
 class TestSkillsSourceResolves:
@@ -96,6 +101,41 @@ class TestPatchTaskFields:
                     f"{task.task_id}: stale_token {task.stale_token!r} "
                     f"not found in {skill_md}"
                 )
+
+
+class TestNewStrongSignalTasks:
+    """Specific assertions for the two new strong-signal patch tasks."""
+
+    def _get(self, suite, task_id: str):
+        return next(t for t in suite.tasks if t.task_id == task_id)
+
+    def test_sortflag_target_skill(self, suite):
+        task = self._get(suite, "patch-stale-sortflag")
+        assert task.target_skill == "record-sorter"
+
+    def test_sortflag_stale_token(self, suite):
+        task = self._get(suite, "patch-stale-sortflag")
+        assert task.stale_token == "sort --reverse-order"
+
+    def test_sortflag_skill_md_contains_stale_token(self, suite):
+        task = self._get(suite, "patch-stale-sortflag")
+        skill_md = SUITE_DIR / task.skills_src / "record-sorter" / "SKILL.md"
+        assert skill_md.exists()
+        assert task.stale_token in skill_md.read_text()
+
+    def test_headcount_target_skill(self, suite):
+        task = self._get(suite, "patch-stale-headcount")
+        assert task.target_skill == "top-lines"
+
+    def test_headcount_stale_token(self, suite):
+        task = self._get(suite, "patch-stale-headcount")
+        assert task.stale_token == "head --count"
+
+    def test_headcount_skill_md_contains_stale_token(self, suite):
+        task = self._get(suite, "patch-stale-headcount")
+        skill_md = SUITE_DIR / task.skills_src / "top-lines" / "SKILL.md"
+        assert skill_md.exists()
+        assert task.stale_token in skill_md.read_text()
 
 
 class TestControlTaskFields:
