@@ -25,6 +25,7 @@ import time
 from pathlib import Path
 from typing import Any, Optional
 
+from evolution.core.lm_timing_callback import COST_LEDGER, CostLedger
 from evolution.validation.agent_runner import AgentRunResult, TaskRunContext
 
 logger = logging.getLogger(__name__)
@@ -78,9 +79,11 @@ class HermesAgentRunner:
         timeout_seconds: int = DEFAULT_TASK_TIMEOUT_SECONDS,
         user_config_path: Optional[Path] = None,
         model: Optional[str] = None,
+        cost_ledger: CostLedger = COST_LEDGER,
     ) -> None:
         self.hermes_command = hermes_command
         self.timeout_seconds = timeout_seconds
+        self.cost_ledger = cost_ledger
         # If set, copied into the sandboxed HERMES_HOME so the agent picks
         # up the user's credentials. Defaults to ``~/.hermes/config.yaml``.
         self.user_config_path = (
@@ -139,34 +142,40 @@ class HermesAgentRunner:
                     check=False,
                 )
             except subprocess.TimeoutExpired:
-                return AgentRunResult(
+                result = AgentRunResult(
                     tool_calls_seq=[],
                     final_text_tail="",
                     duration_seconds=time.time() - start,
                     error=f"hermes -z timed out after {self.timeout_seconds}s",
                 )
             except FileNotFoundError as exc:
-                return AgentRunResult(
+                result = AgentRunResult(
                     tool_calls_seq=[],
                     final_text_tail="",
                     duration_seconds=time.time() - start,
                     error=f"hermes command not found: {exc}",
                 )
-            duration = time.time() - start
+            else:
+                duration = time.time() - start
 
-            # Modern hermes persists the session to a SQLite ``state.db`` in
-            # HERMES_HOME (one-shot ``-z`` no longer writes ``session_*.json``).
-            db_path = sandbox / "state.db"
-            if not db_path.is_file():
-                return AgentRunResult(
-                    tool_calls_seq=[],
-                    final_text_tail="",
-                    duration_seconds=duration,
-                    error="no session written by hermes -z (state.db absent)",
-                )
-            return parse_session_from_db(db_path, duration_seconds=duration)
+                # Modern hermes persists the session to a SQLite ``state.db`` in
+                # HERMES_HOME (one-shot ``-z`` no longer writes ``session_*.json``).
+                db_path = sandbox / "state.db"
+                if not db_path.is_file():
+                    result = AgentRunResult(
+                        tool_calls_seq=[],
+                        final_text_tail="",
+                        duration_seconds=duration,
+                        error="no session written by hermes -z (state.db absent)",
+                    )
+                else:
+                    result = parse_session_from_db(db_path, duration_seconds=duration)
         finally:
             shutil.rmtree(sandbox, ignore_errors=True)
+        self.cost_ledger.record_agent_cost(
+            result.agent_cost_usd, source=result.agent_cost_source
+        )
+        return result
 
     def _prime_sandbox(self, sandbox: Path, ctx: TaskRunContext) -> None:
         (sandbox / "sessions").mkdir(parents=True, exist_ok=True)

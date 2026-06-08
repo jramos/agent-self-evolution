@@ -785,3 +785,132 @@ class TestHermesAgentRunnerSubprocess:
             ))
 
         assert sandbox_seen["has_skills_dir"] is False
+
+
+class TestHermesAgentRunnerCostLedger:
+    """HermesAgentRunner records agent cost to the ledger on every exit path."""
+
+    @pytest.fixture
+    def fixture_dir(self, tmp_path):
+        d = tmp_path / "fixture"
+        d.mkdir()
+        return d
+
+    def _fake_run_with_cost_db(self, actual_cost_usd):
+        """Return a subprocess.run side_effect that writes a state.db with cost."""
+        def _fake_run(*args, **kwargs):
+            sandbox = Path(kwargs["env"]["HERMES_HOME"])
+            _make_state_db_with_cost(
+                sandbox / "state.db",
+                session_id="s1", model="gpt-5.4-mini",
+                messages=[{"role": "assistant", "content": "ok"}],
+                actual_cost_usd=actual_cost_usd,
+            )
+            return type("CP", (), {"returncode": 0, "stdout": "", "stderr": ""})()
+        return _fake_run
+
+    def test_success_path_records_actual_cost(self, fixture_dir, tmp_path):
+        """A run whose state.db carries actual_cost_usd calls record_agent_cost
+        exactly once with (0.01, source='actual')."""
+        from unittest.mock import MagicMock
+        from evolution.core.lm_timing_callback import CostLedger
+
+        fake_ledger = MagicMock(spec=CostLedger)
+        runner = HermesAgentRunner(
+            user_config_path=tmp_path / "nonexistent",
+            cost_ledger=fake_ledger,
+        )
+
+        with patch(
+            "evolution.validation.hermes_runner.subprocess.run",
+            side_effect=self._fake_run_with_cost_db(0.01),
+        ):
+            result = runner.run(TaskRunContext(
+                user_message="do something",
+                fixture_dir=fixture_dir,
+            ))
+
+        assert result.error is None
+        fake_ledger.record_agent_cost.assert_called_once_with(
+            pytest.approx(0.01), source="actual"
+        )
+
+    def test_abstain_path_no_state_db_records_uncaptured(self, fixture_dir, tmp_path):
+        """A run that writes no state.db calls record_agent_cost exactly once
+        with (None, source='uncaptured') — the run is counted, cost unknown."""
+        from unittest.mock import MagicMock
+        from evolution.core.lm_timing_callback import CostLedger
+
+        fake_ledger = MagicMock(spec=CostLedger)
+        runner = HermesAgentRunner(
+            user_config_path=tmp_path / "nonexistent",
+            cost_ledger=fake_ledger,
+        )
+
+        def _no_db(*args, **kwargs):
+            return type("CP", (), {"returncode": 0, "stdout": "", "stderr": ""})()
+
+        with patch("evolution.validation.hermes_runner.subprocess.run", side_effect=_no_db):
+            result = runner.run(TaskRunContext(
+                user_message="run",
+                fixture_dir=fixture_dir,
+            ))
+
+        assert result.error is not None
+        fake_ledger.record_agent_cost.assert_called_once_with(None, source="uncaptured")
+
+    def test_timeout_path_records_uncaptured(self, fixture_dir, tmp_path):
+        """A timeout also calls record_agent_cost exactly once with (None, source='uncaptured')."""
+        import subprocess as _subprocess
+        from unittest.mock import MagicMock
+        from evolution.core.lm_timing_callback import CostLedger
+
+        fake_ledger = MagicMock(spec=CostLedger)
+        runner = HermesAgentRunner(
+            timeout_seconds=1,
+            user_config_path=tmp_path / "nonexistent",
+            cost_ledger=fake_ledger,
+        )
+
+        with patch(
+            "evolution.validation.hermes_runner.subprocess.run",
+            side_effect=_subprocess.TimeoutExpired(cmd="hermes", timeout=1),
+        ):
+            result = runner.run(TaskRunContext(
+                user_message="hang",
+                fixture_dir=fixture_dir,
+            ))
+
+        assert "timed out" in result.error
+        fake_ledger.record_agent_cost.assert_called_once_with(None, source="uncaptured")
+
+    def test_command_not_found_path_records_uncaptured(self, fixture_dir, tmp_path):
+        """FileNotFoundError also calls record_agent_cost exactly once."""
+        from unittest.mock import MagicMock
+        from evolution.core.lm_timing_callback import CostLedger
+
+        fake_ledger = MagicMock(spec=CostLedger)
+        runner = HermesAgentRunner(
+            hermes_command="no-such-hermes",
+            user_config_path=tmp_path / "nonexistent",
+            cost_ledger=fake_ledger,
+        )
+
+        with patch(
+            "evolution.validation.hermes_runner.subprocess.run",
+            side_effect=FileNotFoundError("no-such-hermes"),
+        ):
+            result = runner.run(TaskRunContext(
+                user_message="run",
+                fixture_dir=fixture_dir,
+            ))
+
+        assert "not found" in result.error
+        fake_ledger.record_agent_cost.assert_called_once_with(None, source="uncaptured")
+
+    def test_default_ledger_is_COST_LEDGER(self, tmp_path):
+        """Omitting cost_ledger binds the runner to the module-level COST_LEDGER."""
+        from evolution.core.lm_timing_callback import COST_LEDGER
+
+        runner = HermesAgentRunner(user_config_path=tmp_path / "nonexistent")
+        assert runner.cost_ledger is COST_LEDGER
