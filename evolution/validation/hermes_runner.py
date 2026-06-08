@@ -27,8 +27,16 @@ from typing import Any, Optional
 
 import litellm
 
-from evolution.core.lm_timing_callback import COST_LEDGER, CostLedger
-from evolution.validation.agent_runner import AgentRunResult, TaskRunContext
+from evolution.core.lm_timing_callback import (
+    COST_LEDGER,
+    CostCeilingExceeded,
+    CostLedger,
+)
+from evolution.validation.agent_runner import (
+    AgentCostSource,
+    AgentRunResult,
+    TaskRunContext,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -58,9 +66,15 @@ _LITELLM_PROVIDER_PREFIXES = (
 def _price_from_tokens(model: Optional[str], agent_tokens: dict) -> Optional[float]:
     """Price a run from captured token counts via litellm when hermes didn't report a cost.
 
-    Returns None if the model is unknown, unset, or token counts are zero.
-    Uses input_tokens as prompt and output_tokens as completion — conservative
-    first version; cache-adjusted pricing is a future refinement.
+    Returns None if the model is unknown, unset, token counts are zero, or
+    litellm prices the run at $0 (recognized-but-unpriced model — a $0 here is a
+    pricing gap, not a free run, so it must flow to the uncaptured flag rather
+    than be trusted).
+
+    The computed cost is a **lower bound**: it prices ``input_tokens`` +
+    ``output_tokens`` only and omits cache/reasoning tokens, so it may UNDER-count
+    cache- or reasoning-heavy runs (a known follow-up). Adding those tokens here
+    risks double-counting against litellm's own cache accounting, so it's deferred.
     """
     if not model:
         return None
@@ -72,7 +86,8 @@ def _price_from_tokens(model: Optional[str], agent_tokens: dict) -> Optional[flo
         pin, pout = litellm.cost_per_token(
             model=model, prompt_tokens=input_t, completion_tokens=output_t
         )
-        return pin + pout
+        total = pin + pout
+        return total if total > 0 else None
     except Exception:  # noqa: BLE001 — litellm raises widely for unknown models
         return None
 
@@ -193,12 +208,25 @@ class HermesAgentRunner:
                         error="no session written by hermes -z (state.db absent)",
                     )
                 else:
-                    result = parse_session_from_db(db_path, duration_seconds=duration)
+                    try:
+                        result = parse_session_from_db(db_path, duration_seconds=duration)
+                    except Exception as exc:  # noqa: BLE001 — keep result bound so the run is recorded
+                        logger.warning("failed to parse session db: %s", exc)
+                        result = AgentRunResult(
+                            tool_calls_seq=[],
+                            final_text_tail="",
+                            duration_seconds=duration,
+                            error=f"session db parse failed: {exc}",
+                        )
         finally:
             shutil.rmtree(sandbox, ignore_errors=True)
-        self.cost_ledger.record_agent_cost(
-            result.agent_cost_usd, source=result.agent_cost_source
-        )
+        self.cost_ledger.record_agent_cost(result.agent_cost_usd)
+        # Enforce the ceiling eagerly: Layer-1/test_command scoring makes no
+        # in-process LM call, so the BaseLM.__call__ guard would never fire for
+        # an agent-cost overrun. Check + raise here instead.
+        state = self.cost_ledger.get_abort_state()
+        if state is not None:
+            raise CostCeilingExceeded(*state)
         return result
 
     def _prime_sandbox(self, sandbox: Path, ctx: TaskRunContext) -> None:
@@ -285,7 +313,12 @@ def parse_session_from_db(
                 "FROM sessions ORDER BY started_at DESC LIMIT 1"
             ).fetchone()
             _has_cost_cols = True
-        except sqlite3.OperationalError:
+        except sqlite3.OperationalError as exc:
+            # Only treat a genuine missing-column as schema drift. A locked /
+            # corrupt / missing-table OperationalError must re-raise so the outer
+            # sqlite3.Error handler abstains rather than mislabeling it as drift.
+            if "no such column" not in str(exc).lower():
+                raise
             session = conn.execute(
                 "SELECT id, model FROM sessions ORDER BY started_at DESC LIMIT 1"
             ).fetchone()
@@ -394,7 +427,7 @@ def _result_from_messages(
     model_name: Optional[str],
     session_path: Optional[Path],
     agent_cost_usd: Optional[float] = None,
-    agent_cost_source: str = "uncaptured",
+    agent_cost_source: AgentCostSource = "uncaptured",
     agent_tokens: Optional[dict] = None,
 ) -> AgentRunResult:
     """Build an ``AgentRunResult`` from a normalized message list."""

@@ -20,6 +20,7 @@ import pytest
 from evolution.validation.agent_runner import TaskRunContext
 from evolution.validation.hermes_runner import (
     HermesAgentRunner,
+    _price_from_tokens,
     _strip_litellm_provider_prefix,
     parse_session_from_db,
     parse_session_result,
@@ -565,6 +566,45 @@ class TestParseSessionFromDbCostCapture:
         assert result.agent_tokens == {}
 
 
+class TestPriceFromTokens:
+    """FIX 2: a recognized-but-unpriced model returns litellm $0, which must be
+    treated as a pricing gap (None), not a trusted free run."""
+
+    def test_litellm_zero_price_returns_none(self):
+        with patch(
+            "evolution.validation.hermes_runner.litellm.cost_per_token",
+            return_value=(0.0, 0.0),
+        ):
+            assert _price_from_tokens("some-model", {"input_tokens": 100, "output_tokens": 50}) is None
+
+    def test_litellm_positive_price_returned(self):
+        with patch(
+            "evolution.validation.hermes_runner.litellm.cost_per_token",
+            return_value=(0.001, 0.002),
+        ):
+            assert _price_from_tokens(
+                "some-model", {"input_tokens": 100, "output_tokens": 50}
+            ) == pytest.approx(0.003)
+
+    def test_full_parse_with_litellm_zero_price_is_uncaptured(self, tmp_path):
+        """A priceable-shaped model that litellm prices at $0 (monkeypatched)
+        must resolve to uncaptured, not computed $0."""
+        db = tmp_path / "state.db"
+        _make_state_db_with_cost(
+            db, session_id="s1", model="gpt-5.4-mini",
+            messages=[{"role": "assistant", "content": "ok"}],
+            actual_cost_usd=None, estimated_cost_usd=None,
+            input_tokens=1000, output_tokens=100,
+        )
+        with patch(
+            "evolution.validation.hermes_runner.litellm.cost_per_token",
+            return_value=(0.0, 0.0),
+        ):
+            result = parse_session_from_db(db, duration_seconds=1.0)
+        assert result.agent_cost_source == "uncaptured"
+        assert result.agent_cost_usd is None
+
+
 class TestComputedCostFallback:
     """litellm-priced fallback when hermes reports $0 or NULL cost but tokens are present."""
 
@@ -642,6 +682,108 @@ class TestComputedCostFallback:
         result = parse_session_from_db(db, duration_seconds=1.0)
         assert result.agent_cost_source == "uncaptured"
         assert result.agent_cost_usd is None
+
+    def test_computed_wins_over_estimated(self, tmp_path):
+        # FIX 7: with actual NULL but a priceable model + real tokens, the
+        # litellm-computed value must beat a non-null estimated.
+        import litellm
+        db = tmp_path / "state.db"
+        _make_state_db_with_cost(
+            db, session_id="s1", model="gpt-5.4-mini",
+            messages=[{"role": "assistant", "content": "ok"}],
+            actual_cost_usd=None, estimated_cost_usd=0.008,
+            input_tokens=5000, output_tokens=100,
+        )
+        result = parse_session_from_db(db, duration_seconds=1.0)
+        pin, pout = litellm.cost_per_token(
+            model="gpt-5.4-mini", prompt_tokens=5000, completion_tokens=100
+        )
+        assert result.agent_cost_source == "computed"
+        assert result.agent_cost_usd == pytest.approx(pin + pout, rel=1e-4)
+        assert result.agent_cost_usd != pytest.approx(0.008)
+
+    def test_actual_zero_with_tokens_falls_through_to_computed(self, tmp_path):
+        # FIX 7: a $0 actual alongside real token usage is distrusted (unpriced
+        # at capture time), so it falls through to litellm-computed.
+        import litellm
+        db = tmp_path / "state.db"
+        _make_state_db_with_cost(
+            db, session_id="s1", model="gpt-5.4-mini",
+            messages=[{"role": "assistant", "content": "ok"}],
+            actual_cost_usd=0.0, estimated_cost_usd=None,
+            input_tokens=5000, output_tokens=100,
+        )
+        result = parse_session_from_db(db, duration_seconds=1.0)
+        pin, pout = litellm.cost_per_token(
+            model="gpt-5.4-mini", prompt_tokens=5000, completion_tokens=100
+        )
+        assert result.agent_cost_source == "computed"
+        assert result.agent_cost_usd == pytest.approx(pin + pout, rel=1e-4)
+
+
+class TestSchemaDriftExceptNarrowing:
+    """FIX 5: only a genuine missing-column OperationalError is treated as schema
+    drift; a locked/corrupt-DB OperationalError must re-raise and abstain."""
+
+    def test_locked_db_on_extended_select_abstains_not_uncaptured(self, tmp_path):
+        db = tmp_path / "state.db"
+        _make_state_db_with_cost(
+            db, session_id="s1", model="m",
+            messages=[{"role": "assistant", "content": "ok"}],
+            actual_cost_usd=0.01,
+        )
+
+        class _LockedConn:
+            """Wraps a real connection but raises 'database is locked' on the
+            extended cost SELECT — sqlite3.Connection itself is immutable."""
+
+            def __init__(self, real):
+                self._real = real
+
+            def execute(self, sql, *args):
+                if "actual_cost_usd" in sql:
+                    raise sqlite3.OperationalError("database is locked")
+                return self._real.execute(sql, *args)
+
+            def __setattr__(self, name, value):
+                if name == "_real":
+                    object.__setattr__(self, name, value)
+                else:
+                    setattr(self._real, name, value)
+
+            def __getattr__(self, name):
+                return getattr(self._real, name)
+
+        real_connect = sqlite3.connect
+
+        def _fake_connect(*args, **kwargs):
+            return _LockedConn(real_connect(*args, **kwargs))
+
+        with patch(
+            "evolution.validation.hermes_runner.sqlite3.connect",
+            side_effect=_fake_connect,
+        ):
+            result = parse_session_from_db(db, duration_seconds=1.0)
+
+        # The locked error re-raises into the outer sqlite3.Error handler →
+        # proper abstain (error set), NOT a silent uncaptured success.
+        assert result.error is not None
+        assert result.agent_cost_source == "uncaptured"
+        assert "could not read" in result.error
+
+    def test_missing_column_still_falls_back(self, tmp_path):
+        # Regression: the genuine schema-drift path (missing column) still works.
+        db = tmp_path / "state.db"
+        _make_state_db(
+            db, session_id="s1", model="old-model",
+            messages=[{"role": "assistant", "tool_calls": [
+                {"function": {"name": "patch"}}
+            ]}],
+        )
+        result = parse_session_from_db(db, duration_seconds=1.0)
+        assert result.error is None
+        assert result.tool_calls_seq == ["patch"]
+        assert result.agent_cost_source == "uncaptured"
 
 
 class TestHermesAgentRunnerSubprocess:
@@ -933,11 +1075,12 @@ class TestHermesAgentRunnerCostLedger:
 
     def test_success_path_records_actual_cost(self, fixture_dir, tmp_path):
         """A run whose state.db carries actual_cost_usd calls record_agent_cost
-        exactly once with (0.01, source='actual')."""
+        exactly once with the captured dollar value."""
         from unittest.mock import MagicMock
         from evolution.core.lm_timing_callback import CostLedger
 
         fake_ledger = MagicMock(spec=CostLedger)
+        fake_ledger.get_abort_state.return_value = None
         runner = HermesAgentRunner(
             user_config_path=tmp_path / "nonexistent",
             cost_ledger=fake_ledger,
@@ -953,17 +1096,16 @@ class TestHermesAgentRunnerCostLedger:
             ))
 
         assert result.error is None
-        fake_ledger.record_agent_cost.assert_called_once_with(
-            pytest.approx(0.01), source="actual"
-        )
+        fake_ledger.record_agent_cost.assert_called_once_with(pytest.approx(0.01))
 
     def test_abstain_path_no_state_db_records_uncaptured(self, fixture_dir, tmp_path):
         """A run that writes no state.db calls record_agent_cost exactly once
-        with (None, source='uncaptured') — the run is counted, cost unknown."""
+        with None — the run is counted, cost unknown."""
         from unittest.mock import MagicMock
         from evolution.core.lm_timing_callback import CostLedger
 
         fake_ledger = MagicMock(spec=CostLedger)
+        fake_ledger.get_abort_state.return_value = None
         runner = HermesAgentRunner(
             user_config_path=tmp_path / "nonexistent",
             cost_ledger=fake_ledger,
@@ -979,15 +1121,16 @@ class TestHermesAgentRunnerCostLedger:
             ))
 
         assert result.error is not None
-        fake_ledger.record_agent_cost.assert_called_once_with(None, source="uncaptured")
+        fake_ledger.record_agent_cost.assert_called_once_with(None)
 
     def test_timeout_path_records_uncaptured(self, fixture_dir, tmp_path):
-        """A timeout also calls record_agent_cost exactly once with (None, source='uncaptured')."""
+        """A timeout also calls record_agent_cost exactly once with None."""
         import subprocess as _subprocess
         from unittest.mock import MagicMock
         from evolution.core.lm_timing_callback import CostLedger
 
         fake_ledger = MagicMock(spec=CostLedger)
+        fake_ledger.get_abort_state.return_value = None
         runner = HermesAgentRunner(
             timeout_seconds=1,
             user_config_path=tmp_path / "nonexistent",
@@ -1004,7 +1147,7 @@ class TestHermesAgentRunnerCostLedger:
             ))
 
         assert "timed out" in result.error
-        fake_ledger.record_agent_cost.assert_called_once_with(None, source="uncaptured")
+        fake_ledger.record_agent_cost.assert_called_once_with(None)
 
     def test_command_not_found_path_records_uncaptured(self, fixture_dir, tmp_path):
         """FileNotFoundError also calls record_agent_cost exactly once."""
@@ -1012,6 +1155,7 @@ class TestHermesAgentRunnerCostLedger:
         from evolution.core.lm_timing_callback import CostLedger
 
         fake_ledger = MagicMock(spec=CostLedger)
+        fake_ledger.get_abort_state.return_value = None
         runner = HermesAgentRunner(
             hermes_command="no-such-hermes",
             user_config_path=tmp_path / "nonexistent",
@@ -1028,7 +1172,7 @@ class TestHermesAgentRunnerCostLedger:
             ))
 
         assert "not found" in result.error
-        fake_ledger.record_agent_cost.assert_called_once_with(None, source="uncaptured")
+        fake_ledger.record_agent_cost.assert_called_once_with(None)
 
     def test_default_ledger_is_COST_LEDGER(self, tmp_path):
         """Omitting cost_ledger binds the runner to the module-level COST_LEDGER."""
@@ -1036,3 +1180,85 @@ class TestHermesAgentRunnerCostLedger:
 
         runner = HermesAgentRunner(user_config_path=tmp_path / "nonexistent")
         assert runner.cost_ledger is COST_LEDGER
+
+    def test_agent_cost_over_ceiling_raises_after_recording(self, fixture_dir, tmp_path):
+        """FIX 1: after recording an agent cost that trips the ceiling, run()
+        raises CostCeilingExceeded eagerly (Layer-1 scoring makes no in-process
+        LM call, so the BaseLM guard would never fire for an agent overrun)."""
+        from evolution.core.lm_timing_callback import CostLedger, CostCeilingExceeded
+
+        ledger = CostLedger()
+        ledger.set_ceiling(0.005)
+        runner = HermesAgentRunner(
+            user_config_path=tmp_path / "nonexistent",
+            cost_ledger=ledger,
+        )
+        with patch(
+            "evolution.validation.hermes_runner.subprocess.run",
+            side_effect=self._fake_run_with_cost_db(0.01),
+        ):
+            with pytest.raises(CostCeilingExceeded) as exc_info:
+                runner.run(TaskRunContext(
+                    user_message="spend", fixture_dir=fixture_dir,
+                ))
+        # The cost was recorded before the abort fired.
+        assert ledger.summary()["agent_cost_usd"] == pytest.approx(0.01)
+        assert exc_info.value.ceiling_usd == pytest.approx(0.005)
+
+    def test_agent_cost_under_ceiling_does_not_raise(self, fixture_dir, tmp_path):
+        """FIX 1: a run under the ceiling returns normally, no raise."""
+        from evolution.core.lm_timing_callback import CostLedger
+
+        ledger = CostLedger()
+        ledger.set_ceiling(0.05)
+        runner = HermesAgentRunner(
+            user_config_path=tmp_path / "nonexistent",
+            cost_ledger=ledger,
+        )
+        with patch(
+            "evolution.validation.hermes_runner.subprocess.run",
+            side_effect=self._fake_run_with_cost_db(0.01),
+        ):
+            result = runner.run(TaskRunContext(
+                user_message="spend", fixture_dir=fixture_dir,
+            ))
+        assert result.error is None
+        assert ledger.get_abort_state() is None
+
+    def test_unexpected_parse_failure_records_once_and_does_not_crash(
+        self, fixture_dir, tmp_path
+    ):
+        """FIX 4: an UNEXPECTED exception from parse_session_from_db (e.g. a bug
+        or OSError) must NOT escape run() — it yields an error result, records
+        cost exactly once (uncaptured), and lets the eval continue."""
+        from unittest.mock import MagicMock
+        from evolution.core.lm_timing_callback import CostLedger
+
+        fake_ledger = MagicMock(spec=CostLedger)
+        fake_ledger.get_abort_state.return_value = None
+        runner = HermesAgentRunner(
+            user_config_path=tmp_path / "nonexistent",
+            cost_ledger=fake_ledger,
+        )
+
+        def _fake_run(*args, **kwargs):
+            sandbox = Path(kwargs["env"]["HERMES_HOME"])
+            _make_state_db(
+                sandbox / "state.db", session_id="s1", model="m",
+                messages=[{"role": "assistant", "content": "ok"}],
+            )
+            return type("CP", (), {"returncode": 0, "stdout": "", "stderr": ""})()
+
+        with patch(
+            "evolution.validation.hermes_runner.subprocess.run", side_effect=_fake_run
+        ), patch(
+            "evolution.validation.hermes_runner.parse_session_from_db",
+            side_effect=RuntimeError("boom"),
+        ):
+            result = runner.run(TaskRunContext(
+                user_message="run", fixture_dir=fixture_dir,
+            ))
+
+        assert result.error is not None
+        assert "session db parse failed" in result.error
+        fake_ledger.record_agent_cost.assert_called_once_with(None)
