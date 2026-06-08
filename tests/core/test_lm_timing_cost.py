@@ -388,7 +388,7 @@ class TestAgentCostCapture:
 
     def test_record_agent_cost_actual_updates_summary(self):
         ledger = CostLedger()
-        ledger.record_agent_cost(0.02, source="actual")
+        ledger.record_agent_cost(0.02)
         summary = ledger.summary()
         assert summary["agent_cost_usd"] == 0.02
         assert summary["n_agent_runs"] == 1
@@ -397,7 +397,7 @@ class TestAgentCostCapture:
 
     def test_record_agent_cost_uncaptured_increments_counter_only(self):
         ledger = CostLedger()
-        ledger.record_agent_cost(None, source="uncaptured")
+        ledger.record_agent_cost(None)
         summary = ledger.summary()
         assert summary["n_agent_runs"] == 1
         assert summary["n_cost_uncaptured"] == 1
@@ -407,7 +407,7 @@ class TestAgentCostCapture:
     def test_agent_cost_alone_trips_ceiling(self):
         ledger = CostLedger()
         ledger.set_ceiling(0.05)
-        ledger.record_agent_cost(0.06, source="actual")
+        ledger.record_agent_cost(0.06)
         state = ledger.get_abort_state()
         assert state is not None
         total, ceiling = state
@@ -426,7 +426,7 @@ class TestAgentCostCapture:
             cost_usd=0.04,
         )
         assert ledger.get_abort_state() is None  # below ceiling
-        ledger.record_agent_cost(0.02, source="actual")
+        ledger.record_agent_cost(0.02)
         state = ledger.get_abort_state()
         assert state is not None
         total, ceiling = state
@@ -436,7 +436,7 @@ class TestAgentCostCapture:
     def test_record_in_process_tips_combined_over_ceiling(self):
         ledger = CostLedger()
         ledger.set_ceiling(0.05)
-        ledger.record_agent_cost(0.04, source="actual")
+        ledger.record_agent_cost(0.04)
         assert ledger.get_abort_state() is None  # agent cost below ceiling
         ledger.record(
             model="openai/gpt-4.1-mini",
@@ -454,8 +454,8 @@ class TestAgentCostCapture:
 
     def test_reset_zeroes_agent_fields(self):
         ledger = CostLedger()
-        ledger.record_agent_cost(0.03, source="actual")
-        ledger.record_agent_cost(None, source="uncaptured")
+        ledger.record_agent_cost(0.03)
+        ledger.record_agent_cost(None)
         ledger.reset()
         summary = ledger.summary()
         assert summary["agent_cost_usd"] == 0.0
@@ -472,7 +472,7 @@ class TestAgentCostCapture:
             reasoning_tokens=0,
             cost_usd=0.01,
         )
-        ledger.record_agent_cost(0.02, source="actual")
+        ledger.record_agent_cost(0.02)
         summary = ledger.summary()
         assert summary["total_cost_usd"] == pytest.approx(0.03)
         # Existing key must still be present for back-compat.

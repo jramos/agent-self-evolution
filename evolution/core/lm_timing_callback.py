@@ -320,19 +320,25 @@ class CostLedger:
                 if self._combined_total() > self._ceiling_usd:
                     self._abort_requested = True
 
-    def record_agent_cost(self, usd: Optional[float], *, source: str) -> None:
+    def record_agent_cost(self, usd: Optional[float]) -> None:
         """Record cost from an agent run captured out-of-process (state.db).
 
-        ``source="actual"`` adds ``usd`` to the agent total; ``source="uncaptured"``
-        increments the uncaptured counter without changing the dollar total
-        (the run completed but its cost is unknown).
+        ``usd is None`` means the run completed but its cost is uncaptured: the
+        run is counted and the uncaptured counter is incremented, but $0 is added
+        toward the ceiling (the recorded total becomes a lower bound). A non-None
+        ``usd`` — including a genuine ``0.0`` — is added to the agent total.
+
+        The producer guarantees ``usd is None`` ⟺ the cost is uncaptured, so the
+        sentinel never appears in control flow. After recording, the combined
+        ceiling (in-process LM cost + agent cost) is re-checked and the abort flag
+        set if exceeded.
         """
         with self._lock:
             self._n_agent_runs += 1
-            if source == "uncaptured":
+            if usd is None:
                 self._n_cost_uncaptured += 1
             else:
-                self._agent_cost_usd += usd or 0.0
+                self._agent_cost_usd += usd
             if self._ceiling_usd is not None and not self._abort_requested:
                 if self._combined_total() > self._ceiling_usd:
                     self._abort_requested = True
