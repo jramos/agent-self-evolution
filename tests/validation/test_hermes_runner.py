@@ -486,7 +486,8 @@ class TestParseSessionFromDbCostCapture:
 
     def test_zero_cost_with_tokens_flagged_uncaptured(self, tmp_path):
         # An unpriced model: hermes reports $0 alongside real token usage.
-        # Must NOT be trusted as a free run — flag it uncaptured.
+        # Must NOT be trusted as a free run — falls through to computed or uncaptured.
+        # "m" is not priceable by litellm, so it ends up uncaptured.
         db = tmp_path / "state.db"
         _make_state_db_with_cost(
             db, session_id="s1", model="m",
@@ -524,6 +525,21 @@ class TestParseSessionFromDbCostCapture:
         assert result.agent_cost_usd is None
         assert result.agent_cost_source == "uncaptured"
 
+    def test_estimated_cost_used_when_actual_null_unpriceable_model(self, tmp_path):
+        # "m" is not a model litellm can price, so computed returns None.
+        # estimated should be used as the final fallback instead.
+        db = tmp_path / "state.db"
+        _make_state_db_with_cost(
+            db, session_id="s1", model="m",
+            messages=[{"role": "assistant", "content": "ok"}],
+            actual_cost_usd=None,
+            estimated_cost_usd=0.008,
+        )
+        result = parse_session_from_db(db, duration_seconds=1.0)
+        assert result.error is None
+        assert result.agent_cost_usd == pytest.approx(0.008)
+        assert result.agent_cost_source == "estimated"
+
     def test_schema_drift_tolerance_old_sessions_table(self, tmp_path):
         """A DB with only id/model/started_at in sessions must not crash or abstain.
 
@@ -547,6 +563,85 @@ class TestParseSessionFromDbCostCapture:
         assert result.agent_cost_usd is None
         assert result.agent_cost_source == "uncaptured"
         assert result.agent_tokens == {}
+
+
+class TestComputedCostFallback:
+    """litellm-priced fallback when hermes reports $0 or NULL cost but tokens are present."""
+
+    def test_computed_when_zero_cost_with_tokens(self, tmp_path):
+        # hermes reports $0 estimated (unpriced model) + real tokens → computed via litellm.
+        import litellm
+        db = tmp_path / "state.db"
+        _make_state_db_with_cost(
+            db, session_id="s1", model="gpt-5.4-mini",
+            messages=[{"role": "assistant", "content": "ok"}],
+            actual_cost_usd=None, estimated_cost_usd=0.0,
+            input_tokens=10645, output_tokens=217,
+        )
+        result = parse_session_from_db(db, duration_seconds=1.0)
+        pin, pout = litellm.cost_per_token(
+            model="gpt-5.4-mini", prompt_tokens=10645, completion_tokens=217
+        )
+        assert result.agent_cost_source == "computed"
+        assert result.agent_cost_usd == pytest.approx(pin + pout, rel=1e-4)
+        assert result.agent_cost_usd > 0.005
+
+    def test_computed_when_both_null_but_tokens_and_priceable_model(self, tmp_path):
+        # Both hermes cost columns NULL, but tokens present and model is priceable.
+        import litellm
+        db = tmp_path / "state.db"
+        _make_state_db_with_cost(
+            db, session_id="s1", model="gpt-5.4-mini",
+            messages=[{"role": "assistant", "content": "ok"}],
+            actual_cost_usd=None, estimated_cost_usd=None,
+            input_tokens=5000, output_tokens=100,
+        )
+        result = parse_session_from_db(db, duration_seconds=1.0)
+        pin, pout = litellm.cost_per_token(
+            model="gpt-5.4-mini", prompt_tokens=5000, completion_tokens=100
+        )
+        assert result.agent_cost_source == "computed"
+        assert result.agent_cost_usd == pytest.approx(pin + pout, rel=1e-4)
+        assert result.agent_cost_usd > 0
+
+    def test_actual_wins_over_computed(self, tmp_path):
+        # actual_cost_usd > 0 must be used without consulting litellm.
+        db = tmp_path / "state.db"
+        _make_state_db_with_cost(
+            db, session_id="s1", model="gpt-5.4-mini",
+            messages=[{"role": "assistant", "content": "ok"}],
+            actual_cost_usd=0.02, estimated_cost_usd=None,
+            input_tokens=10645, output_tokens=217,
+        )
+        result = parse_session_from_db(db, duration_seconds=1.0)
+        assert result.agent_cost_source == "actual"
+        assert result.agent_cost_usd == pytest.approx(0.02)
+
+    def test_unpriceable_model_falls_through_to_uncaptured(self, tmp_path):
+        # litellm raises for unknown model → computed returns None → uncaptured.
+        db = tmp_path / "state.db"
+        _make_state_db_with_cost(
+            db, session_id="s1", model="totally-unknown-model-xyz",
+            messages=[{"role": "assistant", "content": "ok"}],
+            actual_cost_usd=None, estimated_cost_usd=None,
+            input_tokens=500, output_tokens=50,
+        )
+        result = parse_session_from_db(db, duration_seconds=1.0)
+        assert result.agent_cost_source == "uncaptured"
+        assert result.agent_cost_usd is None
+
+    def test_no_tokens_not_computed(self, tmp_path):
+        # Both hermes costs NULL and tokens are 0 → uncaptured, not computed.
+        db = tmp_path / "state.db"
+        _make_state_db_with_cost(
+            db, session_id="s1", model="gpt-5.4-mini",
+            messages=[{"role": "assistant", "content": "ok"}],
+            actual_cost_usd=None, estimated_cost_usd=None,
+            input_tokens=0, output_tokens=0,
+        )
+        result = parse_session_from_db(db, duration_seconds=1.0)
+        assert result.agent_cost_source == "uncaptured"
+        assert result.agent_cost_usd is None
 
 
 class TestHermesAgentRunnerSubprocess:

@@ -25,6 +25,8 @@ import time
 from pathlib import Path
 from typing import Any, Optional
 
+import litellm
+
 from evolution.core.lm_timing_callback import COST_LEDGER, CostLedger
 from evolution.validation.agent_runner import AgentRunResult, TaskRunContext
 
@@ -51,6 +53,28 @@ _LITELLM_PROVIDER_PREFIXES = (
     "bedrock/",
     "mistral/",
 )
+
+
+def _price_from_tokens(model: Optional[str], agent_tokens: dict) -> Optional[float]:
+    """Price a run from captured token counts via litellm when hermes didn't report a cost.
+
+    Returns None if the model is unknown, unset, or token counts are zero.
+    Uses input_tokens as prompt and output_tokens as completion — conservative
+    first version; cache-adjusted pricing is a future refinement.
+    """
+    if not model:
+        return None
+    input_t = agent_tokens.get("input_tokens") or 0
+    output_t = agent_tokens.get("output_tokens") or 0
+    if input_t + output_t == 0:
+        return None
+    try:
+        pin, pout = litellm.cost_per_token(
+            model=model, prompt_tokens=input_t, completion_tokens=output_t
+        )
+        return pin + pout
+    except Exception:  # noqa: BLE001 — litellm raises widely for unknown models
+        return None
 
 
 def _strip_litellm_provider_prefix(model: str) -> str:
@@ -294,24 +318,34 @@ def parse_session_from_db(
     if _has_cost_cols:
         actual = session["actual_cost_usd"]
         estimated = session["estimated_cost_usd"]
-        if actual is not None:
-            agent_cost_usd: Optional[float] = actual
-            agent_cost_source = "actual"
-        elif estimated is not None:
-            agent_cost_usd = estimated
-            agent_cost_source = "estimated"
-        else:
-            agent_cost_usd = None
-            agent_cost_source = "uncaptured"
         _tok_keys = ("input_tokens", "output_tokens", "cache_read_tokens",
                      "cache_write_tokens", "reasoning_tokens")
         agent_tokens = {k: session[k] for k in _tok_keys if session[k] is not None}
-        # A $0 cost alongside real token usage is an unpriced model, not a free
-        # run — trusting it would make the ceiling silently blind. Flag it
-        # uncaptured so the spend is marked approximate, not counted as $0.
-        if agent_cost_usd == 0.0 and sum(agent_tokens.values()) > 0:
-            agent_cost_usd = None
-            agent_cost_source = "uncaptured"
+
+        # Resolution order:
+        #   actual (> 0, or == 0 with zero tokens as genuine-zero) →
+        #   computed via litellm from tokens →
+        #   estimated (> 0) →
+        #   uncaptured
+        # A $0 hermes cost alongside real token usage is an unpriced model, not a
+        # free run, so it flows into the computed or uncaptured path rather than
+        # being trusted as $0.
+        _total_tokens = sum(agent_tokens.values())
+        model_name: Optional[str] = session["model"]
+        if actual is not None and (actual > 0.0 or _total_tokens == 0):
+            agent_cost_usd: Optional[float] = actual
+            agent_cost_source = "actual"
+        else:
+            computed = _price_from_tokens(model_name, agent_tokens)
+            if computed is not None:
+                agent_cost_usd = computed
+                agent_cost_source = "computed"
+            elif estimated is not None and estimated > 0.0:
+                agent_cost_usd = estimated
+                agent_cost_source = "estimated"
+            else:
+                agent_cost_usd = None
+                agent_cost_source = "uncaptured"
     else:
         agent_cost_usd = None
         agent_cost_source = "uncaptured"
