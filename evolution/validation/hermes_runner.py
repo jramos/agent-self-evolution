@@ -306,6 +306,12 @@ def parse_session_from_db(
         _tok_keys = ("input_tokens", "output_tokens", "cache_read_tokens",
                      "cache_write_tokens", "reasoning_tokens")
         agent_tokens = {k: session[k] for k in _tok_keys if session[k] is not None}
+        # A $0 cost alongside real token usage is an unpriced model, not a free
+        # run — trusting it would make the ceiling silently blind. Flag it
+        # uncaptured so the spend is marked approximate, not counted as $0.
+        if agent_cost_usd == 0.0 and sum(agent_tokens.values()) > 0:
+            agent_cost_usd = None
+            agent_cost_source = "uncaptured"
     else:
         agent_cost_usd = None
         agent_cost_source = "uncaptured"

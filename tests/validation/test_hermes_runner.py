@@ -484,6 +484,33 @@ class TestParseSessionFromDbCostCapture:
         assert result.agent_cost_usd == pytest.approx(0.008)
         assert result.agent_cost_source == "estimated"
 
+    def test_zero_cost_with_tokens_flagged_uncaptured(self, tmp_path):
+        # An unpriced model: hermes reports $0 alongside real token usage.
+        # Must NOT be trusted as a free run — flag it uncaptured.
+        db = tmp_path / "state.db"
+        _make_state_db_with_cost(
+            db, session_id="s1", model="m",
+            messages=[{"role": "assistant", "content": "ok"}],
+            actual_cost_usd=None, estimated_cost_usd=0.0,
+            input_tokens=10645, output_tokens=217,
+        )
+        result = parse_session_from_db(db, duration_seconds=1.0)
+        assert result.agent_cost_usd is None
+        assert result.agent_cost_source == "uncaptured"
+
+    def test_zero_cost_with_zero_tokens_is_genuine_zero(self, tmp_path):
+        # A run that burned no tokens genuinely cost ~0 — not a pricing gap.
+        db = tmp_path / "state.db"
+        _make_state_db_with_cost(
+            db, session_id="s1", model="m",
+            messages=[{"role": "assistant", "content": "ok"}],
+            actual_cost_usd=0.0, estimated_cost_usd=None,
+            input_tokens=0, output_tokens=0,
+        )
+        result = parse_session_from_db(db, duration_seconds=1.0)
+        assert result.agent_cost_usd == pytest.approx(0.0)
+        assert result.agent_cost_source == "actual"
+
     def test_both_null_yields_uncaptured(self, tmp_path):
         db = tmp_path / "state.db"
         _make_state_db_with_cost(
