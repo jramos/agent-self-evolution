@@ -358,6 +358,170 @@ class TestParseSessionFromDb:
         assert "could not read" in result.error
 
 
+def _make_state_db_with_cost(
+    path: Path,
+    *,
+    session_id: str,
+    model: str,
+    messages: list[dict],
+    started_at: float = 1.0,
+    actual_cost_usd: float | None = None,
+    estimated_cost_usd: float | None = None,
+    cost_status: str | None = None,
+    input_tokens: int | None = None,
+    output_tokens: int | None = None,
+    cache_read_tokens: int | None = None,
+    cache_write_tokens: int | None = None,
+    reasoning_tokens: int | None = None,
+) -> None:
+    """Minimal hermes state.db with cost/token columns in the sessions table."""
+    conn = sqlite3.connect(path)
+    conn.executescript(
+        """
+        CREATE TABLE sessions (
+            id TEXT PRIMARY KEY,
+            model TEXT,
+            started_at REAL,
+            actual_cost_usd REAL,
+            estimated_cost_usd REAL,
+            cost_status TEXT,
+            input_tokens INTEGER,
+            output_tokens INTEGER,
+            cache_read_tokens INTEGER,
+            cache_write_tokens INTEGER,
+            reasoning_tokens INTEGER
+        );
+        CREATE TABLE messages (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            session_id TEXT, role TEXT, content TEXT, tool_calls TEXT
+        );
+        """
+    )
+    conn.execute(
+        "INSERT INTO sessions (id, model, started_at, actual_cost_usd, "
+        "estimated_cost_usd, cost_status, input_tokens, output_tokens, "
+        "cache_read_tokens, cache_write_tokens, reasoning_tokens) "
+        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        (session_id, model, started_at, actual_cost_usd, estimated_cost_usd,
+         cost_status, input_tokens, output_tokens, cache_read_tokens,
+         cache_write_tokens, reasoning_tokens),
+    )
+    for m in messages:
+        tc = m.get("tool_calls")
+        conn.execute(
+            "INSERT INTO messages (session_id, role, content, tool_calls) "
+            "VALUES (?, ?, ?, ?)",
+            (session_id, m["role"], m.get("content"),
+             json.dumps(tc) if tc is not None else None),
+        )
+    conn.commit()
+    conn.close()
+
+
+class TestAgentRunResultDefaults:
+    """New cost fields must be backward-compatible — existing construction works."""
+
+    def test_existing_construction_unaffected(self):
+        from evolution.validation.agent_runner import AgentRunResult
+        result = AgentRunResult(
+            tool_calls_seq=["patch"],
+            final_text_tail="done",
+            duration_seconds=1.5,
+        )
+        assert result.agent_cost_usd is None
+        assert result.agent_cost_source == "uncaptured"
+        assert result.agent_tokens == {}
+
+    def test_new_fields_accept_values(self):
+        from evolution.validation.agent_runner import AgentRunResult
+        result = AgentRunResult(
+            tool_calls_seq=[],
+            final_text_tail="",
+            duration_seconds=0.0,
+            agent_cost_usd=0.012,
+            agent_cost_source="actual",
+            agent_tokens={"input": 100},
+        )
+        assert result.agent_cost_usd == 0.012
+        assert result.agent_cost_source == "actual"
+        assert result.agent_tokens == {"input": 100}
+
+
+class TestParseSessionFromDbCostCapture:
+    """Cost and token columns surface from sessions rows."""
+
+    def test_actual_cost_usd_populated(self, tmp_path):
+        db = tmp_path / "state.db"
+        _make_state_db_with_cost(
+            db, session_id="s1", model="gpt-5.4-mini",
+            messages=[{"role": "assistant", "content": "ok"}],
+            actual_cost_usd=0.012,
+            estimated_cost_usd=0.008,
+            cost_status="settled",
+            input_tokens=100, output_tokens=50,
+            cache_read_tokens=20, cache_write_tokens=10, reasoning_tokens=5,
+        )
+        result = parse_session_from_db(db, duration_seconds=1.0)
+        assert result.error is None
+        assert result.agent_cost_usd == pytest.approx(0.012)
+        assert result.agent_cost_source == "actual"
+        assert result.agent_tokens["input_tokens"] == 100
+        assert result.agent_tokens["output_tokens"] == 50
+        assert result.agent_tokens["cache_read_tokens"] == 20
+        assert result.agent_tokens["cache_write_tokens"] == 10
+        assert result.agent_tokens["reasoning_tokens"] == 5
+
+    def test_estimated_cost_used_when_actual_null(self, tmp_path):
+        db = tmp_path / "state.db"
+        _make_state_db_with_cost(
+            db, session_id="s1", model="m",
+            messages=[{"role": "assistant", "content": "ok"}],
+            actual_cost_usd=None,
+            estimated_cost_usd=0.008,
+        )
+        result = parse_session_from_db(db, duration_seconds=1.0)
+        assert result.error is None
+        assert result.agent_cost_usd == pytest.approx(0.008)
+        assert result.agent_cost_source == "estimated"
+
+    def test_both_null_yields_uncaptured(self, tmp_path):
+        db = tmp_path / "state.db"
+        _make_state_db_with_cost(
+            db, session_id="s1", model="m",
+            messages=[{"role": "assistant", "content": "ok"}],
+            actual_cost_usd=None,
+            estimated_cost_usd=None,
+        )
+        result = parse_session_from_db(db, duration_seconds=1.0)
+        assert result.error is None
+        assert result.agent_cost_usd is None
+        assert result.agent_cost_source == "uncaptured"
+
+    def test_schema_drift_tolerance_old_sessions_table(self, tmp_path):
+        """A DB with only id/model/started_at in sessions must not crash or abstain.
+
+        Schema-drift happens when the harness runs against an old hermes build
+        that predates the cost columns. The extended SELECT falls back to the
+        id/model-only SELECT; cost fields report as uncaptured so the run still
+        contributes behavioral signal.
+        """
+        db = tmp_path / "state.db"
+        # Minimal schema — no cost or token columns.
+        _make_state_db(
+            db, session_id="s1", model="old-model",
+            messages=[{"role": "assistant", "tool_calls": [
+                {"function": {"name": "patch"}}
+            ]}],
+        )
+        result = parse_session_from_db(db, duration_seconds=1.0)
+        # Must not set error or abstain.
+        assert result.error is None
+        assert result.tool_calls_seq == ["patch"]
+        assert result.agent_cost_usd is None
+        assert result.agent_cost_source == "uncaptured"
+        assert result.agent_tokens == {}
+
+
 class TestHermesAgentRunnerSubprocess:
     """The subprocess invocation layer: env + cwd + args plumbing."""
 

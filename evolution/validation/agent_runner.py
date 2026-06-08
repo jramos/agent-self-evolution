@@ -42,6 +42,9 @@ class AgentRunResult:
     error: Optional[str] = None
     session_path: Optional[Path] = None
     tool_calls_with_args: list[dict] = field(default_factory=list)
+    agent_cost_usd: Optional[float] = None
+    agent_cost_source: str = "uncaptured"
+    agent_tokens: dict = field(default_factory=dict)
 
 
 @dataclass(frozen=True)

@@ -240,9 +240,23 @@ def parse_session_from_db(
         )
     try:
         conn.row_factory = sqlite3.Row
-        session = conn.execute(
-            "SELECT id, model FROM sessions ORDER BY started_at DESC LIMIT 1"
-        ).fetchone()
+        # Attempt the extended SELECT that includes cost/token columns added in
+        # recent hermes builds. Fall back to the minimal id/model SELECT when
+        # those columns are absent (schema-drift against an older hermes binary)
+        # so the run still contributes behavioral signal rather than crashing.
+        try:
+            session = conn.execute(
+                "SELECT id, model, actual_cost_usd, estimated_cost_usd, "
+                "cost_status, input_tokens, output_tokens, cache_read_tokens, "
+                "cache_write_tokens, reasoning_tokens "
+                "FROM sessions ORDER BY started_at DESC LIMIT 1"
+            ).fetchone()
+            _has_cost_cols = True
+        except sqlite3.OperationalError:
+            session = conn.execute(
+                "SELECT id, model FROM sessions ORDER BY started_at DESC LIMIT 1"
+            ).fetchone()
+            _has_cost_cols = False
         if session is None:
             return AgentRunResult(
                 tool_calls_seq=[],
@@ -266,6 +280,27 @@ def parse_session_from_db(
         )
     finally:
         conn.close()
+
+    # Resolve cost fields from the session row (or leave uncaptured on drift).
+    if _has_cost_cols:
+        actual = session["actual_cost_usd"]
+        estimated = session["estimated_cost_usd"]
+        if actual is not None:
+            agent_cost_usd: Optional[float] = actual
+            agent_cost_source = "actual"
+        elif estimated is not None:
+            agent_cost_usd = estimated
+            agent_cost_source = "estimated"
+        else:
+            agent_cost_usd = None
+            agent_cost_source = "uncaptured"
+        _tok_keys = ("input_tokens", "output_tokens", "cache_read_tokens",
+                     "cache_write_tokens", "reasoning_tokens")
+        agent_tokens = {k: session[k] for k in _tok_keys if session[k] is not None}
+    else:
+        agent_cost_usd = None
+        agent_cost_source = "uncaptured"
+        agent_tokens: dict = {}
 
     messages: list[dict] = []
     for row in rows:
@@ -297,6 +332,9 @@ def parse_session_from_db(
         duration_seconds=duration_seconds,
         model_name=session["model"],
         session_path=db_path,
+        agent_cost_usd=agent_cost_usd,
+        agent_cost_source=agent_cost_source,
+        agent_tokens=agent_tokens,
     )
 
 
@@ -306,6 +344,9 @@ def _result_from_messages(
     duration_seconds: float,
     model_name: Optional[str],
     session_path: Optional[Path],
+    agent_cost_usd: Optional[float] = None,
+    agent_cost_source: str = "uncaptured",
+    agent_tokens: Optional[dict] = None,
 ) -> AgentRunResult:
     """Build an ``AgentRunResult`` from a normalized message list."""
     return AgentRunResult(
@@ -315,6 +356,9 @@ def _result_from_messages(
         model_name=model_name,
         session_path=session_path,
         tool_calls_with_args=_extract_tool_calls_with_args(messages),
+        agent_cost_usd=agent_cost_usd,
+        agent_cost_source=agent_cost_source,
+        agent_tokens=agent_tokens if agent_tokens is not None else {},
     )
 
 
