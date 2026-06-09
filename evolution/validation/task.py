@@ -50,6 +50,8 @@ class Task:
     expected_action: Optional[str] = None
     target_skill: Optional[str] = None
     stale_token: Optional[str] = None
+    required_cmd_substr: tuple[str, ...] = ()
+    forbidden_cmd_substr: tuple[str, ...] = ()
 
     def render_message(self, fixture_dir: Path) -> str:
         """Substitute ``{fixture_dir}`` in the message with the resolved path.
@@ -147,4 +149,6 @@ def _task_from_dict(obj: dict, *, source: str) -> Task:
         expected_action=expected_action,
         target_skill=target_skill,
         stale_token=stale_token,
+        required_cmd_substr=tuple(obj.get("required_cmd_substr") or ()),
+        forbidden_cmd_substr=tuple(obj.get("forbidden_cmd_substr") or ()),
     )

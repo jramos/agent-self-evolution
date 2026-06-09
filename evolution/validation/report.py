@@ -68,6 +68,8 @@ def score_task(
     expected_action: Optional[str] = None,
     target_skill: Optional[str] = None,
     stale_token: Optional[str] = None,
+    required_cmd_substr: tuple[str, ...] = (),
+    forbidden_cmd_substr: tuple[str, ...] = (),
 ) -> tuple[bool, bool]:
     """Return (passed, abstained).
 
@@ -90,6 +92,12 @@ def score_task(
     FileNotFoundError) all map to ``(False, False)`` — "the test did
     not pass," which is the meaningful verdict regardless of cause.
 
+    When ``expected_action == "convention"``, the verdict is convention
+    adherence: pass iff some ``Bash`` call's command contains one of
+    ``required_cmd_substr`` (the agent used the repo's wrapper) AND no
+    ``Bash`` command contains any of ``forbidden_cmd_substr`` (it did not
+    fall back to the default tool). All other paths are ignored in this mode.
+
     Layer 2 (compound verdict, prompt-section suites): when
     ``layer2_judge_fn`` is provided, a task passes only if Layer 1
     (trigger membership) passes AND the judge returns a score
@@ -104,6 +112,12 @@ def score_task(
         return False, True
     if expected_action == "patch":
         return _score_action_patch(run, target_skill=target_skill, stale_token=stale_token), False
+    if expected_action == "convention":
+        return _score_convention(
+            run,
+            required_cmd_substr=required_cmd_substr,
+            forbidden_cmd_substr=forbidden_cmd_substr,
+        ), False
     if test_command is not None:
         if fixture_dir is None:
             raise ValueError(
@@ -145,6 +159,29 @@ def _run_test_command(command: str, cwd: Path, timeout_seconds: float) -> bool:
         return result.returncode == 0
     except (subprocess.TimeoutExpired, FileNotFoundError, OSError):
         return False
+
+
+def _score_convention(
+    run: AgentRunResult,
+    *,
+    required_cmd_substr: tuple[str, ...],
+    forbidden_cmd_substr: tuple[str, ...],
+) -> bool:
+    """Return True iff a Bash call used a required wrapper substring and none
+    bypassed it with a forbidden default-tool substring.
+
+    Used to score adherence to a repo-specific convention (e.g. "run tests with
+    ./bin/check, never pytest"). Agent-agnostic: reads only the ``Bash`` calls
+    in ``tool_calls_with_args``.
+    """
+    commands = [
+        (call.get("arguments") or {}).get("command", "")
+        for call in run.tool_calls_with_args
+        if call.get("name") == "Bash"
+    ]
+    used = any(any(req in cmd for req in required_cmd_substr) for cmd in commands)
+    bypassed = any(any(forb in cmd for forb in forbidden_cmd_substr) for cmd in commands)
+    return used and not bypassed
 
 
 def _score_action_patch(
