@@ -58,3 +58,38 @@ def test_convention_abstains_on_runner_error():
         required_cmd_substr=("bin/check",), forbidden_cmd_substr=("pytest",),
     )
     assert abstained is True
+
+
+def test_convention_boundary_aware_no_false_positive_on_filename():
+    # `cat pytest.ini` must NOT count as using pytest; `./bin/check` must count.
+    passed, _ = score_task(
+        expected_tools=(), forbidden_tools=(),
+        run=_run(["./bin/check", "cat pytest.ini"]),
+        expected_action="convention",
+        required_cmd_substr=("bin/check",), forbidden_cmd_substr=("pytest",),
+    )
+    assert passed is True
+
+
+def test_convention_boundary_matches_default_at_token_end():
+    # `python -m pytest` (pytest at end) IS a forbidden use.
+    passed, _ = score_task(
+        expected_tools=(), forbidden_tools=(),
+        run=_run(["./bin/check", "python -m pytest"]),
+        expected_action="convention",
+        required_cmd_substr=("bin/check",), forbidden_cmd_substr=("pytest",),
+    )
+    assert passed is False
+
+
+def test_convention_task_requires_required_cmd_substr():
+    import pytest
+    from evolution.validation.task import TaskSuite
+    bad = (
+        '{"task_id":"x","expected_action":"convention","forbidden_cmd_substr":["pytest"],'
+        '"user_message":"run tests","fixture_setup":{}}\n'
+    )
+    p = __import__("pathlib").Path(__import__("tempfile").mkstemp(suffix=".jsonl")[1])
+    p.write_text(bad)
+    with pytest.raises(ValueError, match="required_cmd_substr"):
+        TaskSuite.from_jsonl(p)

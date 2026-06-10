@@ -137,6 +137,13 @@ def _task_from_dict(obj: dict, *, source: str) -> Task:
         raise ValueError(
             f"{source}: stale_token must be a string (got {type(stale_token).__name__})"
         )
+    required_cmd_substr = tuple(obj.get("required_cmd_substr") or ())
+    forbidden_cmd_substr = tuple(obj.get("forbidden_cmd_substr") or ())
+    if expected_action == "convention" and not required_cmd_substr:
+        raise ValueError(
+            f"{source}: a convention task must declare a non-empty "
+            f"'required_cmd_substr' (else the verdict always fails)."
+        )
     return Task(
         task_id=obj["task_id"],
         user_message=obj["user_message"],
@@ -149,6 +156,6 @@ def _task_from_dict(obj: dict, *, source: str) -> Task:
         expected_action=expected_action,
         target_skill=target_skill,
         stale_token=stale_token,
-        required_cmd_substr=tuple(obj.get("required_cmd_substr") or ()),
-        forbidden_cmd_substr=tuple(obj.get("forbidden_cmd_substr") or ()),
+        required_cmd_substr=required_cmd_substr,
+        forbidden_cmd_substr=forbidden_cmd_substr,
     )

@@ -7,6 +7,7 @@ downstream calibration scripts can use the same parsers.
 from __future__ import annotations
 
 import json
+import re
 import shlex
 import subprocess
 from dataclasses import asdict, dataclass, field
@@ -173,15 +174,30 @@ def _score_convention(
     Used to score adherence to a repo-specific convention (e.g. "run tests with
     ./bin/check, never pytest"). Agent-agnostic: reads only the ``Bash`` calls
     in ``tool_calls_with_args``.
+
+    Matching is trailing-boundary aware: a substring matches only when it is not
+    immediately followed by a word-continuation char ([A-Za-z0-9_.-]), so forbidden
+    ``pytest`` matches ``python -m pytest`` but not ``pytest.ini`` / ``pytest_cache``,
+    while required ``bin/check`` still matches ``./bin/check`` (a leading path/flag is
+    fine). Note: a forbidden default used *anywhere* in the run fails the task — the
+    convention is "never use the default", so explore-then-comply also fails by design.
     """
     commands = [
         (call.get("arguments") or {}).get("command", "")
         for call in run.tool_calls_with_args
         if call.get("name") == "Bash"
     ]
-    used = any(any(req in cmd for req in required_cmd_substr) for cmd in commands)
-    bypassed = any(any(forb in cmd for forb in forbidden_cmd_substr) for cmd in commands)
+    used = _any_command_uses(commands, required_cmd_substr)
+    bypassed = _any_command_uses(commands, forbidden_cmd_substr)
     return used and not bypassed
+
+
+def _any_command_uses(commands: list[str], substrs: tuple[str, ...]) -> bool:
+    return any(
+        re.search(re.escape(s) + r"(?![A-Za-z0-9_.\-])", cmd)
+        for cmd in commands
+        for s in substrs
+    )
 
 
 def _score_action_patch(
