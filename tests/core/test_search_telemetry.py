@@ -3,14 +3,30 @@ import json
 
 import pytest
 
+from pathlib import Path
+
 from evolution.core.search_telemetry import (
     LEDGER_NAME,
     append_search_telemetry,
     build_search_telemetry_row,
     main,
     read_ledger,
+    resolve_ledger_root,
     summarize_ledger,
 )
+
+
+def test_resolve_ledger_root_finds_output_ancestor():
+    # skill / tool / prompt layouts all share one output/ root.
+    assert resolve_ledger_root(Path("output/my-skill/20260101")).name == "output"
+    assert resolve_ledger_root(Path("output/tools/write_file/20260101")).name == "output"
+    assert resolve_ledger_root(Path("output/prompts/SKILLS/20260101")).name == "output"
+
+
+def test_resolve_ledger_root_falls_back_to_run_dir(tmp_path):
+    # No "output" ancestor (tests / custom --output-dir): stays in its own tree.
+    run_dir = tmp_path / "run123"
+    assert resolve_ledger_root(run_dir) == run_dir.resolve()
 
 
 def test_row_fields_on_discriminating_run():

@@ -74,7 +74,10 @@ from evolution.core.quality_gate import (
     write_gate_decision,
 )
 from evolution.core.run_inputs import build_run_inputs
-from evolution.core.search_telemetry import append_search_telemetry
+from evolution.core.search_telemetry import (
+    append_search_telemetry,
+    resolve_ledger_root,
+)
 from evolution.core.stats import paired_bootstrap
 from evolution.tools.session_mining import (
     HermesToolImporter,
@@ -1175,7 +1178,7 @@ def evolve(
             console.print(f"  [dim]Gate decision logged to {gate_path}[/dim]")
             if val_aggregate_scores is not None:
                 append_search_telemetry(
-                    Path("output"),
+                    resolve_ledger_root(output_dir),
                     artifact=tool_name,
                     artifact_type="tool",
                     val_scores=val_aggregate_scores,

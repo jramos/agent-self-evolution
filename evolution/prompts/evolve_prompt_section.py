@@ -46,7 +46,10 @@ from evolution.core.lm_timing_callback import (
 from evolution.core.pr_automation import disabled_pr_block
 from evolution.core.quality_gate import write_gate_decision
 from evolution.core.run_inputs import build_run_inputs
-from evolution.core.search_telemetry import append_search_telemetry
+from evolution.core.search_telemetry import (
+    append_search_telemetry,
+    resolve_ledger_root,
+)
 from evolution.core.saturation_check import (
     is_non_interactive,
     interactive_confirm,
@@ -705,7 +708,7 @@ def evolve_prompt_section(
 
     if val_aggregate_scores is not None:
         append_search_telemetry(
-            Path("output"),
+            resolve_ledger_root(output_dir),
             artifact=section_name,
             artifact_type="prompt_section",
             val_scores=val_aggregate_scores,

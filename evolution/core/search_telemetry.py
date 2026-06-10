@@ -27,6 +27,22 @@ from typing import Any, Optional
 LEDGER_NAME = "search_ledger.jsonl"
 
 
+def resolve_ledger_root(output_dir: Path) -> Path:
+    """The shared-ledger directory for a run whose artifacts live in output_dir.
+
+    Walks up to the nearest ancestor named ``output`` so every run — skill
+    (output/<name>/<ts>), tool (output/tools/<name>/<ts>), prompt-section
+    (output/prompts/<name>/<ts>) — shares one ``output/search_ledger.jsonl``.
+    A run dir with no ``output`` ancestor (tests on a tmp dir, a custom
+    --output-dir) falls back to itself, so the ledger never escapes its tree.
+    """
+    output_dir = Path(output_dir).resolve()
+    for ancestor in (output_dir, *output_dir.parents):
+        if ancestor.name == "output":
+            return ancestor
+    return output_dir
+
+
 @dataclass(frozen=True)
 class SearchTelemetryRow:
     """One evolve run's val-discrimination summary."""
