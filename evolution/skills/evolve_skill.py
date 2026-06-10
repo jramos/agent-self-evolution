@@ -56,6 +56,7 @@ from evolution.core.quality_gate import (
     write_gate_decision,
 )
 from evolution.core.run_inputs import build_run_inputs
+from evolution.core.search_telemetry import append_search_telemetry
 from evolution.core.skill_sources import discover_skill_sources
 
 # Without this, the BudgetAwareProposer + LMTimingCallback logs stay
@@ -1044,8 +1045,13 @@ def evolve(
             knee_payload: dict[str, Any] = {
                 "applied": False, "reason": "no_detailed_results",
             }
+            # Captured for search telemetry; None on the MIPROv2 fallback path.
+            val_aggregate_scores: Optional[list[float]] = None
+            best_candidate_idx: Optional[int] = None
             if hasattr(optimized_module, "detailed_results"):
                 details = optimized_module.detailed_results
+                val_aggregate_scores = [float(v) for v in details.val_aggregate_scores]
+                best_candidate_idx = int(details.best_idx)
                 if knee_point_strategy == "smallest":
                     knee_pick = select_knee_point(
                         candidates=details.candidates,
@@ -1402,6 +1408,9 @@ def evolve(
                 "knee_point": knee_payload,
                 "dataset": _dataset_payload(dataset),
                 "run_inputs": run_inputs,
+                # Persist the val distribution so the discrimination signal
+                # survives in the run record (never stored historically).
+                "val_aggregate_scores": val_aggregate_scores,
             }
             if benchmark_block is not None:
                 decision_payload["benchmark"] = benchmark_block
@@ -1467,6 +1476,15 @@ def evolve(
 
             gate_path = write_gate_decision(output_dir, decision_payload)
             console.print(f"  [dim]Gate decision logged to {gate_path}[/dim]")
+            if val_aggregate_scores is not None:
+                append_search_telemetry(
+                    Path("output"),
+                    artifact=skill_name,
+                    artifact_type="skill",
+                    val_scores=val_aggregate_scores,
+                    best_idx=best_candidate_idx,
+                    decision=decision_payload["decision"],
+                )
             if pr_created_block["status"] == "created":
                 console.print(
                     f"  [green]✓ PR opened: {pr_created_block['url']}[/green]"
