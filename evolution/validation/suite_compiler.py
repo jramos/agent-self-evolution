@@ -93,3 +93,30 @@ def assert_no_holdout_leakage(floor_text: str, holdout_tasks: Iterable[Task]) ->
         raise HoldoutLeakageError(
             f"compiled floor leaks holdout eval specifics: {sorted(set(leaks))}"
         )
+
+
+def main(argv: list[str] | None = None) -> int:
+    """Render the compiled floor for a suite to stdout (inspect/deploy)."""
+    import argparse
+    from pathlib import Path
+
+    from evolution.validation.task import TaskSuite
+
+    parser = argparse.ArgumentParser(
+        description="Render a zero-LM constraint floor from a closed-loop suite."
+    )
+    parser.add_argument("--tasks", type=Path, required=True, help="Suite JSONL path.")
+    args = parser.parse_args(argv)
+
+    suite = TaskSuite.from_jsonl(args.tasks)
+    floor = compile_suite_floor(suite.tasks)
+    assert_no_holdout_leakage(floor, suite.tasks)
+    if not floor:
+        print("(no compilable constraints in this suite)")
+        return 0
+    print(floor)
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
