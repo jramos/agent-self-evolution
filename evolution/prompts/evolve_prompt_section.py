@@ -63,20 +63,27 @@ from evolution.prompts.prompt_judge import (
 )
 from evolution.prompts.prompt_module import PromptModule, _extract_from_sentinels
 from evolution.prompts.prompt_proposer import PromptSectionProposer
-from evolution.validation.agent_runner import TaskRunContext
+from evolution.validation.agent_runner import AgentRunner, TaskRunContext
 from evolution.validation.artifact_installer import (
     ClaudeAppendPromptInstaller,
     HermesPromptSectionInstaller,
     atomic_write_bytes,
 )
-from evolution.validation.claude_runner import ClaudeCodeAgentRunner
+from evolution.validation.claude_runner import (
+    DEFAULT_CLAUDE_TIMEOUT_SECONDS,
+    ClaudeCodeAgentRunner,
+)
 from evolution.validation.hermes_runner import (
     DEFAULT_TASK_TIMEOUT_SECONDS,
     HermesAgentRunner,
 )
 from evolution.validation.report import score_task
 from evolution.validation.task import Task, TaskSuite
-from evolution.validation.validator import ClosedLoopValidator, ValidationInputs
+from evolution.validation.validator import (
+    ClosedLoopValidator,
+    ValidationInputs,
+    _materialize_fixture,
+)
 
 logging.basicConfig(
     level=logging.INFO,
@@ -234,7 +241,7 @@ def _prompt_builder_guard(target_path: Path) -> Iterator[None]:
 def _run_one_task_score(
     task: Task,
     *,
-    runner: HermesAgentRunner,
+    runner: AgentRunner,
     layer2_factory,
     layer2_threshold: float,
     reps: int = 1,
@@ -258,10 +265,7 @@ def _run_one_task_score(
     for _ in range(reps):
         with tempfile.TemporaryDirectory(prefix="ps_inner_") as fixture_tmp:
             fixture_dir = Path(fixture_tmp)
-            for relative_path, content in task.fixture_setup.items():
-                dest = fixture_dir / relative_path
-                dest.parent.mkdir(parents=True, exist_ok=True)
-                dest.write_text(content)
+            _materialize_fixture(fixture_dir, task.fixture_setup)
             ctx = TaskRunContext(
                 user_message=task.render_message(fixture_dir),
                 fixture_dir=fixture_dir,
@@ -344,7 +348,7 @@ def evolve_prompt_section(
     eval_model: Optional[str] = None,
     agent_model: Optional[str] = None,
     layer2_threshold: float = 0.7,
-    task_timeout_seconds: int = DEFAULT_TASK_TIMEOUT_SECONDS,
+    task_timeout_seconds: Optional[int] = None,
     max_total_cost_usd: Optional[float] = 150.0,
     gepa_minibatch_size: int = 3,
     gepa_acceptance: str = "improvement-or-equal",
@@ -375,12 +379,30 @@ def evolve_prompt_section(
     else:
         raise ValueError(f"unknown --target {target!r} (expected 'hermes' or 'claude')")
 
+    # Claude agent runs are multi-step and slower than hermes -z; give them a longer
+    # default ceiling. An explicit --task-timeout-seconds still wins.
+    if task_timeout_seconds is None:
+        task_timeout_seconds = (
+            DEFAULT_CLAUDE_TIMEOUT_SECONDS if target == "claude" else DEFAULT_TASK_TIMEOUT_SECONDS
+        )
+
+    # Fail fast on a non-existent section BEFORE any LM spend. The one legitimate
+    # exception is claude seeding a brand-new CLAUDE.md region from an override file
+    # (the region is created on --apply); every other path requires the section to
+    # exist, so a typo'd --section errors here instead of after a full GEPA run (or,
+    # worse for claude, silently appending an unintended region at --apply).
+    if not (target == "claude" and baseline_override_file is not None):
+        source.read(section_name)
+
     if baseline_override_file is not None:
         baseline_text = Path(baseline_override_file).read_text(encoding="utf-8")
     else:
-        # Validates the section/region exists; for claude a missing region raises
-        # KeyError — the user must add the sentinel block or pass --baseline-override-file.
         baseline_text = source.read(section_name)
+    if not baseline_text.strip():
+        raise ValueError(
+            f"baseline for section {section_name!r} is empty — add seed text to the "
+            f"section/region or pass a non-empty --baseline-override-file."
+        )
     baseline_chars = len(baseline_text)
 
     suite = TaskSuite.from_jsonl(tasks_path)
@@ -791,8 +813,9 @@ def evolve_prompt_section(
               help="Model the hermes -z agent runs as (deliberately weaker exposes more signal).")
 @click.option("--layer2-threshold", default=0.7, type=click.FloatRange(0.0, 1.0),
               help="Min content-judge score for a save task to pass (default 0.7).")
-@click.option("--task-timeout-seconds", default=DEFAULT_TASK_TIMEOUT_SECONDS,
-              type=click.IntRange(min=1))
+@click.option("--task-timeout-seconds", default=None,
+              type=click.IntRange(min=1),
+              help="Per-agent-run timeout. Default: 120s (hermes) / 300s (claude).")
 @click.option("--max-cost-usd", "max_total_cost_usd", default=150.0, type=float,
               help="Abort if cumulative spend exceeds this (default $150).")
 @click.option("--fitness-reps", default=3, type=click.IntRange(min=1),

@@ -67,6 +67,12 @@ class ClaudeCodePromptSource:
         return inner_start, inner_end
 
     def read(self, section_name: str) -> str:
+        if not self.claude_md_path.is_file():
+            raise FileNotFoundError(
+                f"CLAUDE.md not found at {self.claude_md_path}. Point --claude-md at an "
+                f"existing file containing an '<!-- evolve:{section_name} start -->' region, "
+                f"or pass --baseline-override-file to seed a new region."
+            )
         text = self.claude_md_path.read_text(encoding="utf-8")
         start, end = self._locate(text, section_name)
         return text[start:end].strip()
