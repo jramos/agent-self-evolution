@@ -964,6 +964,7 @@ def evolve(
                     lm=lm,
                     closed_loop_cache=closed_loop_cache,
                     baseline_artifact_text=skill["body"],
+                    suite_path=closed_loop_suite_path,
                 )
                 if sat_report.band != "healthy":
                     render_saturation_panel(sat_report, console=console)

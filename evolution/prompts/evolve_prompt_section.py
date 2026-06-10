@@ -534,6 +534,7 @@ def evolve_prompt_section(
                     metric=metric,
                     lm=eval_lm,
                     baseline_artifact_text=baseline_text,
+                    suite_path=suite.path,
                 )
                 render_saturation_panel(sat_report, console=console)
 
