@@ -33,6 +33,7 @@ __all__ = [
     "SaturationTelemetryRow",
     "build_saturation_telemetry_row",
     "append_saturation_telemetry",
+    "record_saturation_telemetry",
     "read_ledger",
     "resolve_ledger_root",
     "summarize_ledger",
@@ -118,6 +119,39 @@ def build_saturation_telemetry_row(
         abort_reason=abort_reason,
         decision=decision,
     )
+
+
+def record_saturation_telemetry(
+    output_dir: Path,
+    sat_report: Any,
+    *,
+    artifact: str,
+    artifact_type: str,
+    proceeded: bool,
+    abort_reason: Optional[str] = None,
+    decision: Optional[str] = None,
+) -> Optional[Path]:
+    """Build + append a row for one run in a single, never-raising call.
+
+    ``run_id`` is ``output_dir.name`` (the run timestamp) so the row joins back
+    to that run's ``gate_decision.json``; the ledger is shared at the nearest
+    ``output/`` ancestor. The whole call is best-effort — a malformed report or
+    an unwritable ledger degrades to None rather than disturbing the run (the
+    abort-path caller is about to ``sys.exit`` either way).
+    """
+    try:
+        row = build_saturation_telemetry_row(
+            sat_report,
+            run_id=Path(output_dir).name,
+            artifact=artifact,
+            artifact_type=artifact_type,
+            proceeded=proceeded,
+            abort_reason=abort_reason,
+            decision=decision,
+        )
+        return append_saturation_telemetry(resolve_ledger_root(output_dir), row=row)
+    except Exception:
+        return None
 
 
 def append_saturation_telemetry(
