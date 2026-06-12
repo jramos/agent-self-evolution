@@ -12,8 +12,9 @@ The honest answer this archive can give is narrow. ``avg_baseline`` in
 same vector, reused verbatim when the pre-flight ran). But the gated region is
 nearly empty and the pre-flight's abort decision was never persisted, so the
 study is a survivorship-bounded counterfactual on GEPA-completed runs, not a
-measurement of the deployed policy. The closed-loop thresholds (0.95/0.15) have
-too few runs to calibrate at all and are excluded.
+measurement of the deployed policy. The closed-loop thresholds (0.95/0.15) are
+out of scope here by design — this script calibrates only the synthetic
+threshold; the closed-loop thresholds are calibrated from the forward ledger.
 
 The script therefore leads with sample sizes and Wilson bounds and concludes
 with the data-collection fix (the saturation ledger this repo now writes),
@@ -187,22 +188,31 @@ def _bin_stats(runs: list[dict[str, Any]]) -> list[dict[str, Any]]:
 
 # --- archive loading ---------------------------------------------------------
 
-def load_gate_decisions(output_root: Path, since: Optional[str]) -> list[dict[str, Any]]:
-    """Walk output/**/gate_decision.json. since filters by run-dir name prefix."""
+def load_gate_decisions(
+    output_root: Path, since: Optional[str]
+) -> tuple[list[dict[str, Any]], int]:
+    """Walk output/**/gate_decision.json. since filters by run-dir name prefix.
+
+    Returns (runs, n_skipped). Unparseable/unreadable files are skipped — but
+    counted, so the "leads with sample sizes" report can disclose them rather
+    than silently shrinking the denominator.
+    """
     runs: list[dict[str, Any]] = []
+    n_skipped = 0
     for gate_path in sorted(Path(output_root).rglob("gate_decision.json")):
         if since and gate_path.parent.name < since:
             continue
         try:
             gate = json.loads(gate_path.read_text(encoding="utf-8"))
         except (json.JSONDecodeError, OSError):
+            n_skipped += 1
             continue
         gate["_run_id"] = gate_path.parent.name
         runs.append(gate)
-    return runs
+    return runs, n_skipped
 
 
-def analyze(all_runs: list[dict[str, Any]]) -> dict[str, Any]:
+def analyze(all_runs: list[dict[str, Any]], *, n_skipped: int = 0) -> dict[str, Any]:
     """Run the full methodology and return a JSON-able analysis record."""
     n_total = len(all_runs)
     n_closed_loop = sum(1 for g in all_runs if g.get("decision_signal") == "closed_loop")
@@ -232,6 +242,7 @@ def analyze(all_runs: list[dict[str, Any]]) -> dict[str, Any]:
 
     return {
         "n_total": n_total,
+        "n_skipped_unparseable": n_skipped,
         "n_paired_pool": len(pool),
         "n_closed_loop_excluded": n_closed_loop,
         "n_homogeneous": len(homogeneous),
@@ -287,11 +298,17 @@ def scan_saturation_ledger(output_root: Path) -> dict[str, Any]:
     ledger = Path(output_root) / "saturation_ledger.jsonl"
     if not ledger.exists():
         return {"exists": False, "n_rows": 0, "n_aborted": 0}
-    rows = [
-        json.loads(line)
-        for line in ledger.read_text(encoding="utf-8").splitlines()
-        if line.strip()
-    ]
+    # The ledger is appended to live by evolve runs; tolerate a torn final line
+    # (a killed run mid-write) rather than crashing the whole calibration.
+    rows: list[dict[str, Any]] = []
+    for line in ledger.read_text(encoding="utf-8").splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            rows.append(json.loads(line))
+        except json.JSONDecodeError:
+            continue
     return {
         "exists": True,
         "n_rows": len(rows),
@@ -317,36 +334,68 @@ def render_markdown(
     primary = analysis["false_abort_primary"]
     # The decisive numbers for the lead: would-abort n + Wilson upper at the live thresholds.
     at = {r["threshold"]: r for r in primary}
+    # Pick the lowest live threshold as the gated-region probe, defensively
+    # (THRESHOLD_SWEEP could be edited to not contain exactly 0.95/0.99).
+    r_low = at.get(0.95) or (primary[0] if primary else None)
+    r_high = at.get(0.99) or (primary[-1] if primary else None)
+    gated_n = r_low["would_abort_n"] if r_low else 0
+    gated_signal = r_low["n_real_improvement"] if r_low else 0
+    # "Data-starved" = the gated region is both nearly empty and shows no
+    # improvement signal. Once the ledger fills it, this flips and the report
+    # stops calling itself a survivorship counterfactual.
+    data_starved = gated_signal == 0 and gated_n < 30
+
     L = []
     L.append("# Saturation-threshold calibration: findings\n")
-    L.append(
+    intro = (
         "This report mines the deploy-gate archive to ask whether the saturation "
         "pre-flight's synthetic thresholds (`no_headroom_synthetic=0.99`, "
         "`weak_signal_synthetic=0.95`) would wrongly abort runs that actually "
-        "improve. **The archive cannot settle the thresholds** — it is data-"
-        "starved in exactly the gated region, and the pre-flight's abort decision "
-        "was never persisted. The numbers below are a survivorship-bounded "
-        "counterfactual on GEPA-completed runs, reported with Wilson bounds so "
-        "the absence of evidence is not mistaken for evidence of safety.\n"
+        "improve. "
     )
-    r95, r99 = at.get(0.95), at.get(0.99)
+    if data_starved:
+        intro += (
+            "**The archive cannot yet settle the thresholds** — it is data-"
+            "starved in exactly the gated region, and the pre-flight's abort "
+            "decision was never persisted historically. The numbers below are a "
+            "survivorship-bounded counterfactual on GEPA-completed runs, "
+            "reported with Wilson bounds so absence of evidence is not mistaken "
+            "for evidence of safety."
+        )
+    else:
+        intro += (
+            f"The gated region (baseline ≥ 0.95) now holds {gated_n} run(s), "
+            f"{gated_signal} with a statistically-supported improvement, so the "
+            "false-abort rate below is becoming a real measurement rather than a "
+            "survivorship counterfactual. Wilson bounds still apply."
+        )
+    L.append(intro + "\n")
+
     L.append("## Headline\n")
-    L.append(
-        f"At τ=0.95, **{r95['would_abort_n']} runs** would be aborted "
-        f"({r95['would_abort_frac_of_archive'] * 100:.1f}% of the pool); "
-        f"{r95['n_real_improvement']} produced a statistically-supported "
-        f"improvement → false-abort rate {r95['false_abort_rate'] * 100:.1f}% "
-        f"(Wilson 95% upper bound **{r95['wilson_upper'] * 100:.1f}%**). "
-        f"At τ=0.99, {r99['would_abort_n']} runs, "
-        f"{r99['n_real_improvement']} improvements, upper bound "
-        f"**{r99['wilson_upper'] * 100:.1f}%**. A point estimate of 0% on a "
-        "near-empty gated region is absence of evidence; the upper bound is the "
-        "honest read.\n"
-    )
+    if r_low and r_high:
+        L.append(
+            f"At τ={r_low['threshold']}, **{r_low['would_abort_n']} runs** would "
+            f"be aborted ({r_low['would_abort_frac_of_archive'] * 100:.1f}% of "
+            f"the pool); {r_low['n_real_improvement']} produced a statistically-"
+            f"supported improvement → false-abort rate "
+            f"{r_low['false_abort_rate'] * 100:.1f}% (Wilson 95% upper bound "
+            f"**{r_low['wilson_upper'] * 100:.1f}%**). At τ={r_high['threshold']}, "
+            f"{r_high['would_abort_n']} runs, {r_high['n_real_improvement']} "
+            f"improvements, upper bound **{r_high['wilson_upper'] * 100:.1f}%**. "
+            + (
+                "A point estimate of 0% on a near-empty gated region is absence "
+                "of evidence; the upper bound is the honest read.\n"
+                if data_starved
+                else "\n"
+            )
+        )
+    else:
+        L.append("No paired-vector runs in the pool — nothing to calibrate.\n")
     L.append(
         f"Pool: {analysis['n_paired_pool']} paired-vector runs of "
         f"{analysis['n_total']} archived "
-        f"({analysis['n_closed_loop_excluded']} closed-loop runs excluded from "
+        f"({analysis.get('n_skipped_unparseable', 0)} unparseable files skipped; "
+        f"{analysis['n_closed_loop_excluded']} closed-loop runs excluded from "
         f"synthetic calibration; {analysis['n_homogeneous']} in the homogeneous "
         f"balanced+no_regression+synthetic stratum used for the primary "
         f"analysis, {analysis['n_off_profile']} off-profile). Schema versions: "
@@ -406,11 +455,21 @@ def render_markdown(
     )
 
     L.append("## Threats to validity\n")
+    if data_starved:
+        L.append(
+            "- **Data-starvation (fatal to the headline):** the gated region "
+            f"holds only {gated_n} run(s) and none show a statistically-"
+            "supported improvement. 0% false-abort is absence of evidence — see "
+            "the Wilson upper bounds.\n"
+        )
+    else:
+        L.append(
+            f"- **Gated-region coverage:** the gated region holds {gated_n} "
+            f"run(s), {gated_signal} with a statistically-supported improvement; "
+            "the false-abort rate is now a measurement, but the Wilson bounds "
+            "still gate how far it generalizes.\n"
+        )
     L.append(
-        "- **Data-starvation (fatal to the headline):** the gated region holds "
-        "very few runs and the positive-signal runs all sit below the lowest "
-        "candidate threshold. 0% false-abort is absence of evidence — see the "
-        "Wilson upper bounds.\n"
         "- **Survivorship:** the archive contains only GEPA-completed runs; the "
         "pre-flight's abort was almost never recorded, so this is a reconstructed "
         "counterfactual on survivors, not a measurement of the deployed policy.\n"
@@ -528,11 +587,11 @@ def main(argv: Optional[list[str]] = None) -> int:
     )
     args = parser.parse_args(argv)
 
-    runs = load_gate_decisions(args.output_root, args.since)
+    runs, n_skipped = load_gate_decisions(args.output_root, args.since)
     if not runs:
         print(f"No gate_decision.json found under {args.output_root}.")
         return 0
-    analysis = analyze(runs)
+    analysis = analyze(runs, n_skipped=n_skipped)
     overfitting = scan_overfitting(args.output_root)
     ledger = scan_saturation_ledger(args.output_root)
 
