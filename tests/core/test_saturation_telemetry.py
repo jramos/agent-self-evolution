@@ -10,6 +10,7 @@ from evolution.core.saturation_telemetry import (
     build_saturation_telemetry_row,
     main,
     read_ledger,
+    record_saturation_telemetry,
     resolve_ledger_root,
     summarize_ledger,
 )
@@ -38,14 +39,13 @@ def _report(
     )
 
 
-def test_proceed_row_carries_band_scores_and_decision():
+def test_proceed_row_carries_band_and_scores_no_decision():
     row = build_saturation_telemetry_row(
         _report(band="healthy", holdout_score=0.62, holdout_n=43),
         run_id="20260612_101500",
         artifact="my-skill",
         artifact_type="skill",
         proceeded=True,
-        decision="deploy",
     )
     assert row.run_id == "20260612_101500"
     assert row.artifact == "my-skill"
@@ -55,10 +55,11 @@ def test_proceed_row_carries_band_scores_and_decision():
     assert row.holdout_n == 43
     assert row.proceeded is True
     assert row.abort_reason is None
-    assert row.decision == "deploy"
+    # decision is deliberately not on the row — it joins via run_id.
+    assert not hasattr(row, "decision")
 
 
-def test_abort_row_records_reason_and_no_decision():
+def test_abort_row_records_reason():
     row = build_saturation_telemetry_row(
         _report(band="no_headroom", holdout_score=0.995),
         run_id="20260612_102000",
@@ -70,7 +71,6 @@ def test_abort_row_records_reason_and_no_decision():
     assert row.band == "no_headroom"
     assert row.proceeded is False
     assert row.abort_reason == "non_interactive_deny"
-    assert row.decision is None
 
 
 def test_closed_loop_and_floor_scores_carried_when_present():
@@ -87,7 +87,6 @@ def test_closed_loop_and_floor_scores_carried_when_present():
         artifact="MEMORY_GUIDANCE",
         artifact_type="prompt_section",
         proceeded=True,
-        decision="reject",
     )
     assert row.closed_loop_score == pytest.approx(0.5)
     assert row.closed_loop_n == 8
@@ -106,18 +105,20 @@ def test_scores_absent_degrade_to_none():
     assert row.closed_loop_score is None
     assert row.closed_loop_n is None
     assert row.floor_score is None
-    assert row.noise_floor_passes is None
+    assert row.noise_mean_per_task_flip is None
 
 
-def test_noise_floor_passes_pulled_from_noise_sidecar():
+def test_noise_mean_per_task_flip_pulled_from_sidecar_as_rate():
+    # mean_per_task_flip is a rate in [0, 0.5], not a count — verify it round-trips
+    # as the rate, not reinterpreted.
     row = build_saturation_telemetry_row(
-        _report(noise={"mean_per_task_flip": 1.5, "other": "ignored"}),
+        _report(noise={"mean_per_task_flip": 0.2, "other": "ignored"}),
         run_id="ts",
         artifact="s",
         artifact_type="skill",
         proceeded=True,
     )
-    assert row.noise_floor_passes == pytest.approx(1.5)
+    assert row.noise_mean_per_task_flip == pytest.approx(0.2)
 
 
 def test_malformed_noise_does_not_break_row():
@@ -128,20 +129,18 @@ def test_malformed_noise_does_not_break_row():
         artifact_type="skill",
         proceeded=True,
     )
-    assert row.noise_floor_passes is None
+    assert row.noise_mean_per_task_flip is None
 
 
 def test_append_writes_one_jsonl_row(tmp_path):
     row = build_saturation_telemetry_row(
-        _report(), run_id="ts", artifact="s", artifact_type="skill",
-        proceeded=True, decision="deploy",
+        _report(), run_id="ts", artifact="s", artifact_type="skill", proceeded=True,
     )
     path = append_saturation_telemetry(tmp_path, row=row)
     assert path == tmp_path / LEDGER_NAME
     rows = read_ledger(path)
     assert len(rows) == 1
     assert rows[0]["artifact"] == "s"
-    assert rows[0]["decision"] == "deploy"
     assert rows[0]["proceeded"] is True
 
 
@@ -150,7 +149,7 @@ def test_append_is_additive_and_mixes_proceed_and_abort(tmp_path):
         tmp_path,
         row=build_saturation_telemetry_row(
             _report(band="healthy"), run_id="a", artifact="a",
-            artifact_type="skill", proceeded=True, decision="reject",
+            artifact_type="skill", proceeded=True,
         ),
     )
     append_saturation_telemetry(
@@ -174,6 +173,53 @@ def test_append_never_raises_on_unwritable_root(tmp_path):
         _report(), run_id="ts", artifact="s", artifact_type="skill", proceeded=True,
     )
     assert append_saturation_telemetry(blocker / "sub", row=row) is None
+
+
+# --- record_saturation_telemetry: the only function production code calls,
+# protecting three sys.exit / early-return paths. Must never raise. ---
+
+def test_record_derives_run_id_from_output_dir_and_writes_to_output_root(tmp_path):
+    run_dir = tmp_path / "output" / "tools" / "write_file" / "20260612_101500"
+    run_dir.mkdir(parents=True)
+    path = record_saturation_telemetry(
+        run_dir, _report(band="healthy", holdout_score=0.7),
+        artifact="write_file", artifact_type="tool", proceeded=True,
+    )
+    # Ledger lands at the resolved output/ ancestor, shared across runs.
+    assert path == tmp_path / "output" / LEDGER_NAME
+    rows = read_ledger(path)
+    assert rows[0]["run_id"] == "20260612_101500"  # joins to gate_decision.json
+    assert rows[0]["holdout_score"] == pytest.approx(0.7)
+
+
+class _BadReport:
+    """A report-shaped object whose field access raises — the build risk that
+    record_* (wrapping build_*) must absorb so an abort path can still exit."""
+
+    band = "no_headroom"
+
+    @property
+    def holdout_score(self):
+        raise RuntimeError("boom")
+
+
+def test_record_never_raises_when_build_fails(tmp_path):
+    # build_saturation_telemetry_row does float(sat_report.holdout_score); a
+    # malformed report raises inside build, a path append's own guard can't reach.
+    result = record_saturation_telemetry(
+        tmp_path, _BadReport(), artifact="x", artifact_type="skill",
+        proceeded=False, abort_reason="non_interactive_deny",
+    )
+    assert result is None
+
+
+def test_record_never_raises_on_unwritable_root(tmp_path):
+    blocker = tmp_path / "blocked"
+    blocker.write_text("not a dir")
+    assert record_saturation_telemetry(
+        blocker / "sub", _report(), artifact="s", artifact_type="skill",
+        proceeded=True,
+    ) is None
 
 
 def test_resolve_ledger_root_reused_from_search_telemetry():

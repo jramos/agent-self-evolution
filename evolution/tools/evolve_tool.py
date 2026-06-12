@@ -701,8 +701,8 @@ def evolve(
             cached_baseline_cl_per_example: Optional[list[float]] = None
             preflight_holdout_score: Optional[float] = None
             preflight_cl_score: Optional[float] = None
-            # Retained to the post-decision telemetry site below; stays None on
-            # the --no-saturation-check path so the proceed-path row is skipped.
+            # None on the --no-saturation-check path, so the proceed-path
+            # telemetry row below is skipped.
             sat_report = None
             if not skip_saturation_check:
                 holdout_examples_for_preflight = _build_examples(
@@ -757,6 +757,14 @@ def evolve(
                 cached_baseline_cl_per_example = sat_report.closed_loop_per_example
                 preflight_holdout_score = sat_report.holdout_score
                 preflight_cl_score = sat_report.closed_loop_score
+            # One proceed-path telemetry row per pre-flight that didn't abort,
+            # written here (before GEPA) so it's captured regardless of any
+            # later failure; the outcome joins back via run_id.
+            if sat_report is not None:
+                record_saturation_telemetry(
+                    output_dir, sat_report, artifact=tool_name,
+                    artifact_type="tool", proceeded=True,
+                )
 
             console.print(f"\n[bold cyan]Running GEPA optimization (max_full_evals={iterations})[/bold cyan]\n")
             start_time = time.time()
@@ -1218,12 +1226,6 @@ def evolve(
                     artifact_type="tool",
                     val_scores=val_aggregate_scores,
                     best_idx=best_candidate_idx,
-                    decision=decision_payload["decision"],
-                )
-            if sat_report is not None:
-                record_saturation_telemetry(
-                    output_dir, sat_report, artifact=tool_name,
-                    artifact_type="tool", proceeded=True,
                     decision=decision_payload["decision"],
                 )
             # Lineage + maintainer-local dossier (deployed == GEPA val-argmax).

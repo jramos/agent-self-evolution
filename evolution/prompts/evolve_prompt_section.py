@@ -597,6 +597,15 @@ def evolve_prompt_section(
                         )
                         return {"decision": "aborted", "reason": "user_abort"}
 
+            # One proceed-path telemetry row per pre-flight that didn't abort,
+            # written here (before GEPA) so it's captured regardless of any
+            # later failure; the outcome joins back via run_id.
+            if sat_report is not None:
+                record_saturation_telemetry(
+                    output_dir, sat_report, artifact=section_name,
+                    artifact_type="prompt_section", proceeded=True,
+                )
+
             # --- Constraint-floor pre-flight (opt-in) ---
             # Behaviorally score baseline vs baseline + a zero-LM compiled floor
             # on the holdout, BEFORE spending GEPA budget. If the floor already
@@ -786,12 +795,6 @@ def evolve_prompt_section(
             artifact_type="prompt_section",
             val_scores=val_aggregate_scores,
             best_idx=best_candidate_idx,
-            decision=decision_payload["decision"],
-        )
-    if sat_report is not None:
-        record_saturation_telemetry(
-            output_dir, sat_report, artifact=section_name,
-            artifact_type="prompt_section", proceeded=True,
             decision=decision_payload["decision"],
         )
 

@@ -6,14 +6,17 @@ that are uncalibrated magic numbers (0.99 / 0.95 / 0.15). Calibrating them needs
 the pre-flight's own band and scores joined to the run's eventual outcome — but
 that decision was never persisted. The archive only carries ``avg_baseline``
 inside ``gate_decision.json`` for runs that *completed* GEPA, so runs the
-pre-flight would abort are invisible, and the gated region (baseline ≥ 0.95) is
+pre-flight aborts are invisible, and the gated region (baseline ≥ 0.95) is
 almost empty. The archive therefore cannot settle the thresholds.
 
-This ledger closes that gap forward: every pre-flight invocation appends one row
-— on the proceed path (with the eventual deploy/reject) and, critically, on the
-abort path (which the archive never recorded). ``run_id`` joins each row back to
-that run's ``gate_decision.json``. The ledger is the corpus
-``scripts/analysis/calibrate_saturation.py`` calibrates against once it fills.
+This ledger closes that gap forward: every pre-flight invocation appends exactly
+one row, written at pre-flight time so it is captured whether the run proceeds
+or aborts (and regardless of any later failure). ``run_id`` joins the row back
+to that run's ``gate_decision.json``, where the eventual deploy/reject decision
+and bootstrap live — so the band↔outcome join is always reconstructable, and
+the ledger never has to wait for (or miss) the end of a run. The ledger is the
+corpus ``scripts/analysis/calibrate_saturation.py`` calibrates against once it
+fills.
 
 Mirrors ``evolution.core.search_telemetry`` and reuses its generic
 ``resolve_ledger_root`` / ``read_ledger`` helpers.
@@ -21,12 +24,16 @@ Mirrors ``evolution.core.search_telemetry`` and reuses its generic
 from __future__ import annotations
 
 import json
+import logging
 import statistics
 from dataclasses import asdict, dataclass
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any, Literal, Optional
 
+from evolution.core.saturation_check import SaturationBand
 from evolution.core.search_telemetry import read_ledger, resolve_ledger_root
+
+logger = logging.getLogger(__name__)
 
 __all__ = [
     "LEDGER_NAME",
@@ -41,15 +48,27 @@ __all__ = [
 
 LEDGER_NAME = "saturation_ledger.jsonl"
 
+ArtifactType = Literal["skill", "tool", "prompt_section"]
+AbortReason = Literal["non_interactive_deny", "user_decline"]
+
 
 @dataclass(frozen=True)
 class SaturationTelemetryRow:
-    """One pre-flight invocation: its band, scores, and the run's fate."""
+    """One saturation pre-flight invocation: its band and scores.
 
-    run_id: str  # the output/<...>/<ts> dir name — joins to that run's gate_decision.json
+    ``proceeded`` discriminates the two shapes: a proceeded run has
+    ``abort_reason is None``; an aborted run carries the reason it stopped. The
+    eventual deploy/reject decision is deliberately NOT stored here — it lives
+    in the run's ``gate_decision.json`` and is recovered by joining on
+    ``run_id`` (the run timestamp dir), which keeps this a single,
+    write-at-pre-flight-time record rather than something that must survive to
+    the end of the run.
+    """
+
+    run_id: str
     artifact: str
-    artifact_type: str  # "skill" | "tool" | "prompt_section"
-    band: str  # healthy | no_headroom | weak_signal | uniform_failure
+    artifact_type: ArtifactType
+    band: SaturationBand
     holdout_score: float
     holdout_n: int
     proceeded: bool
@@ -57,22 +76,24 @@ class SaturationTelemetryRow:
     closed_loop_n: Optional[int] = None
     floor_score: Optional[float] = None
     floor_n: Optional[int] = None
-    noise_floor_passes: Optional[float] = None
-    # Set only on the abort path: why the run stopped at the pre-flight.
-    abort_reason: Optional[str] = None  # "non_interactive_deny" | "user_decline"
-    # The eventual deploy gate outcome on the proceed path; None when aborted.
-    decision: Optional[str] = None  # "deploy" | "reject"
+    # Mean over tasks of the A/A minority-verdict fraction (0 = stable,
+    # 0.5 = coin-flip) from a <suite>.noise.json sidecar — the per-task flip
+    # rate a real closed-loop gain must clear. A rate, not a count.
+    noise_mean_per_task_flip: Optional[float] = None
+    # Set iff proceeded is False.
+    abort_reason: Optional[AbortReason] = None
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
 
 
-def _noise_floor_passes(noise: Optional[dict]) -> Optional[float]:
-    """Pull the A/A per-task flip floor from a <suite>.noise.json payload.
+def _noise_mean_per_task_flip(noise: Optional[dict]) -> Optional[float]:
+    """Pull ``mean_per_task_flip`` from a <suite>.noise.json payload.
 
-    The noise sidecar's ``mean_per_task_flip`` is the count of tasks expected to
-    flip pass/fail on identical artifacts — the floor a real closed-loop gain
-    must clear. Absent or malformed noise degrades to None, never raises.
+    It is the mean over tasks of the per-task minority-verdict fraction (a rate
+    in [0, 0.5]; ``evolution/validation/noise_calibration.py``), i.e. the A/A
+    flip rate a real closed-loop gain must clear. Absent or malformed noise
+    degrades to None, never raises.
     """
     if not isinstance(noise, dict):
         return None
@@ -85,17 +106,16 @@ def build_saturation_telemetry_row(
     *,
     run_id: str,
     artifact: str,
-    artifact_type: str,
+    artifact_type: ArtifactType,
     proceeded: bool,
-    abort_reason: Optional[str] = None,
-    decision: Optional[str] = None,
+    abort_reason: Optional[AbortReason] = None,
 ) -> SaturationTelemetryRow:
     """Build a telemetry row from a ``SaturationReport`` plus run context."""
     return SaturationTelemetryRow(
         run_id=run_id,
         artifact=artifact,
         artifact_type=artifact_type,
-        band=str(sat_report.band),
+        band=sat_report.band,
         holdout_score=float(sat_report.holdout_score),
         holdout_n=int(sat_report.holdout_n),
         proceeded=proceeded,
@@ -115,9 +135,8 @@ def build_saturation_telemetry_row(
             else None
         ),
         floor_n=int(sat_report.floor_n) if sat_report.floor_n is not None else None,
-        noise_floor_passes=_noise_floor_passes(sat_report.noise),
+        noise_mean_per_task_flip=_noise_mean_per_task_flip(sat_report.noise),
         abort_reason=abort_reason,
-        decision=decision,
     )
 
 
@@ -126,18 +145,18 @@ def record_saturation_telemetry(
     sat_report: Any,
     *,
     artifact: str,
-    artifact_type: str,
+    artifact_type: ArtifactType,
     proceeded: bool,
-    abort_reason: Optional[str] = None,
-    decision: Optional[str] = None,
+    abort_reason: Optional[AbortReason] = None,
 ) -> Optional[Path]:
     """Build + append a row for one run in a single, never-raising call.
 
     ``run_id`` is ``output_dir.name`` (the run timestamp) so the row joins back
     to that run's ``gate_decision.json``; the ledger is shared at the nearest
     ``output/`` ancestor. The whole call is best-effort — a malformed report or
-    an unwritable ledger degrades to None rather than disturbing the run (the
-    abort-path caller is about to ``sys.exit`` either way).
+    an unwritable ledger logs at DEBUG and degrades to None rather than
+    disturbing the run (telemetry must never break or block one, and on the
+    abort path the result is discarded regardless).
     """
     try:
         row = build_saturation_telemetry_row(
@@ -147,10 +166,10 @@ def record_saturation_telemetry(
             artifact_type=artifact_type,
             proceeded=proceeded,
             abort_reason=abort_reason,
-            decision=decision,
         )
         return append_saturation_telemetry(resolve_ledger_root(output_dir), row=row)
     except Exception:
+        logger.debug("saturation telemetry record failed", exc_info=True)
         return None
 
 
@@ -161,9 +180,9 @@ def append_saturation_telemetry(
 ) -> Optional[Path]:
     """Append one row to ``ledger_root/saturation_ledger.jsonl``.
 
-    Returns the ledger path, or None if the write fails. Never raises into the
-    evolve flow — telemetry must not break (or block) a run, and the abort path
-    that calls this is about to ``sys.exit`` regardless.
+    Returns the ledger path, or None if the write fails (logged at DEBUG so a
+    silently-empty ledger is diagnosable). Never raises — telemetry must not
+    break the evolve flow.
     """
     try:
         ledger_root = Path(ledger_root)
@@ -173,6 +192,7 @@ def append_saturation_telemetry(
             fh.write(json.dumps(row.to_dict()) + "\n")
         return ledger_path
     except Exception:
+        logger.debug("saturation telemetry write failed", exc_info=True)
         return None
 
 
@@ -216,8 +236,9 @@ def summarize_ledger(path: Path) -> str:
     lines.append("")
     lines.append(
         "Aborts are the rows the gate_decision archive never captured; once the "
-        "gated region (holdout ≥ 0.95) accrues runs with measured outcomes, "
-        "scripts/analysis/calibrate_saturation.py can settle the thresholds."
+        "gated region (holdout ≥ 0.95) accrues runs whose gate_decision.json "
+        "records an outcome, scripts/analysis/calibrate_saturation.py can settle "
+        "the thresholds."
     )
     return "\n".join(lines)
 
