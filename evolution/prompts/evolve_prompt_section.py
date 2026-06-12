@@ -590,66 +590,6 @@ def evolve_prompt_section(
                     artifact_type="prompt_section", proceeded=True,
                 )
 
-            # --- Constraint-floor pre-flight (opt-in) ---
-            # Behaviorally score baseline vs baseline + a zero-LM compiled floor
-            # on the holdout, BEFORE spending GEPA budget. If the floor already
-            # nears the ceiling, search is unlikely to earn its cost. One CL pass
-            # (baseline arm + floor arm) via the A/A-style two-slot validate.
-            floor_block: Optional[dict] = None
-            # Retained to the deploy gate so a cleared floor can be deployed as a
-            # fallback when the GEPA candidate fails. Stays None unless the floor
-            # probe ran and produced a verdict on the holdout.
-            floor_probe = None
-            floor_probe_suite: Optional[TaskSuite] = None
-            floor_text_for_deploy: Optional[str] = None
-            if compile_floor:
-                from evolution.core.saturation_check import floor_comparison_lines
-                from evolution.validation.suite_compiler import (
-                    assert_no_holdout_leakage,
-                    compile_suite_floor,
-                )
-                floor_text = compile_suite_floor(train_tasks)
-                assert_no_holdout_leakage(floor_text, holdout_tasks)
-                if not floor_text.strip():
-                    console.print(
-                        "[yellow]--compile-floor: no compilable constraints in the "
-                        "train split; skipping floor probe.[/yellow]"
-                    )
-                else:
-                    base_file = output_dir / "floor_baseline.txt"
-                    base_file.write_text(baseline_text, encoding="utf-8")
-                    plus_file = output_dir / "floor_baseline_plus.txt"
-                    plus_file.write_text(baseline_text + "\n\n" + floor_text, encoding="utf-8")
-                    floor_validator = ClosedLoopValidator(
-                        installer=installer, runner=runner,
-                        layer2_judge_factory=layer2_factory,
-                        layer2_threshold=layer2_threshold, reps=gate_reps,
-                        # Same noise-aware setting as the deploy gate below, so
-                        # the floor's pass/fail is judged by the identical rule.
-                        noise_aware=noise_aware_gate,
-                    )
-                    probe_suite = TaskSuite(
-                        path=suite.path, sha256=suite.sha256, tasks=tuple(holdout_tasks)
-                    )
-                    probe = floor_validator.validate(ValidationInputs(
-                        tool_name=section_name, suite=probe_suite,
-                        baseline_artifact=base_file, evolved_artifact=plus_file,
-                    ))
-                    base_score = probe.baseline.pass_rate
-                    floor_score = probe.evolved.pass_rate
-                    for line in floor_comparison_lines(base_score, floor_score, len(holdout_tasks)):
-                        console.print(f"[dim]{line}[/dim]")
-                    floor_probe = probe
-                    floor_probe_suite = probe_suite
-                    floor_text_for_deploy = floor_text
-                    floor_block = {
-                        "floor_text": floor_text,
-                        "baseline_score": base_score,
-                        "floor_score": floor_score,
-                        "floor_captured": floor_score - base_score,
-                        "n_tasks": len(holdout_tasks),
-                    }
-
             # --- GEPA optimization ---
             console.print(
                 f"\n[bold cyan]Running GEPA (max_full_evals={iterations})[/bold cyan]\n"
@@ -692,6 +632,66 @@ def evolve_prompt_section(
             )
         else:
             evolved_text = optimized.section_text
+
+        # --- Constraint-floor probe (opt-in) ---
+        # Behaviorally score baseline vs baseline + a zero-LM compiled floor on
+        # the holdout. Runs AFTER the guard releases (not inside it): the guard
+        # holds its own ``.cl_backup`` on the same target, and the validator's
+        # backup machinery would see it as stale. Out here it owns a clean
+        # backup lifecycle, same as the deploy gate below. If the floor clears
+        # the gate while the evolved candidate fails, it becomes the deploy
+        # fallback (resolve_floor_fallback).
+        floor_block: Optional[dict] = None
+        floor_probe = None
+        floor_probe_suite: Optional[TaskSuite] = None
+        floor_text_for_deploy: Optional[str] = None
+        if compile_floor:
+            from evolution.core.saturation_check import floor_comparison_lines
+            from evolution.validation.suite_compiler import (
+                assert_no_holdout_leakage,
+                compile_suite_floor,
+            )
+            floor_text = compile_suite_floor(train_tasks)
+            assert_no_holdout_leakage(floor_text, holdout_tasks)
+            if not floor_text.strip():
+                console.print(
+                    "[yellow]--compile-floor: no compilable constraints in the "
+                    "train split; skipping floor probe.[/yellow]"
+                )
+            else:
+                base_file = output_dir / "floor_baseline.txt"
+                base_file.write_text(baseline_text, encoding="utf-8")
+                plus_file = output_dir / "floor_baseline_plus.txt"
+                plus_file.write_text(baseline_text + "\n\n" + floor_text, encoding="utf-8")
+                floor_validator = ClosedLoopValidator(
+                    installer=installer, runner=runner,
+                    layer2_judge_factory=layer2_factory,
+                    layer2_threshold=layer2_threshold, reps=gate_reps,
+                    # Same noise-aware setting as the deploy gate below, so the
+                    # floor's pass/fail is judged by the identical rule.
+                    noise_aware=noise_aware_gate,
+                )
+                probe_suite = TaskSuite(
+                    path=suite.path, sha256=suite.sha256, tasks=tuple(holdout_tasks)
+                )
+                probe = floor_validator.validate(ValidationInputs(
+                    tool_name=section_name, suite=probe_suite,
+                    baseline_artifact=base_file, evolved_artifact=plus_file,
+                ))
+                base_score = probe.baseline.pass_rate
+                floor_score = probe.evolved.pass_rate
+                for line in floor_comparison_lines(base_score, floor_score, len(holdout_tasks)):
+                    console.print(f"[dim]{line}[/dim]")
+                floor_probe = probe
+                floor_probe_suite = probe_suite
+                floor_text_for_deploy = floor_text
+                floor_block = {
+                    "floor_text": floor_text,
+                    "baseline_score": base_score,
+                    "floor_score": floor_score,
+                    "floor_captured": floor_score - base_score,
+                    "n_tasks": len(holdout_tasks),
+                }
 
         # --- Deploy gate: closed-loop baseline vs evolved on the holdout suite ---
         console.print(
