@@ -11,7 +11,17 @@ context pack ──► [4 domain experts, parallel, blind] ──► proposals
 proposals ──► [red-team skeptic] ──► verdicts (KILL / CUT DOWN / ADVANCE)
 verdicts ──► [orchestrator pressure-test vs codebase] ──► verified set
 verified set ──► [synthesis] ──► ranked roadmap, each item with kill experiment
+roadmap ──► [staff-engineer synthesis review] ──► sequencing/merge/omission fixes
 ```
+
+The synthesis-review stage reviews the PACKAGING, not the individual items:
+wave ordering, hidden contradictions between merged items, omissions the panel
+under-weighted, re-proposals of shipped work, and whether the roadmap
+compounds toward the project's purpose. Item-level relitigating is out of
+scope — the skeptic already did that. Observed yield: a single review pass
+caught an internally contradictory merge, a buried highest-EV-per-dollar item,
+a calibration promise the data couldn't support, and a missing signal
+generator — defects invisible at item granularity.
 
 ## Rules that make it work
 
