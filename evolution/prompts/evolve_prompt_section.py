@@ -20,7 +20,6 @@ from __future__ import annotations
 import fcntl
 import json
 import logging
-import random
 import sys
 import tempfile
 import threading
@@ -72,7 +71,7 @@ from evolution.prompts.prompt_proposer import PromptSectionProposer
 from evolution.validation.agent_runner import AgentRunner, TaskRunContext
 from evolution.validation.artifact_installer import atomic_write_bytes
 from evolution.validation.report import score_task
-from evolution.validation.task import Task, TaskSuite
+from evolution.validation.task import Task, TaskSuite, split_train_holdout
 from evolution.validation.validator import (
     ClosedLoopValidator,
     ValidationInputs,
@@ -92,22 +91,6 @@ _BACKUP_SUFFIX = ".cl_backup"
 _LOCK_FILENAME = ".cl_validation.lock"
 
 
-def _split_train_holdout(
-    tasks: tuple[Task, ...], *, holdout_ratio: float, seed: int
-) -> tuple[list[Task], list[Task]]:
-    """Deterministic train/holdout split, stratified only by shuffle+seed.
-
-    Guarantees at least one task on each side when there are >= 2 tasks so
-    GEPA has something to train on and the deploy gate has something to
-    evaluate.
-    """
-    ordered = list(tasks)
-    random.Random(seed).shuffle(ordered)
-    n_holdout = max(1, int(round(len(ordered) * holdout_ratio)))
-    n_holdout = min(n_holdout, len(ordered) - 1) if len(ordered) > 1 else len(ordered)
-    holdout = ordered[:n_holdout]
-    train = ordered[n_holdout:]
-    return train, holdout
 
 
 def _behavioral_examples(tasks: list[Task]) -> list[dspy.Example]:
@@ -390,7 +373,7 @@ def evolve_prompt_section(
             f"split yields a non-empty GEPA trainset and a non-empty deploy-gate "
             f"holdout."
         )
-    train_tasks, holdout_tasks = _split_train_holdout(
+    train_tasks, holdout_tasks = split_train_holdout(
         suite.tasks, holdout_ratio=holdout_ratio, seed=seed
     )
 

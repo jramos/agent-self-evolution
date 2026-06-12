@@ -10,11 +10,74 @@ from pathlib import Path
 
 import pytest
 
+from evolution.core.constraints import ConstraintResult
 from evolution.core.quality_gate import (
     QUALITY_GATE_PRESETS,
+    _check_cl_primary_gate,
+    resolve_floor_fallback,
     resolve_proposer_mode,
     write_gate_decision,
 )
+
+
+def _gate(passed: bool) -> ConstraintResult:
+    return ConstraintResult(passed=passed, constraint_name="cl_primary_gate", message="")
+
+
+class TestResolveFloorFallback:
+    def test_evolved_passes_wins_regardless_of_floor(self):
+        # A clearing evolved candidate is always preferred; the floor is a
+        # fallback, never a competitor.
+        assert resolve_floor_fallback(
+            evolved_gate=_gate(True), floor_gate=_gate(True)
+        ) == "evolved"
+        assert resolve_floor_fallback(
+            evolved_gate=_gate(True), floor_gate=_gate(False)
+        ) == "evolved"
+        assert resolve_floor_fallback(
+            evolved_gate=_gate(True), floor_gate=None
+        ) == "evolved"
+
+    def test_evolved_fails_floor_clears_deploys_floor(self):
+        assert resolve_floor_fallback(
+            evolved_gate=_gate(False), floor_gate=_gate(True)
+        ) == "floor"
+
+    def test_both_fail_rejects(self):
+        assert resolve_floor_fallback(
+            evolved_gate=_gate(False), floor_gate=_gate(False)
+        ) == "reject"
+
+    def test_no_floor_degrades_to_reject(self):
+        # floor_gate=None (uncompilable/empty/not requested) → byte-identical to
+        # the no-floor path: evolved-or-reject only.
+        assert resolve_floor_fallback(
+            evolved_gate=_gate(False), floor_gate=None
+        ) == "reject"
+
+
+class TestFloorJudgedBySameRule:
+    def test_floor_obeys_noise_aware_required_gain(self):
+        # The floor is judged by the SAME _check_cl_primary_gate as evolved.
+        # With an A/A noise floor of 1.5, required gain is floor(1.5)+1 = 2, so a
+        # +1 floor win is rejected — proving the noise-aware rule applies
+        # symmetrically to the floor challenger. The floor is zero-LM, so its
+        # synth mean equals baseline's (synth Δ = 0, trivially within tolerance).
+        gate = _check_cl_primary_gate(
+            baseline_cl_passes=5,
+            evolved_cl_passes=6,  # +1 (the "floor" arm)
+            baseline_synth_mean=0.6,
+            evolved_synth_mean=0.6,
+            growth_pct=0.05,
+            noise_floor_passes=1.5,
+        )
+        assert gate.passed is False
+        # +2 clears the same gate.
+        assert _check_cl_primary_gate(
+            baseline_cl_passes=5, evolved_cl_passes=7,
+            baseline_synth_mean=0.6, evolved_synth_mean=0.6,
+            growth_pct=0.05, noise_floor_passes=1.5,
+        ).passed is True
 
 
 class TestResolveProposerMode:

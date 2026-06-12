@@ -12,7 +12,7 @@ import os
 import subprocess
 import time
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any, Literal, Optional
 
 from rich.console import Console
 
@@ -110,6 +110,31 @@ def _check_cl_primary_gate(
             f"synth Δ {synth_delta:+.3f} within ±{synth_tolerance:.3f}"
         ),
     )
+
+
+FloorFallbackChoice = Literal["evolved", "floor", "reject"]
+
+
+def resolve_floor_fallback(
+    *,
+    evolved_gate: ConstraintResult,
+    floor_gate: Optional[ConstraintResult],
+) -> FloorFallbackChoice:
+    """Pick what to deploy: the GEPA candidate, the compiled floor, or nothing.
+
+    Encodes precedence only — the per-challenger verdicts are produced upstream
+    by the SAME rule (``_check_cl_primary_gate`` for skills, the closed-loop
+    validator's decision for prompts), so floor and evolved are judged on equal
+    terms. The compiled floor is a *fallback*: it is only considered when the
+    evolved candidate failed the gate (so a clearing evolved candidate always
+    wins), and ``floor_gate is None`` (floor uncompilable/empty/not requested)
+    degrades to evolved-or-reject — byte-identical to the no-floor path.
+    """
+    if evolved_gate.passed:
+        return "evolved"
+    if floor_gate is not None and floor_gate.passed:
+        return "floor"
+    return "reject"
 
 
 def append_cl_decision_fields(
