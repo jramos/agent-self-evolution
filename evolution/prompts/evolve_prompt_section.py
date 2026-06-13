@@ -43,7 +43,6 @@ from evolution.core.lm_timing_callback import (
     register_litellm_failure_callback,
 )
 from evolution.core.pr_automation import disabled_pr_block
-from evolution.core.constraints import ConstraintResult
 from evolution.core.quality_gate import resolve_floor_fallback, write_gate_decision
 from evolution.core.run_inputs import build_run_inputs
 from evolution.core.lineage import LINEAGE_NAME, build_lineage
@@ -723,9 +722,10 @@ def evolve_prompt_section(
         # Floor fallback: the floor probe (when --compile-floor ran) scored
         # baseline-vs-baseline+floor on these SAME holdout tasks under the same
         # noise-aware rule, so probe.decision is the floor's verdict on the same
-        # gate. Deploy the floor only if the evolved candidate failed and the
-        # floor cleared.
-        floor_gate = None
+        # gate. The prompt deploy gate is no-regression, so a no-op evolved
+        # (0W/0L) "passes" without improving — distinguish improved (net win)
+        # from merely deployable so a winning floor preempts a no-op evolved.
+        floor_clears = False
         if floor_block is not None and floor_probe is not None:
             # Guard the reuse: the probe must have scored the same holdout the
             # deploy gate just used, or probe.decision isn't a same-gate verdict.
@@ -733,16 +733,13 @@ def evolve_prompt_section(
             assert floor_probe_suite.tasks == holdout_suite.tasks, (
                 "floor probe scored a different task set than the deploy gate"
             )
-            floor_gate = ConstraintResult(
-                passed=floor_probe.decision == "pass",
-                constraint_name="floor_gate", message=floor_probe.decision,
-            )
-        evolved_gate_result = ConstraintResult(
-            passed=report.decision == "pass",
-            constraint_name="closed_loop_gate", message=report.decision,
-        )
+            floor_clears = floor_probe.decision == "pass"
+        evolved_deployable = report.decision == "pass"
+        evolved_improved = evolved_deployable and report.delta.n_wins > 0
         choice = resolve_floor_fallback(
-            evolved_gate=evolved_gate_result, floor_gate=floor_gate
+            evolved_improved=evolved_improved,
+            evolved_deployable=evolved_deployable,
+            floor_clears=floor_clears,
         )
         deploy = choice in ("evolved", "floor")
         deployed_text = (

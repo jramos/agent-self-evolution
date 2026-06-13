@@ -117,23 +117,35 @@ FloorFallbackChoice = Literal["evolved", "floor", "reject"]
 
 def resolve_floor_fallback(
     *,
-    evolved_gate: ConstraintResult,
-    floor_gate: Optional[ConstraintResult],
+    evolved_improved: bool,
+    floor_clears: bool,
+    evolved_deployable: Optional[bool] = None,
 ) -> FloorFallbackChoice:
     """Pick what to deploy: the GEPA candidate, the compiled floor, or nothing.
 
-    Encodes precedence only — the per-challenger verdicts are produced upstream
-    by the SAME rule (``_check_cl_primary_gate`` for skills, the closed-loop
-    validator's decision for prompts), so floor and evolved are judged on equal
-    terms. The compiled floor is a *fallback*: it is only considered when the
-    evolved candidate failed the gate (so a clearing evolved candidate always
-    wins), and ``floor_gate is None`` (floor uncompilable/empty/not requested)
-    degrades to evolved-or-reject — byte-identical to the no-floor path.
+    Precedence: a strictly-improving evolved candidate always wins; otherwise a
+    winning floor is deployed (the "suite states the win" fallback, which fires
+    even when GEPA produced a no-op evolved that merely didn't regress);
+    otherwise a still-deployable evolved candidate ships; otherwise reject.
+
+    - ``evolved_improved`` — evolved strictly improved over baseline.
+    - ``floor_clears`` — the compiled floor cleared the gate vs baseline (False
+      when the floor was uncompilable/empty/not requested → degrades to the
+      no-floor path).
+    - ``evolved_deployable`` — evolved is shippable absent strict improvement
+      (e.g. a no-regression pass). Defaults to ``evolved_improved`` for gates
+      where deployability *requires* improvement (the skill CL-primary gate),
+      so the floor preempts a non-improving evolved only where the deploy gate
+      itself would have shipped one (the prompt no-regression gate).
     """
-    if evolved_gate.passed:
+    if evolved_deployable is None:
+        evolved_deployable = evolved_improved
+    if evolved_improved:
         return "evolved"
-    if floor_gate is not None and floor_gate.passed:
+    if floor_clears:
         return "floor"
+    if evolved_deployable:
+        return "evolved"
     return "reject"
 
 

@@ -1473,12 +1473,11 @@ def evolve(
             # growth_pass to the deploy decision so all downstream write/PR/apply
             # logic and the benchmark hook treat a floor deploy like any deploy;
             # deployed_full carries what actually ships.
+            # CL-primary deployability requires a strict gain, so improved ==
+            # deployable here (evolved_deployable defaults to evolved_improved).
             choice = resolve_floor_fallback(
-                evolved_gate=ConstraintResult(
-                    passed=growth_pass, constraint_name="evolved_gate",
-                    message="evolved deploy gate",
-                ),
-                floor_gate=floor_gate,
+                evolved_improved=growth_pass,
+                floor_clears=floor_gate is not None and floor_gate.passed,
             )
             floor_deployed = choice == "floor"
             deployed_full = floor_full if floor_deployed else evolved_full

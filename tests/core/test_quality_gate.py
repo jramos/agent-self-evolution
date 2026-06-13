@@ -25,35 +25,41 @@ def _gate(passed: bool) -> ConstraintResult:
 
 
 class TestResolveFloorFallback:
-    def test_evolved_passes_wins_regardless_of_floor(self):
-        # A clearing evolved candidate is always preferred; the floor is a
-        # fallback, never a competitor.
-        assert resolve_floor_fallback(
-            evolved_gate=_gate(True), floor_gate=_gate(True)
-        ) == "evolved"
-        assert resolve_floor_fallback(
-            evolved_gate=_gate(True), floor_gate=_gate(False)
-        ) == "evolved"
-        assert resolve_floor_fallback(
-            evolved_gate=_gate(True), floor_gate=None
-        ) == "evolved"
+    def test_improving_evolved_always_wins(self):
+        # A strictly-improving evolved candidate is always preferred over the floor.
+        assert resolve_floor_fallback(evolved_improved=True, floor_clears=True) == "evolved"
+        assert resolve_floor_fallback(evolved_improved=True, floor_clears=False) == "evolved"
 
-    def test_evolved_fails_floor_clears_deploys_floor(self):
+    def test_floor_preempts_non_improving_but_deployable_evolved(self):
+        # The motivating case: GEPA produced a no-op (deployable via no-regression
+        # but no net improvement) and the floor wins → deploy the floor.
         assert resolve_floor_fallback(
-            evolved_gate=_gate(False), floor_gate=_gate(True)
+            evolved_improved=False, evolved_deployable=True, floor_clears=True
         ) == "floor"
 
-    def test_both_fail_rejects(self):
+    def test_non_improving_deployable_evolved_ships_when_no_winning_floor(self):
+        # No winning floor → keep deploying the no-regression-passing evolved
+        # (don't start rejecting runs that ship today).
         assert resolve_floor_fallback(
-            evolved_gate=_gate(False), floor_gate=_gate(False)
+            evolved_improved=False, evolved_deployable=True, floor_clears=False
+        ) == "evolved"
+
+    def test_regressing_evolved_falls_back_to_floor(self):
+        assert resolve_floor_fallback(
+            evolved_improved=False, evolved_deployable=False, floor_clears=True
+        ) == "floor"
+
+    def test_regressing_evolved_no_floor_rejects(self):
+        assert resolve_floor_fallback(
+            evolved_improved=False, evolved_deployable=False, floor_clears=False
         ) == "reject"
 
-    def test_no_floor_degrades_to_reject(self):
-        # floor_gate=None (uncompilable/empty/not requested) → byte-identical to
-        # the no-floor path: evolved-or-reject only.
-        assert resolve_floor_fallback(
-            evolved_gate=_gate(False), floor_gate=None
-        ) == "reject"
+    def test_deployable_defaults_to_improved_for_cl_primary_gate(self):
+        # Skill CL-primary gate: deployability == improvement, so a failing gate
+        # with no winning floor rejects (unchanged behavior).
+        assert resolve_floor_fallback(evolved_improved=False, floor_clears=False) == "reject"
+        assert resolve_floor_fallback(evolved_improved=False, floor_clears=True) == "floor"
+        assert resolve_floor_fallback(evolved_improved=True, floor_clears=True) == "evolved"
 
 
 class TestFloorJudgedBySameRule:
