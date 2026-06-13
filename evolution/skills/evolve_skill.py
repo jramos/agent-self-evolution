@@ -1735,7 +1735,10 @@ def evolve(
                         f"required {decision_payload['cl_required_gain']}[/yellow]"
                     )
                 failed_path = output_dir / "evolved_FAILED.md"
-                failed_path.write_text(evolved_full)
+                # Save what was actually rejected: deployed_full is the floor on a
+                # benchmark-failed floor deploy (floor_deployed ⟹ growth_pass was
+                # True until the benchmark flipped it), else the evolved candidate.
+                failed_path.write_text(deployed_full)
                 console.print(f"  Saved failed variant to {failed_path}")
                 reject_reason = decision_payload.get("reason", "growth_quality_gate")
                 if apply_in_place:
