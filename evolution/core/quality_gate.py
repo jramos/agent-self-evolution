@@ -119,7 +119,7 @@ def resolve_floor_fallback(
     *,
     evolved_improved: bool,
     floor_clears: bool,
-    evolved_deployable: Optional[bool] = None,
+    evolved_deployable: bool,
 ) -> FloorFallbackChoice:
     """Pick what to deploy: the GEPA candidate, the compiled floor, or nothing.
 
@@ -133,13 +133,13 @@ def resolve_floor_fallback(
       when the floor was uncompilable/empty/not requested → degrades to the
       no-floor path).
     - ``evolved_deployable`` — evolved is shippable absent strict improvement
-      (e.g. a no-regression pass). Defaults to ``evolved_improved`` for gates
-      where deployability *requires* improvement (the skill CL-primary gate),
-      so the floor preempts a non-improving evolved only where the deploy gate
-      itself would have shipped one (the prompt no-regression gate).
+      (e.g. a no-regression pass). On gates where deployability *requires*
+      improvement (the skill CL-primary gate) callers pass the same value as
+      ``evolved_improved``; on the prompt no-regression gate they differ, so the
+      floor preempts a non-improving evolved only where the deploy gate itself
+      would have shipped one. Passed explicitly (no default) so the per-gate
+      relationship is visible at each call site.
     """
-    if evolved_deployable is None:
-        evolved_deployable = evolved_improved
     if evolved_improved:
         return "evolved"
     if floor_clears:

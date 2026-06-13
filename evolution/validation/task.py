@@ -100,7 +100,7 @@ class TaskSuite:
 def split_train_holdout(
     tasks: "tuple[Task, ...] | list[Task]", *, holdout_ratio: float, seed: int
 ) -> tuple[list[Task], list[Task]]:
-    """Deterministic train/holdout split, stratified only by shuffle+seed.
+    """Deterministic train/holdout split by seeded shuffle (not stratified).
 
     Guarantees at least one task on each side when there are >= 2 tasks so the
     consumer (GEPA training vs. the deploy/floor gate) has something on each

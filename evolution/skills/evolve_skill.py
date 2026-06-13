@@ -14,11 +14,16 @@ import time
 import traceback
 from pathlib import Path
 from datetime import datetime
-from typing import Any, Optional
+from typing import TYPE_CHECKING, Any, Optional
 
 import click
 import dspy
 from rich.console import Console
+
+if TYPE_CHECKING:
+    # Type-only import; the validation stack is lazy-imported inside the
+    # functions that use it to keep it off the cold path.
+    from evolution.validation.task import TaskSuite
 from rich.panel import Panel
 from rich.table import Table
 
@@ -528,7 +533,7 @@ def _maybe_build_closed_loop_cache_skill(
     gate_mode: str = "sampled",
     agent_model: Optional[str] = None,
     agent_timeout_seconds: Optional[int] = None,
-    suite_override: Optional[Any] = None,
+    suite_override: "Optional[TaskSuite]" = None,
 ):
     """Build a ClosedLoopFeedbackCache for the skill path; return None when disabled.
 
@@ -587,7 +592,7 @@ def _maybe_build_closed_loop_cache_skill(
 
 
 def _load_behavioral_examples_from_suite(
-    suite_path: Path, *, suite_override: Optional[Any] = None
+    suite_path: Path, *, suite_override: "Optional[TaskSuite]" = None
 ) -> list:
     """Build behavioral dspy.Examples from a suite file.
 
@@ -970,6 +975,30 @@ def evolve(
                 suite_override=cl_holdout_suite,
             )
 
+            # Under --compile-floor the deploy/floor cache is scoped to the
+            # HOLDOUT split (above), so it must NOT also feed GEPA's metric —
+            # GEPA's behavioral examples and feedback augmentation would then be
+            # scored on the floor's holdout, leaking it into the search the
+            # deploy gate evaluates against. Give the metric its own TRAIN-scoped
+            # cache so GEPA learns from train CL signal and the holdout stays
+            # held out. Without --compile-floor both are the same whole-suite cache.
+            if compile_floor and closed_loop_cache is not None:
+                metric_cache = _maybe_build_closed_loop_cache_skill(
+                    skill_name=skill_name,
+                    skill_path=skill_path,
+                    baseline_skill_body=skill["body"],
+                    suite_path=closed_loop_suite_path,
+                    saturation_threshold=closed_loop_saturation_threshold,
+                    min_iters=closed_loop_min_iters,
+                    window_size=closed_loop_window_size,
+                    gate_mode=_cache_gate_mode,
+                    agent_model=closed_loop_agent_model,
+                    agent_timeout_seconds=closed_loop_task_timeout_seconds,
+                    suite_override=cl_train_suite,
+                )
+            else:
+                metric_cache = closed_loop_cache
+
             # Build the metric once: DSPy's LM cache lines up across GEPA's
             # per-iteration scoring and the holdout eval below. The [BUDGET]
             # feedback line targets growth_free_threshold (the zone where the
@@ -980,7 +1009,7 @@ def evolve(
                 judge,
                 baseline_skill_text=skill["body"],
                 max_growth=config.growth_free_threshold,
-                closed_loop_cache=closed_loop_cache,
+                closed_loop_cache=metric_cache,
             )
 
             trainset = dataset.to_dspy_examples("train")
@@ -1402,16 +1431,22 @@ def evolve(
                     )
                     _floor_static = validator.validate_static(floor_full, "skill")
                     _floor_ceiling = validator._check_absolute_chars(floor_full, baseline_chars)
+                    _floor_static_failures = [c for c in _floor_static if not c.passed]
                     _floor_ok = (
                         _floor_cl.passed
-                        and all(c.passed for c in _floor_static)
+                        and not _floor_static_failures
                         and _floor_ceiling.passed
                     )
-                    _floor_msg = (
-                        _floor_cl.message if not _floor_cl.passed
-                        else "floor cleared CL + static + ceiling" if _floor_ok
-                        else "floor failed static/ceiling"
-                    )
+                    # Surface the specific failing check so a rejected floor is
+                    # debuggable, not a generic "static/ceiling" string.
+                    if _floor_ok:
+                        _floor_msg = "floor cleared CL + static + ceiling"
+                    elif not _floor_cl.passed:
+                        _floor_msg = _floor_cl.message
+                    elif _floor_static_failures:
+                        _floor_msg = "; ".join(c.message for c in _floor_static_failures)
+                    else:
+                        _floor_msg = _floor_ceiling.message
                     floor_gate = ConstraintResult(
                         passed=_floor_ok, constraint_name="floor_gate", message=_floor_msg,
                     )
@@ -1474,9 +1509,10 @@ def evolve(
             # logic and the benchmark hook treat a floor deploy like any deploy;
             # deployed_full carries what actually ships.
             # CL-primary deployability requires a strict gain, so improved ==
-            # deployable here (evolved_deployable defaults to evolved_improved).
+            # deployable here (both are growth_pass).
             choice = resolve_floor_fallback(
                 evolved_improved=growth_pass,
+                evolved_deployable=growth_pass,
                 floor_clears=floor_gate is not None and floor_gate.passed,
             )
             floor_deployed = choice == "floor"

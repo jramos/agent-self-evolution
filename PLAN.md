@@ -921,8 +921,13 @@ original plan under-weighted.
    map onto a tool-selection description (a tool suite yields at most the thin
    over-eagerness clause); not a char-cap reason — there is no MCP-protocol cap,
    `max_tool_desc_size=500` is a tunable framework guardrail. Default-off paths
-   are byte-identical; the floor-deploy decision path is covered by the e2e
-   smoke.
+   are byte-identical; the `resolve_floor_fallback` decision rule is unit-tested
+   and the full floor-deploy path was exercised by a manual `claude -p` smoke
+   (floor deploy fired: baseline 0.00 → floor 0.50, deployed `compiled_floor`).
+   Note an honest asymmetry: the skill CL-primary gate requires a strict gain,
+   so a deployed floor there beat baseline; the prompt no-regression gate does
+   not, so "deployed floor" on the prompt path means the floor cleared the gate
+   over a non-improving evolved, not necessarily a measured win over baseline.
 
 3. **Memoize the baseline phase during search only.** `ClosedLoopValidator`
    re-runs the baseline phase on every `validate()` call; in trainset mode

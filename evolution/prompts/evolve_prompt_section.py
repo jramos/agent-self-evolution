@@ -729,10 +729,16 @@ def evolve_prompt_section(
         if floor_block is not None and floor_probe is not None:
             # Guard the reuse: the probe must have scored the same holdout the
             # deploy gate just used, or probe.decision isn't a same-gate verdict.
-            assert floor_probe_suite is not None
-            assert floor_probe_suite.tasks == holdout_suite.tasks, (
-                "floor probe scored a different task set than the deploy gate"
-            )
+            # Correctness guard (not a type-narrowing assert): the floor verdict
+            # is only a same-gate verdict if the probe scored the same holdout
+            # the deploy gate just used. Raise so it survives `python -O`.
+            if (
+                floor_probe_suite is None
+                or floor_probe_suite.tasks != holdout_suite.tasks
+            ):
+                raise ValueError(
+                    "floor probe scored a different task set than the deploy gate"
+                )
             floor_clears = floor_probe.decision == "pass"
         evolved_deployable = report.decision == "pass"
         evolved_improved = evolved_deployable and report.delta.n_wins > 0
@@ -786,7 +792,10 @@ def evolve_prompt_section(
             "floor_pass_rate": floor_probe.evolved.pass_rate,
             "n_wins": floor_probe.delta.n_wins,
             "n_losses": floor_probe.delta.n_losses,
-            "evolved_failed_decision": report.decision,
+            # The evolved arm's gate verdict. On the prompt no-regression gate
+            # this can be "pass" (a no-op evolved the floor preempted), so the
+            # field is named neutrally — not "failed".
+            "evolved_decision": report.decision,
         }
     decision_payload = {
         "schema_version": _GATE_SCHEMA_VERSION,
@@ -900,7 +909,9 @@ def evolve_prompt_section(
         "decision": "deploy",
         "reason": "floor_fallback" if floor_deployed else "passed",
         "deployed_artifact": "compiled_floor" if floor_deployed else "evolved",
-        "evolved_chars": len(deployed_text),
+        # Size of what actually shipped (floor or evolved); the gate_decision
+        # record keeps evolved_chars as the GEPA candidate's size.
+        "deployed_chars": len(deployed_text),
         "applied": apply,
     }
 

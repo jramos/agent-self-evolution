@@ -33,6 +33,12 @@ class TestSplitTrainHoldout:
         train, holdout = split_train_holdout(tuple(_tasks(2)), holdout_ratio=0.9, seed=0)
         assert len(train) == 1 and len(holdout) == 1
 
+    def test_high_ratio_still_leaves_a_nonempty_train(self):
+        # The clamp prevents an all-holdout/empty-train split — else the floor
+        # would be compiled from zero tasks and silently no-op.
+        train, holdout = split_train_holdout(tuple(_tasks(5)), holdout_ratio=1.0, seed=0)
+        assert len(train) == 1 and len(holdout) == 4
+
 
 class TestTaskRendering:
     def test_render_substitutes_fixture_dir(self, tmp_path):

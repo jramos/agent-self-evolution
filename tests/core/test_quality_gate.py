@@ -26,9 +26,14 @@ def _gate(passed: bool) -> ConstraintResult:
 
 class TestResolveFloorFallback:
     def test_improving_evolved_always_wins(self):
-        # A strictly-improving evolved candidate is always preferred over the floor.
-        assert resolve_floor_fallback(evolved_improved=True, floor_clears=True) == "evolved"
-        assert resolve_floor_fallback(evolved_improved=True, floor_clears=False) == "evolved"
+        # A strictly-improving evolved candidate is always preferred over the
+        # floor, regardless of the other flags (the first arm short-circuits).
+        for floor_clears in (True, False):
+            for deployable in (True, False):
+                assert resolve_floor_fallback(
+                    evolved_improved=True, evolved_deployable=deployable,
+                    floor_clears=floor_clears,
+                ) == "evolved"
 
     def test_floor_preempts_non_improving_but_deployable_evolved(self):
         # The motivating case: GEPA produced a no-op (deployable via no-regression
@@ -54,12 +59,19 @@ class TestResolveFloorFallback:
             evolved_improved=False, evolved_deployable=False, floor_clears=False
         ) == "reject"
 
-    def test_deployable_defaults_to_improved_for_cl_primary_gate(self):
-        # Skill CL-primary gate: deployability == improvement, so a failing gate
-        # with no winning floor rejects (unchanged behavior).
-        assert resolve_floor_fallback(evolved_improved=False, floor_clears=False) == "reject"
-        assert resolve_floor_fallback(evolved_improved=False, floor_clears=True) == "floor"
-        assert resolve_floor_fallback(evolved_improved=True, floor_clears=True) == "evolved"
+    def test_cl_primary_gate_passes_improved_equal_to_deployable(self):
+        # The skill CL-primary gate requires a strict gain, so callers pass
+        # improved == deployable: a failing gate with no winning floor rejects,
+        # with a winning floor deploys the floor.
+        assert resolve_floor_fallback(
+            evolved_improved=False, evolved_deployable=False, floor_clears=False
+        ) == "reject"
+        assert resolve_floor_fallback(
+            evolved_improved=False, evolved_deployable=False, floor_clears=True
+        ) == "floor"
+        assert resolve_floor_fallback(
+            evolved_improved=True, evolved_deployable=True, floor_clears=True
+        ) == "evolved"
 
 
 class TestFloorJudgedBySameRule:
