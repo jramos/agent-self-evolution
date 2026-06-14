@@ -7,7 +7,7 @@ ledger, resume, stratification, and futility-stop logic deterministically.
 import json
 from pathlib import Path
 
-from evolution.code.campaign import run_campaign
+from evolution.code.campaign import Skip, run_campaign
 from evolution.code.campaign_report import OrganismResult
 from evolution.code.harvest import Candidate, stratify
 
@@ -47,6 +47,21 @@ class TestCampaignOrchestration:
         rows = [json.loads(l) for l in (tmp_path / "campaign_ledger.jsonl").read_text().splitlines()]
         assert any(r.get("status") == "not_valid" and r["fix_sha"] == "sha002" for r in rows)
         assert sum(1 for r in rows if r.get("status") == "organism") == 3
+
+    def test_skip_reasons_recorded(self, tmp_path):
+        cands = _cands(3)
+        canned = {
+            "sha000": OrganismResult("tools/t.py", "sha000", [True, True, True]),
+            "sha001": Skip("too_large"),
+            "sha002": Skip("not_valid"),
+        }
+        rep = run_campaign(Path("/u"), output_dir=tmp_path, max_organisms=10, stages=(),
+                           candidates=cands, organism_runner=lambda c: canned[c.fix_sha])
+        assert rep["n_organisms"] == 1
+        rows = [json.loads(l) for l in (tmp_path / "campaign_ledger.jsonl").read_text().splitlines()]
+        statuses = {r["fix_sha"]: r["status"] for r in rows}
+        assert statuses["sha001"] == "too_large"
+        assert statuses["sha002"] == "not_valid"
 
     def test_resume_skips_done(self, tmp_path):
         cands = _cands(4)

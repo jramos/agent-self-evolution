@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import json
 import logging
+from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
 from typing import Optional
@@ -35,6 +36,21 @@ from evolution.core.hermes_provider import resolve_default_lm
 
 console = Console()
 
+# The proposer emits the COMPLETE corrected file, so the output budget must hold
+# the whole rewrite plus chain-of-thought reasoning. At 8000 a large tool's
+# rewrite truncates → unparseable → a false "couldn't repair". 32000 (~120k chars)
+# covers nearly all tools; genuinely huge ones are excluded by MAX_TOOL_CHARS
+# rather than silently truncated (whole-file rewrite has an inherent size ceiling).
+PROPOSER_MAX_TOKENS = 32000
+MAX_TOOL_CHARS = 80000
+
+
+@dataclass
+class Skip:
+    """A candidate that yielded no organism, with the reason (for the ledger)."""
+
+    reason: str
+
 
 def _git_show(repo: Path, ref: str) -> Optional[str]:
     import subprocess
@@ -45,26 +61,34 @@ def _git_show(repo: Path, ref: str) -> Optional[str]:
 
 
 def run_organism(
-    repo: Path, c: Candidate, engine: RepairEngine, *, seeds: int, base_python: str | None,
-) -> Optional[OrganismResult]:
+    repo: Path, c: Candidate, engine: RepairEngine, *, seeds: int,
+    base_python: str | None, max_tool_chars: int = MAX_TOOL_CHARS,
+) -> "OrganismResult | Skip":
     """Repair one harvested bug across ``seeds`` seeds in a single worktree and
-    verify each against the oracle. Returns None if the candidate isn't a valid
-    organism (parent doesn't fail anything the fix passes, or setup failed)."""
+    verify each against the oracle. Returns a :class:`Skip` (with reason) when the
+    candidate yields no organism: source missing, too large for a whole-file
+    rewrite, worktree setup failed, or the parent doesn't fail anything the fix
+    passes (not a clean single-tool bug)."""
+    parent_src = _git_show(repo, f"{c.parent_sha}:{c.tool_path}")
+    if parent_src is None:
+        return Skip("source_missing")
+    if len(parent_src) > max_tool_chars:
+        # Whole-file rewrite would exceed the output budget; excluded honestly
+        # rather than counted as an unrepairable bug (a method ceiling, not a
+        # loop failure). Diff-based repair for huge files is a future extension.
+        return Skip("too_large")
     try:
         env = WorktreeEnv.create(repo, base_ref=c.fix_sha, base_python=base_python)
     except WorktreeError:
-        return None
+        return Skip("worktree_failed")
     try:
         env.assert_authoritative(c.tool_path.split("/")[0])
         # Oracle (fix) is on disk at fix_sha → its own failures are env-flaky tests.
         oracle_failures = frozenset(_failures(env, c.test_path))
-        parent_src = _git_show(repo, f"{c.parent_sha}:{c.tool_path}")
-        if parent_src is None:
-            return None
         env.write_tool(c.tool_path, parent_src)
         bug_tests = tuple(sorted(set(_failures(env, c.test_path)) - oracle_failures))
         if not bug_tests:
-            return None
+            return Skip("not_valid")
         seed_results: list[bool] = []
         for _ in range(seeds):
             env.write_tool(c.tool_path, parent_src)  # reset to buggy
@@ -77,7 +101,7 @@ def run_organism(
             seed_results.append(bool(gate.deploy))
         return OrganismResult(tool=c.tool_path, fix_sha=c.fix_sha, seeds=seed_results)
     except WorktreeError:
-        return None
+        return Skip("worktree_failed")
     finally:
         env.destroy()
 
@@ -91,6 +115,7 @@ def run_campaign(
     seeds: int = 3,
     max_rounds: int = 5,
     max_per_tool: int = 3,
+    max_tool_chars: int = MAX_TOOL_CHARS,
     max_cost_usd: Optional[float] = None,
     proposer_model: Optional[str] = None,
     base_python: Optional[str] = None,
@@ -127,7 +152,7 @@ def run_campaign(
         from evolution.core.lm_timing_callback import LMTimingCallback  # noqa: PLC0415
 
         rlm = resolve_default_lm(role="optimizer", explicit_model=proposer_model)
-        lm = dspy.LM(rlm.model, **rlm.lm_kwargs, temperature=0.7, max_tokens=8000)
+        lm = dspy.LM(rlm.model, **rlm.lm_kwargs, temperature=0.7, max_tokens=PROPOSER_MAX_TOKENS)
         dspy.configure(callbacks=[LMTimingCallback()])
         COST_LEDGER.reset()
         if max_cost_usd is not None:
@@ -138,7 +163,8 @@ def run_campaign(
                       f"target {max_organisms} organisms (stages {stages})")
 
         def organism_runner(c: Candidate):  # noqa: F811
-            return run_organism(repo, c, engine, seeds=seeds, base_python=base_python)
+            return run_organism(repo, c, engine, seeds=seeds, base_python=base_python,
+                                max_tool_chars=max_tool_chars)
 
     if candidates is None:
         candidates = stratify(harvest_candidates(repo), max_per_tool=max_per_tool)
@@ -162,8 +188,9 @@ def run_campaign(
             aborted = True
             break
         done.add(c.fix_sha)
-        if org is None:
-            _append({"fix_sha": c.fix_sha, "tool": c.tool_path, "status": "not_valid"})
+        if not isinstance(org, OrganismResult):
+            reason = org.reason if isinstance(org, Skip) else "not_valid"
+            _append({"fix_sha": c.fix_sha, "tool": c.tool_path, "status": reason})
             continue
         organisms.append(org)
         _append({"status": "organism", "tool": org.tool, "fix_sha": org.fix_sha,
@@ -204,14 +231,16 @@ def run_campaign(
 @click.option("--repair-rounds", default=5, type=click.IntRange(min=1))
 @click.option("--max-per-tool", default=3, type=click.IntRange(min=1),
               help="Cap organisms per tool so the sample stays diverse (default 3).")
+@click.option("--max-tool-chars", default=MAX_TOOL_CHARS, type=click.IntRange(min=1),
+              help="Skip tools whose source exceeds this (whole-file rewrite ceiling).")
 @click.option("--max-cost-usd", default=None, type=click.FloatRange(min=0.0),
               help="Abort cleanly when cumulative LM cost exceeds this.")
 @click.option("--proposer-model", default=None)
 @click.option("--base-python", default=None,
               help="Interpreter for the isolated venv (default: the repo's venv/.venv).")
 @click.option("--output-dir", default=None, type=click.Path(file_okay=False, path_type=Path))
-def main(repo_root, max_organisms, seeds, repair_rounds, max_per_tool, max_cost_usd,
-         proposer_model, base_python, output_dir):
+def main(repo_root, max_organisms, seeds, repair_rounds, max_per_tool, max_tool_chars,
+         max_cost_usd, proposer_model, base_python, output_dir):
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s: %(message)s",
                         datefmt="%H:%M:%S")
     if output_dir is None:
@@ -219,8 +248,8 @@ def main(repo_root, max_organisms, seeds, repair_rounds, max_per_tool, max_cost_
         output_dir = Path("output") / "code_campaign" / ts
     run_campaign(repo_root, output_dir=Path(output_dir), max_organisms=max_organisms,
                  seeds=seeds, max_rounds=repair_rounds, max_per_tool=max_per_tool,
-                 max_cost_usd=max_cost_usd, proposer_model=proposer_model,
-                 base_python=base_python)
+                 max_tool_chars=max_tool_chars, max_cost_usd=max_cost_usd,
+                 proposer_model=proposer_model, base_python=base_python)
 
 
 if __name__ == "__main__":
