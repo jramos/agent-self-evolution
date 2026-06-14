@@ -59,6 +59,24 @@ def _test_relnorm(path: str) -> str:
     return path.replace("\\", "/").lstrip("./")
 
 
+def _parse_pytest_failures(output: str) -> set[str]:
+    """The set of failing/erroring test node ids from pytest's short summary.
+
+    pytest prints ``FAILED <nodeid> - <reason>`` / ``ERROR <nodeid> ...`` lines;
+    we take the node id so two runs can be compared by identity. Used by the
+    baseline-diff floor to isolate failures the repair introduced from
+    environment-level ones present on both runs."""
+    failures: set[str] = set()
+    for line in output.splitlines():
+        s = line.strip()
+        for prefix in ("FAILED ", "ERROR "):
+            if s.startswith(prefix):
+                nodeid = s[len(prefix):].split(" - ", 1)[0].strip()
+                if nodeid:
+                    failures.add(nodeid)
+    return failures
+
+
 def _is_test_path(path: str) -> bool:
     """Whether ``path`` is a test artifact a repair must never modify: any file
     under a ``tests/`` directory, a ``test_*.py``/``*_test.py`` module, or a
@@ -161,22 +179,45 @@ def run_code_gate(
         return _reject("held-out test split failed — the fix does not generalize "
                        "beyond the visible test (teaching-to-the-test)")
 
-    # 5. regression floor
-    floor = env.run_test(*floor_paths)
-    guards["floor"] = {
-        "ran": list(floor_paths),
-        "passed": floor.passed,
-        "exit_code": floor.exit_code,
-        "duration_seconds": round(floor.duration_seconds, 2),
-        "is_full_suite": False,
-    }
-    if floor.exit_code == _PYTEST_NO_TESTS_COLLECTED:
-        decision["floor_output_tail"] = floor.output[-2000:]
+    # 5. regression floor — no NEW failures vs the pre-repair baseline. A large
+    # suite (or an isolated venv missing optional deps) routinely has unrelated
+    # pre-existing failures, so demanding absolute green would reject every
+    # repair. Diff the failing-test sets instead: run the floor on the repaired
+    # source, then on the base source, and reject only failures the repair
+    # *introduced*. (`--tb=no` + full_output keeps the FAILED summary complete
+    # and parseable.)
+    repaired_floor = env.run_test(*floor_paths, extra_args=["--tb=no"], full_output=True)
+    if repaired_floor.exit_code == _PYTEST_NO_TESTS_COLLECTED:
+        decision["floor_output_tail"] = repaired_floor.output[-2000:]
         return _reject(f"regression floor {list(floor_paths)} collected no tests "
                        f"(check the --floor-path)")
-    if not floor.passed:
-        decision["floor_output_tail"] = floor.output[-2000:]
-        return _reject(f"regression floor {list(floor_paths)} failed")
+    repaired_failures = _parse_pytest_failures(repaired_floor.output)
+
+    if base_src == "":
+        # Brand-new file: no baseline to diff against, so require absolute green.
+        base_failures: set[str] = set()
+        new_failures = sorted(repaired_failures)
+    else:
+        env.write_tool(tool_relpath, base_src)
+        try:
+            base_floor = env.run_test(*floor_paths, extra_args=["--tb=no"], full_output=True)
+        finally:
+            env.write_tool(tool_relpath, repaired)  # always restore the repair
+        base_failures = _parse_pytest_failures(base_floor.output)
+        new_failures = sorted(repaired_failures - base_failures)
+
+    guards["floor"] = {
+        "ran": list(floor_paths),
+        "new_failures": new_failures,
+        "base_failure_count": len(base_failures),
+        "repaired_failure_count": len(repaired_failures),
+        "duration_seconds": round(repaired_floor.duration_seconds, 2),
+        "is_full_suite": False,
+    }
+    if new_failures:
+        decision["floor_output_tail"] = repaired_floor.output[-2000:]
+        return _reject(f"regression floor introduced {len(new_failures)} new "
+                       f"failure(s): {new_failures[:10]}")
 
     decision["decision"] = "deploy"
     decision["reason"] = "visible+held-out pass, surface frozen, regression floor green"

@@ -51,7 +51,25 @@ class TestCodeGate:
         assert res.deploy, res.reason
         assert res.decision["decision"] == "deploy"
         assert res.decision["guards"]["holdout"]["passed"]
-        assert res.decision["guards"]["floor"]["passed"]
+        assert res.decision["guards"]["floor"]["new_failures"] == []
+
+    def test_floor_catches_introduced_regression(self, tmp_path):
+        # A committed test encodes the OLD (buggy) behavior add(1,1)==0; it
+        # passes on the buggy base but fails once add is correctly fixed. The
+        # baseline-diff floor must flag it as an introduced regression even
+        # though the visible+held-out splits pass.
+        repo = StagedRepo(tmp_path)
+        repo.write(TOOL, BUGGY_CALC)
+        repo.write(VIS, VISIBLE_TEST)
+        repo.write(HOLD, HOLDOUT_TEST)
+        repo.write("tests/tools/test_calc_legacy.py",
+                   "from tools.calc import add\n\n\ndef test_legacy():\n    assert add(1, 1) == 0\n")
+        repo.git_init_commit()
+        repo.write_tool(TOOL, FIXED_CALC)
+        res = _gate(repo, _fixed_result(FIXED_CALC))
+        assert not res.deploy
+        assert "introduced" in res.reason
+        assert any("test_legacy" in f for f in res.decision["guards"]["floor"]["new_failures"])
 
     def test_gaming_fix_rejected_by_holdout(self, tmp_path):
         # Passes the visible test (add(2,3)==5) by hard-coding it, but fails the

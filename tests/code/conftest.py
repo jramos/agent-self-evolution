@@ -42,7 +42,8 @@ class StagedRepo:
     def write_tool(self, relpath: str, src: str) -> None:
         (self.root / relpath).write_text(src)
 
-    def run_test(self, *test_paths: str, timeout: int = 120, extra_args=None) -> TestRun:
+    def run_test(self, *test_paths: str, timeout: int = 120, extra_args=None,
+                 full_output: bool = False) -> TestRun:
         start = time.monotonic()
         res = subprocess.run(
             [sys.executable, "-m", "pytest", "-q", "--no-header",
@@ -50,7 +51,8 @@ class StagedRepo:
             cwd=str(self.root), capture_output=True, text=True, timeout=timeout,
             env=_NO_BYTECODE_ENV,
         )
-        out = (res.stdout + "\n" + res.stderr)[-6000:]
+        combined = res.stdout + "\n" + res.stderr
+        out = combined if full_output else combined[-6000:]
         return TestRun(passed=res.returncode == 0, output=out,
                        duration_seconds=time.monotonic() - start,
                        exit_code=res.returncode)

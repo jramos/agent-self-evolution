@@ -111,6 +111,7 @@ class WorktreeEnv:
         self.venv = venv
         self._output_tail_bytes = 6000
         self._base_python = sys.executable
+        self._dep_sites: list[str] = []
 
     # -- construction ------------------------------------------------------
 
@@ -158,14 +159,17 @@ class WorktreeEnv:
             )
 
     def _build_venv(self) -> None:
-        # --system-site-packages: inherit the base interpreter's already-built
-        # deps so the editable install is --no-deps cheap. The worktree's
-        # editable finder still shadows the base one (its site dir is first on
-        # sys.path and it sorts ahead in sys.meta_path) — assert_authoritative
-        # confirms empirically. Build isolation (pip default) supplies the
-        # setuptools backend from cache, independent of the venv's contents.
+        # A *clean* venv (no --system-site-packages): the base interpreter is
+        # often itself a venv symlinked to a bare base, so --system-site-packages
+        # would chain to the base and miss the deps we need. Instead, the
+        # worktree's own editable install maps every Hermes package to the
+        # worktree, and the base venv's site-packages is added via PYTHONPATH at
+        # test time (see _test_env) — that exposes the third-party dependencies
+        # *without* executing the base's editable .pth, so the original Hermes
+        # finder is never installed and there is no competing `tools` import.
+        # Build isolation (pip default) supplies the setuptools backend.
         res = _run(
-            [self._base_python, "-m", "venv", "--system-site-packages", str(self.venv)],
+            [self._base_python, "-m", "venv", str(self.venv)],
             cwd=self._root,
             timeout=_VENV_TIMEOUT,
         )
@@ -182,6 +186,32 @@ class WorktreeEnv:
             raise WorktreeError(
                 f"editable install failed: {(res.stderr or res.stdout).strip()[-1500:]}"
             )
+        self._dep_sites = self._query_dep_sites()
+
+    def _query_dep_sites(self) -> list[str]:
+        """The base interpreter's site-packages dirs, where the target repo's
+        third-party deps live. Added to PYTHONPATH at test time so imports
+        resolve, without running that environment's .pth files."""
+        probe = "import site, json; print(json.dumps(site.getsitepackages()))"
+        res = _run([self._base_python, "-c", probe], cwd=self._root, timeout=60)
+        if res.returncode != 0:
+            return []
+        import json
+
+        try:
+            return [p for p in json.loads(res.stdout.strip() or "[]") if Path(p).is_dir()]
+        except ValueError:
+            return []
+
+    def _test_env(self) -> dict:
+        """Env for in-worktree python runs: no bytecode writes, plus the base
+        interpreter's site-packages on PYTHONPATH for third-party deps."""
+        existing = os.environ.get("PYTHONPATH", "")
+        parts = [*self._dep_sites, existing] if existing else list(self._dep_sites)
+        env = dict(_NO_BYTECODE_ENV)
+        if parts:
+            env["PYTHONPATH"] = os.pathsep.join(parts)
+        return env
 
     # -- properties --------------------------------------------------------
 
@@ -210,7 +240,7 @@ class WorktreeEnv:
             f"sys.stdout.write(json.dumps([os.path.realpath(p) for p in paths if p]))\n"
         )
         res = _run([str(self.python), "-c", probe], cwd=self.worktree, timeout=60,
-                   env=_NO_BYTECODE_ENV)
+                   env=self._test_env())
         if res.returncode != 0:
             raise WorktreeError(
                 f"could not import '{package}' in the isolated venv: {res.stderr.strip()}"
@@ -270,12 +300,16 @@ class WorktreeEnv:
         return out
 
     def run_test(
-        self, *test_paths: str, timeout: int = _DEFAULT_TEST_TIMEOUT, extra_args: list[str] | None = None
+        self, *test_paths: str, timeout: int = _DEFAULT_TEST_TIMEOUT,
+        extra_args: list[str] | None = None, full_output: bool = False,
     ) -> TestRun:
         """Run pytest on ``test_paths`` with the worktree venv, cwd=worktree.
 
         ``-p no:cacheprovider`` keeps the worktree free of a ``.pytest_cache``
-        that would dirty its git status.
+        that would dirty its git status. ``full_output`` keeps the entire
+        combined output instead of a tail — needed when the caller must parse the
+        complete set of failing test ids (e.g. the baseline-diff regression floor),
+        which a tail could truncate.
         """
         import time
 
@@ -285,9 +319,10 @@ class WorktreeEnv:
         ]
         start = time.monotonic()
         try:
-            res = _run(args, cwd=self.worktree, timeout=timeout, env=_NO_BYTECODE_ENV)
+            res = _run(args, cwd=self.worktree, timeout=timeout, env=self._test_env())
             duration = time.monotonic() - start
-            out = (res.stdout + "\n" + res.stderr)[-self._output_tail_bytes:]
+            combined = res.stdout + "\n" + res.stderr
+            out = combined if full_output else combined[-self._output_tail_bytes:]
             return TestRun(passed=res.returncode == 0, output=out,
                            duration_seconds=duration, exit_code=res.returncode)
         except subprocess.TimeoutExpired:
