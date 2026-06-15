@@ -105,10 +105,14 @@ sections:
           ~2/3 of the work. In production the failing test is always present, so 0.60 is
           the deployable test-feedback-repair rate; the <b>3/12 (~0.25)</b> that survive
           value-withholding is the autonomy floor. Whether the answer-informed fixes
-          generalize or hard-code is still open: a hard-coded-literal scan flagged 16/32
-          control fixes, but on inspection those are mostly legitimate feature
-          identifiers, not input-hardcoding, so the scan is inconclusive &#8212; the
-          fuzzed differential is the real discriminator. Of 33 harvested candidates: 20
+          generalize or hard-code was then probed with a fuzzed differential: fresh
+          inputs (never in the tests) through each control fix and the upstream oracle,
+          compared. Of the 11 control successes, <b>4 are meaningfully testable</b>
+          (distinct non-trivial returns: patch_parser across 7 diverse patches,
+          discord_tool, file_tools, kanban_tools) and <b>all 4 match the oracle on every
+          fresh input (0 divergences)</b> &#8212; evidence the fixes generalize rather
+          than hard-code. Thin, though: 3 more return constants (match only confirms
+          "doesn't raise"), and 4 need fixtures to call. Of 33 harvested candidates: 20
           valid organisms, 7 source-missing, 5 not-valid, 1 too-large.
 
   - header: "2. The null: capable-agent artifact decoupling"
@@ -196,8 +200,9 @@ sections:
             <b>Test-feedback, not autonomous re-derivation (checked).</b> The leakage
             check showed the test's expected values are load-bearing: withholding them
             drops 11/12 to 3/12. So 0.60 is the test-feedback-repair rate (the production
-            regime), not autonomous re-derivation (~0.25); whether answer-informed fixes
-            generalize vs hard-code is still open (the literal-scan was inconclusive).
+            regime), not autonomous re-derivation (~0.25). A fuzzed differential cleared
+            the 4 control fixes it could meaningfully test (0 divergences from the oracle
+            on fresh inputs) &#8212; evidence against hard-coding, but thin (4 of 20).
           - >-
             <b>Underpowered null.</b> n=7 resolves only effects above ~50%; the null is
             an upper bound on a large effect, scoped to one capable-agent class and

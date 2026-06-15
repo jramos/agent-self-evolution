@@ -99,8 +99,21 @@ that survive value-withholding is the **autonomy floor**. Whether the answer-inf
 fixes *generalize* or *hard-code* the test inputs is still open — a hard-coded-literal
 scan flagged 16/32 accepted control fixes, but on inspection those are mostly
 legitimate feature identifiers (`delete_message`, `traversal`, `cannot be deleted`,
-model names), **not** input-hardcoding, so the scan is inconclusive; the fuzzed
-differential (fresh inputs, diff repaired-vs-oracle) is the real discriminator.
+model names), **not** input-hardcoding, so the scan is inconclusive.
+
+**Fuzzed differential — the fixes that we can check generalize (run).** To settle
+generalize-vs-hard-code, we ran fresh inputs (never in the tests) through each
+control fix and the upstream oracle and compared outputs. Of the 11 control
+successes, **4 are meaningfully testable** (distinct, non-trivial return values):
+`patch_parser` (7 diverse patch strings), `discord_tool`, `file_tools`,
+`kanban_tools`. **All 4 match the oracle on every fresh input (0 divergences)** — the
+repaired code reproduces the upstream fix's behavior on inputs it never saw, which is
+evidence the fixes *generalize* rather than hard-code the test cases. The honest
+bounds: 3 more "fuzzable" tools return `None`/a constant, so their match only confirms
+"doesn't raise differently," not behavioral agreement; 4 weren't callable without
+fixtures (I/O, no pure function, or repair didn't reproduce this run). So the
+anti-hard-code evidence is **clean but thin (4 of 20 organisms)** — a divergence would
+also have been ambiguous (overfit vs. a valid alternative fix), and none occurred.
 
 **Disposition (for an honest denominator).** Of 33 harvested candidates: 20 valid
 organisms, 7 source-missing, 5 not-valid (parent didn't cleanly fail), 1 too-large
@@ -186,6 +199,7 @@ shipped propose-only triage sentinel — which is exactly the production regime 
 | Deploy-reachable 0.60 [0.387, 0.781]; bootstrap [0.40,0.80]; ICC 0.326 | `reports/asymmetry_campaign_report.json` (committed summary) | 20 organisms × 3 seeds |
 | Per-organism rows + per-seed flags (re-derives 12/20) | `reports/asymmetry_campaign_ledger.jsonl` (committed manifest) | 33 candidates → 20 organisms |
 | Leakage check: control 11/12, no-leak (values withheld) 3/12 | `reports/asymmetry_leakage_check.json` (per-organism A/B) | 12 deploy-reachable × 3 seeds × 2 arms |
+| Fuzzed differential: 4 meaningfully-testable fixes, 4/4 generalize (0 divergences) | `reports/asymmetry_fuzz_differential.json` (per-case oracle-vs-repaired) | 11 control fixes × fresh inputs |
 | Pooled per-seed 0.68 (for-contrast, dishonest) | same summary | 60 seeds |
 | Judge saturation ≥0.95: 15/338, 0 with LB>0 — *but the source flags itself data-starved (Wilson upper 20–49%), not settled* | `reports/saturation_calibration_findings.md` | 338 paired-vector runs |
 | Capable-agent decoupling (both directions; canary 1.00 vs 0.00) | `PLAN.md` "Campaign conclusion — capable-agent artifact decoupling" | A/A floor 0/7 (n=7) |
@@ -197,9 +211,10 @@ shipped propose-only triage sentinel — which is exactly the production regime 
 - **Test-feedback, not autonomous re-derivation (checked).** The leakage check (§1)
   showed the test's expected values are load-bearing: withholding them drops 11/12 →
   3/12. So 0.60 is the *test-feedback-repair* rate (the production regime, where the
-  failing test is present), not an autonomous-re-derivation rate (~0.25). Whether the
-  answer-informed fixes generalize vs. hard-code is still open (the literal-scan was
-  inconclusive); the fuzzed differential is the next discriminator.
+  failing test is present), not an autonomous-re-derivation rate (~0.25). On the
+  generalize-vs-hard-code question, a fuzzed differential cleared the 4 control fixes
+  it could meaningfully test (0 divergences from the oracle on fresh inputs) — evidence
+  against hard-coding, but thin (4 of 20; the rest return constants or need fixtures).
 - **Underpowered null.** n=7 resolves only ≥~50% couplings; the null is an upper bound
   on a large effect, scoped to one capable-agent class and name-inferable tools.
 - **Confounded axis.** Oracle-presence co-varies with headroom and task type; the
