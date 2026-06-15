@@ -362,8 +362,26 @@ Cost: each task is one `hermes -z` run (~$0.05–$0.50). The bundled `patch.json
 | **Phase 1** | Skill files (SKILL.md) | DSPy + GEPA | ✅ [Validated](reports/phase1_validation_report.pdf) |
 | **Phase 2** | Tool descriptions + dual-signal deploy gate | DSPy + GEPA | ✅ [Validated](reports/phase2_validation_report.pdf) |
 | **Phase 3** | System prompt sections (Hermes + Claude Code) | DSPy + GEPA | ✅ [Validated](reports/phase3_validation_report.pdf) |
-| **Phase 4** | Tool implementation code | Iterative test-feedback repair | ✅ Validated (code-evolution campaign) |
+| **Phase 4** | Tool implementation code | Iterative test-feedback repair | ✅ [Validated](reports/asymmetry_findings.md) (code-evolution campaign) |
 | **Phase 5** | Continuous improvement loop | Propose-only triage sentinel | ✅ [Sentinel shipped](docs/operating_the_sentinel.md) |
+
+## Findings
+
+The campaign behind those phases produced one consolidated result — an **asymmetry**:
+
+> Self-evolution got deploy-grade traction in exactly one regime — when a ground-truth
+> **executable oracle** stands between the artifact and the verdict (code under
+> deterministic tests, no agent in the loop): **deploy-reachable 0.60 [Wilson
+> 0.39–0.78], N=20 real bugs, pre-registered kill line.** Where the signal is instead
+> an LLM judge or a capable agent's behavior, we measured **no detectable effect at our
+> power, on one capable-agent class** — in both directions (improving *and* degrading
+> the artifact). That bounds the effect; it is not proof of inertness.
+
+The boundary is sharp: traction tracks **how mechanical and agent-free the verdict is.**
+Dead ends (metamorphic verification 0/8, held-out independence 3/8, dependency-regression
+supply 0) delimit the regime rather than contradict it. Full result, honest CIs, and a
+provenance table: **[reports/asymmetry_findings.md](reports/asymmetry_findings.md)**
+([PDF](reports/asymmetry_report.pdf)).
 
 ## Engines
 

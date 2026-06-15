@@ -1,0 +1,153 @@
+meta:
+  title: "The Oracle Asymmetry"
+  subtitle: "Where evolutionary self-improvement of an agent gets measurable traction"
+  organization: "Agent Self-Evolution"
+  repository: "github.com/jramos/agent-self-evolution"
+
+# Verified against the source JSON before the PDF is rendered. If any number here
+# drifts from the data, generate_findings_report refuses to emit the PDF.
+provenance:
+  source: "reports/asymmetry_campaign_report.json"
+  checks:
+    - {path: "n_organisms", expect: 20}
+    - {path: "deploy_reachable.k", expect: 12}
+    - {path: "deploy_reachable.n", expect: 20}
+    - {path: "deploy_reachable.fraction", expect: 0.60, tol: 0.005}
+    - {path: "deploy_reachable.wilson.0", expect: 0.387, tol: 0.01}
+    - {path: "deploy_reachable.wilson.1", expect: 0.781, tol: 0.01}
+    - {path: "deploy_reachable.cluster_bootstrap.ci_low", expect: 0.40, tol: 0.005}
+    - {path: "deploy_reachable.cluster_bootstrap.ci_high", expect: 0.80, tol: 0.005}
+    - {path: "deploy_reachable.cluster_bootstrap.p_below_kill", expect: 0.0}
+    - {path: "icc", expect: 0.326, tol: 0.01}
+    - {path: "design_effect", expect: 1.65, tol: 0.02}
+    - {path: "effective_n", expect: 36.3, tol: 0.1}
+    - {path: "verdict", expect: "GREEN"}
+
+sections:
+  - header: "Abstract"
+    blocks:
+      - paragraph: >-
+          A framework for evolving an agent's skills, tool descriptions, prompts, and
+          code was exercised across many experiments. The consolidated result is an
+          <b>asymmetry</b>. Self-evolution produced deploy-grade traction in exactly one
+          regime: when a ground-truth <b>executable oracle</b> stands between the
+          artifact and the verdict &#8212; code under deterministic tests, with no agent
+          in the loop to absorb the change. On real historical bugs this re-derived a
+          correct, oracle-matching fix for <b>12 of 20</b> bugs (deploy-reachable
+          <b>0.60</b>, Wilson 95% CI [0.39, 0.78], pre-registered kill line 0.10,
+          verdict <b>GREEN</b>). Where the fitness signal is instead an LLM judge or a
+          capable agent's behavior, we measured <b>no detectable effect at our
+          statistical power, on a single capable-agent class</b>, in both directions
+          &#8212; improving the artifact did not help and degrading it did not hurt.
+          That bounds the detectable effect; it is not a proof of inertness. The
+          boundary is sharp: traction tracks how mechanical and agent-free the verdict
+          is.
+
+  - header: "1. The positive result: executable-oracle code re-derivation"
+    blocks:
+      - paragraph: >-
+          Real historical tool bugs were harvested from an active repository's git
+          stream, each carrying its upstream fix commit as a <b>ground-truth oracle</b>.
+          The loop repairs the buggy parent in an isolated worktree from failing-test
+          feedback; a repair counts only if it passes the full fix-commit test set and
+          behaviorally matches the upstream fix. The <b>organism</b> (one bug) is the
+          unit of analysis, and a bug is <b>deploy-reachable</b> when a majority of
+          independent seeds produce an oracle-matching fix.
+      - table:
+          header: ["Estimand (organism-level)", "Value"]
+          col_widths: [3.6, 2.9]
+          highlight_row: 0
+          rows:
+            - ["Deploy-reachable", "12 / 20 = 0.60"]
+            - ["Wilson 95% CI", "[0.387, 0.781]"]
+            - ["Cluster bootstrap (mean, CI)", "0.602, [0.40, 0.80]"]
+            - ["P(below 0.10 kill line)", "0.0"]
+            - ["ICC / design effect / effective-N", "0.326 / 1.65 / 36.3"]
+            - ["Verdict / cost", "GREEN / $3.10"]
+      - paragraph: >-
+          The honest unit is the organism. The pooled per-seed rate (41/60 = 0.68) is
+          recorded only <i>for contrast</i> and labelled dishonest in the source
+          artifact, because seed correlation (ICC 0.33) inflates its apparent precision
+          &#8212; averaging seeds within a bug is pseudo-replication. An earlier, smaller
+          pilot on an easier tool tier was consistent (deploy-reachable 0.75
+          [0.41, 0.93], smaller N); the N=20 campaign above is canonical because it is
+          larger and pre-registered. Why this regime works: the test is deterministic
+          and the verdict is mechanical, so nothing between the candidate and pass/fail
+          can quietly compensate for a bad artifact &#8212; unlike a capable agent.
+
+  - header: "2. The null: capable-agent artifact decoupling"
+    blocks:
+      - paragraph: >-
+          On a capable agent (gpt-5-mini class), artifact quality and correctness were
+          <b>decoupled from behavior in both directions</b>:
+      - bullets:
+          - >-
+            <b>Improving did not help.</b> Evolving skills, tool descriptions, and
+            turn-level sequences produced null deploy results &#8212; including under a
+            <b>judge-free test-command verdict</b>, so judge saturation is not the cause.
+          - >-
+            <b>Degrading did not hurt.</b> A strongly misdirecting tool description, and
+            even an <b>actively false</b> one ("merges and preserves content, never
+            deletes"), each produced 0/7 caught-losses against a 0/7 A/A false-alarm
+            floor. The agent routes from the tool name, the task, and its own prior
+            &#8212; over the description text.
+      - paragraph: >-
+          This is a real null, not a broken detector: a delivery <b>canary</b> (a
+          description that changes which file is written) separates cleanly at 1.00 vs
+          0.00, so the rig can see a genuine behavior difference. There was simply
+          nothing to catch. Stated honestly, this is a failure to reject the null on
+          <b>one capable-agent class</b>, for tools whose behavior the agent can infer
+          from their name. It bounds the detectable effect; it does not prove universal
+          inertness. The coupling is expected to reappear where the agent cannot infer
+          behavior from priors &#8212; a weaker tier, or a novel tool with a non-obvious
+          contract &#8212; neither of which was a clean test here.
+
+  - header: "3. The dead ends, as boundary pilots"
+    blocks:
+      - paragraph: >-
+          These are small-N negative pilots. They did not supply usable signal; they
+          mark where we looked and why the positive regime is narrow &#8212; not proofs
+          of impossibility.
+      - bullets:
+          - >-
+            <b>Metamorphic verification (no oracle): 0/8.</b> Generic invariants
+            (idempotence, absent-input no-op, parse-shape) caught 0 of 8 real bugs. Real
+            tool bugs are input-specific edge cases that do not violate broad invariants.
+          - >-
+            <b>Held-out-split independence: only 3/8.</b> For an independent anti-gaming
+            gate a bug needs tests input-diverse enough to split; only 3 of 8 did. Real
+            bugs are usually caught by the single test the fix authored, so the
+            independent held-out product is deferred &#8212; the oracle sidesteps it.
+          - >-
+            <b>Dependency-regression supply: 0.</b> Over a year of one active repo's
+            history there were zero clean, tool-local dependency-version regressions:
+            manifest-touching commits were broad migrations or feature additions.
+
+  - header: "4. The unifying thesis"
+    blocks:
+      - paragraph: >-
+          Put the three classes together and the boundary is sharp. Self-evolution gets
+          traction in proportion to <b>how mechanical and agent-free the verdict is.</b>
+          A deterministic test on executed code (oracle present, no agent) yields a
+          deploy-grade gradient. An LLM judge or a capable agent's behavior (no
+          executable oracle; the agent absorbs the artifact) yields no detectable effect
+          at our power. So the evolution and validation pipeline is high-value where an
+          executable oracle exists &#8212; code, which the shipped propose-only triage
+          sentinel feeds directly &#8212; and low-value for artifact quality on capable
+          agents. Remaining artifact-quality work presupposes a discriminating signal
+          this campaign shows is absent on capable agents; pursue it only on a tier or
+          surface where the coupling exists.
+
+  - header: "5. Limitations"
+    blocks:
+      - bullets:
+          - >-
+            The null results bound an effect on <b>one capable-agent class</b>; a
+            different model tier or a novel-contract tool could couple. Untested here, by
+            design.
+          - >-
+            The positive result is N=20 organisms on one repository's bug stream. It is
+            GREEN with a pre-registered kill line, but it is one corpus.
+          - >-
+            The dead-end pilots are small-N (8 organisms; one year of one repo). They
+            steer the search; they are not impossibility proofs.
