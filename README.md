@@ -373,19 +373,23 @@ The campaign behind those phases produced one consolidated, *spend-allocation* r
 an **asymmetry**:
 
 > Self-evolution got deploy-grade traction under a **conjunction** — an **executable
-> oracle**, real headroom, and a re-derivation task (code under deterministic tests):
+> oracle**, real headroom, and code repair from failing-test feedback:
 > **deploy-reachable 0.60 [Wilson 0.39–0.78] on N=20 real bugs**, clearing a
-> pre-registered *futility floor* (0.10). Where the signal is instead an LLM judge or a
-> capable agent's behavior, we measured **no detectable effect — but at a power that
-> resolves only large couplings** (n=7 per arm rules out only effects above ~50%), on
-> one capable-agent class, for tools whose behavior it can infer from their name. That
-> bounds the effect; it is not proof of inertness, and it is not a one-axis law.
+> pre-registered *futility floor* (0.10). A leakage check shows the test's expected
+> values are load-bearing (withhold them and 11/12 successes fall to 3/12), so this is
+> **test-feedback repair, not autonomous re-derivation**. Where the signal is instead
+> an LLM judge or a capable agent's behavior, we measured **no detectable effect — but
+> at a power that resolves only large couplings** (n=7 per arm rules out only effects
+> above ~50%), on one capable-agent class, for tools whose behavior it can infer from
+> their name. That bounds the effect; it is not proof of inertness, and it is not a
+> one-axis law.
 
-Traction tracked **how mechanical and agent-free the verdict is** — though
+Traction tracked **how concrete and mechanical the verdict's signal is** (the test's
+expected values are the gradient — exactly what the behavioral arm lacks) — though
 oracle-presence is confounded with headroom and task type, so the clean axis is
 suggested, not isolated. The dependency-regression *supply* of 0 is a real boundary;
 the metamorphic (0/8) and held-out (3/8) pilots are underpowered, not boundaries. Full
-result, honest CIs, validity threats, and a provenance table:
+result, honest CIs, validity threats, the leakage check, and a provenance table:
 **[reports/asymmetry_findings.md](reports/asymmetry_findings.md)**
 ([PDF](reports/asymmetry_report.pdf)).
 

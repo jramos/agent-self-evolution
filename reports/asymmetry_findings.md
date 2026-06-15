@@ -8,9 +8,10 @@ kept in.
 ## What this means for where we spend
 
 - **Invest** where a **ground-truth executable oracle** stands between the artifact
-  and the verdict, the baseline has **real headroom**, and the task is a
-  **re-derivation** (code under deterministic tests). That regime produced a
-  deploy-grade gradient.
+  and the verdict, the baseline has **real headroom**, and the task is a code repair
+  driven by **failing-test feedback**. That regime produced a deploy-grade gradient —
+  though a leakage check (below) shows the gradient is the test's *expected values*,
+  so this is **test-feedback repair, not autonomous re-derivation**.
 - **Don't** spend on improving artifact *quality* (skills / tool descriptions /
   prompt sections) for a **capable agent** on tools whose behavior it can infer from
   their name — we measured no effect there, in either direction. Revisit only on a
@@ -20,15 +21,19 @@ kept in.
 ## The claim, stated carefully
 
 > Evolutionary self-improvement produced measurable, deploy-grade traction under a
-> **conjunction** of conditions — an executable oracle, real headroom, and a
-> re-derivation task — and **no detectable effect** where the fitness signal is an
-> LLM judge or a capable agent's behavior. The two arms are not one calibrated axis:
-> the positive arm resolves small effects; the negative arm resolves only *large*
-> ones (see power, below). So this is a direction-setting result, **not** a proof
-> that behavioral signal is inert, and **not** a single "oracle vs. agent" law —
-> oracle-presence co-varies with headroom and task type, and we did not separate them.
+> **conjunction** of conditions — an executable oracle, real headroom, and a code
+> repair driven by failing-test feedback — and **no detectable effect** where the
+> fitness signal is an LLM judge or a capable agent's behavior. The two arms are not
+> one calibrated axis: the positive arm resolves small effects; the negative arm
+> resolves only *large* ones (see power, below). So this is a direction-setting
+> result, **not** a proof that behavioral signal is inert, and **not** a single
+> "oracle vs. agent" law — oracle-presence co-varies with headroom and task type, and
+> we did not separate them. A leakage check (§1) further shows the positive arm is
+> **test-feedback repair leaning on the test's expected values**, not autonomous
+> re-derivation — which *sharpens* the asymmetry (the concrete executable signal is
+> exactly what the behavioral arm lacks) rather than refuting it.
 
-## Evidence class 1 — the positive: executable-oracle code re-derivation
+## Evidence class 1 — the positive: executable-oracle test-feedback repair
 
 We harvested real historical tool bugs from an active repository's git stream, each
 carrying its upstream fix commit as a **ground-truth oracle**. The loop repairs the
@@ -69,14 +74,33 @@ dishonest in the source artifact — seed correlation (ICC 0.33) inflates its ap
 precision. Note 0.60 is **not** a de-biased 0.68; majority-of-3 is a different,
 threshold-dependent estimand, not a correction of the marginal.
 
-**Validity threat — teach-to-the-test (not closed).** The repair loop feeds the
-proposer the failing test's full output, which for assertion failures includes the
-expected values (`assert got == <expected>`); the measurement gate verifies an
-oracle *match* with the held-out split **off**, and its own docstring notes it does
-not catch input-hardcoding. A strong public-repo proposer may also recall the fix. So
-0.60 mixes genuine re-derivation with possible transcription; a targeted check
-(re-run with traceback feedback suppressed; inspect accepted rewrites for hard-coded
-literals) is the right next step before treating 0.60 as a pure capability rate.
+**Leakage check — the expected values are load-bearing (run).** The repair loop feeds
+the proposer the failing test's full output, which for assertion failures includes the
+expected values (`assert got == <expected>`), and the measurement gate verifies an
+oracle *match* with the held-out split **off**. To test how much of 0.60 is genuine
+inference vs. reading the answer, we re-ran the 12 deploy-reachable organisms through
+the same gate under two feedback regimes: a **full-traceback control** and a
+**no-leak** arm (`--tb=no` plus the failing node-ids, so the proposer learns *which*
+tests fail but not their expected values).
+
+| Feedback regime | Deploy-reachable (of the 12) |
+|---|---|
+| Full traceback (control) | **11 / 12** — reproduces the headline |
+| No-leak (expected values withheld) | **3 / 12** |
+
+Withholding the expected values collapses the rate from ~0.92 to 0.25 on the very
+organisms that succeeded. So **0.60 is test-feedback repair leaning on the test's
+expected values, not autonomous re-derivation** — the loop reads the failing test (as
+a developer would) and the concrete assertions are doing ~2/3 of the work. This
+*sharpens* the asymmetry (the test's concrete signal is exactly what the behavioral
+arm lacks) but reframes the capability: in production the failing test is always
+present, so **0.60 is the deployable test-feedback-repair rate**; the **3/12 ≈ 0.25**
+that survive value-withholding is the **autonomy floor**. Whether the answer-informed
+fixes *generalize* or *hard-code* the test inputs is still open — a hard-coded-literal
+scan flagged 16/32 accepted control fixes, but on inspection those are mostly
+legitimate feature identifiers (`delete_message`, `traversal`, `cannot be deleted`,
+model names), **not** input-hardcoding, so the scan is inconclusive; the fuzzed
+differential (fresh inputs, diff repaired-vs-oracle) is the real discriminator.
 
 **Disposition (for an honest denominator).** Of 33 harvested candidates: 20 valid
 organisms, 7 source-missing, 5 not-valid (parent didn't cleanly fail), 1 too-large
@@ -137,19 +161,23 @@ their confidence intervals are wide — they steer spend, they don't prove impos
 
 ## The unifying thesis (and its limit)
 
-Across the classes, traction tracked **how mechanical and agent-free the verdict is** —
-a deterministic test on executed code yielded a gradient; a judge or a capable agent's
-behavior did not. But the contrast is between **two instruments of unequal resolution**
-(one resolves ≥0.10 effects, the other only ≥~0.5), and oracle-presence is confounded
-with headroom and task-type, so the clean "oracle vs. agent" axis is a hypothesis the
-campaign suggests but did not isolate. The disconfirming experiment never run: apply
-the executable-oracle loop to an *already-correct* function (oracle present, no
-headroom) — if the gradient vanishes, headroom, not the oracle, was load-bearing.
+Across the classes, traction tracked **how concrete and mechanical the verdict's
+signal is** — a deterministic test with literal expected values yielded a gradient; a
+judge or a capable agent's behavior did not. The leakage check makes the mechanism
+explicit: the gradient *is* the test's expected values (withhold them and the rate
+falls to the autonomy floor), and that concrete, executable signal is exactly what the
+behavioral arm lacks. So the asymmetry is sharpened — but it is still a contrast
+between **two instruments of unequal resolution** (one resolves ≥0.10 effects, the
+other only ≥~0.5), and oracle-presence is confounded with headroom and task-type, so
+the clean "oracle vs. agent" axis is a hypothesis the campaign suggests but did not
+isolate. The disconfirming experiment never run: apply the loop to an *already-correct*
+function (test present, no headroom) — if the gradient vanishes, headroom, not the
+test, was load-bearing.
 
-Practically, the implication stands: the evolution/validation pipeline is high-value
-where an executable oracle and real headroom exist (code; fed by the shipped
-propose-only triage sentinel), and low-value for artifact quality on capable,
-name-inferable surfaces.
+Practically, the implication stands: the pipeline is high-value where a concrete
+executable test and real headroom exist (code repair, fed the failing test by the
+shipped propose-only triage sentinel — which is exactly the production regime where
+0.60 holds), and low-value for artifact quality on capable, name-inferable surfaces.
 
 ## Provenance
 
@@ -157,6 +185,7 @@ name-inferable surfaces.
 |---|---|---|
 | Deploy-reachable 0.60 [0.387, 0.781]; bootstrap [0.40,0.80]; ICC 0.326 | `reports/asymmetry_campaign_report.json` (committed summary) | 20 organisms × 3 seeds |
 | Per-organism rows + per-seed flags (re-derives 12/20) | `reports/asymmetry_campaign_ledger.jsonl` (committed manifest) | 33 candidates → 20 organisms |
+| Leakage check: control 11/12, no-leak (values withheld) 3/12 | `reports/asymmetry_leakage_check.json` (per-organism A/B) | 12 deploy-reachable × 3 seeds × 2 arms |
 | Pooled per-seed 0.68 (for-contrast, dishonest) | same summary | 60 seeds |
 | Judge saturation ≥0.95: 15/338, 0 with LB>0 — *but the source flags itself data-starved (Wilson upper 20–49%), not settled* | `reports/saturation_calibration_findings.md` | 338 paired-vector runs |
 | Capable-agent decoupling (both directions; canary 1.00 vs 0.00) | `PLAN.md` "Campaign conclusion — capable-agent artifact decoupling" | A/A floor 0/7 (n=7) |
@@ -165,9 +194,12 @@ name-inferable surfaces.
 
 ## Limitations
 
-- **Teach-to-the-test (top threat).** The proposer sees expected values in test
-  tracebacks and the held-out split is off, so 0.60 may overstate genuine
-  re-derivation until the leakage check is run.
+- **Test-feedback, not autonomous re-derivation (checked).** The leakage check (§1)
+  showed the test's expected values are load-bearing: withholding them drops 11/12 →
+  3/12. So 0.60 is the *test-feedback-repair* rate (the production regime, where the
+  failing test is present), not an autonomous-re-derivation rate (~0.25). Whether the
+  answer-informed fixes generalize vs. hard-code is still open (the literal-scan was
+  inconclusive); the fuzzed differential is the next discriminator.
 - **Underpowered null.** n=7 resolves only ≥~50% couplings; the null is an upper bound
   on a large effect, scoped to one capable-agent class and name-inferable tools.
 - **Confounded axis.** Oracle-presence co-varies with headroom and task type; the

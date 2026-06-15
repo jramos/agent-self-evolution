@@ -31,11 +31,14 @@ sections:
           code was exercised across many experiments. The consolidated result is a
           <b>spend-allocation</b> finding shaped like an asymmetry. Self-evolution
           produced deploy-grade traction under a <b>conjunction</b> of conditions &#8212;
-          a ground-truth executable oracle, real headroom, and a re-derivation task. On
-          real historical bugs this re-derived a correct, oracle-matching fix for
-          <b>12 of 20</b> bugs (deploy-reachable <b>0.60</b>, Wilson 95% CI [0.39, 0.78];
-          it clears a pre-registered <b>futility floor</b> of 0.10, which certifies "not
-          catastrophic," not a validated deployment rate). Where the fitness signal is
+          a ground-truth executable oracle, real headroom, and a code repair driven by
+          failing-test feedback. On real historical bugs this produced a gate-passing,
+          oracle-matching fix for <b>12 of 20</b> bugs (deploy-reachable <b>0.60</b>,
+          Wilson 95% CI [0.39, 0.78]; it clears a pre-registered <b>futility floor</b> of
+          0.10, which certifies "not catastrophic," not a validated deployment rate). A
+          leakage check shows the test's expected values are load-bearing &#8212; withhold
+          them and 11/12 of the successes fall to 3/12 &#8212; so this is <b>test-feedback
+          repair, not autonomous re-derivation</b>. Where the fitness signal is
           instead an LLM judge or a capable agent's behavior, we measured <b>no
           detectable effect</b> &#8212; but at a power that resolves only <i>large</i>
           couplings (see below). The two arms are instruments of unequal resolution, and
@@ -43,7 +46,7 @@ sections:
           direction-setting result &#8212; not a proof of inertness, and not a single
           "oracle vs. agent" law.
 
-  - header: "1. The positive result: executable-oracle code re-derivation"
+  - header: "1. The positive result: executable-oracle test-feedback repair"
     blocks:
       - paragraph: >-
           Real historical tool bugs were harvested from an active repository's git
@@ -80,15 +83,33 @@ sections:
           precision); 0.60 is a different, threshold-dependent estimand, not a de-biased
           0.68.
       - paragraph: >-
-          <b>Validity threat (not closed):</b> the repair loop feeds the proposer the
-          failing test's full output, which for assertion failures includes the expected
-          values, and the measurement gate verifies an oracle match with the held-out
-          split off &#8212; so 0.60 mixes genuine re-derivation with possible
-          teach-to-the-test transcription (and possible public-repo recall). A targeted
-          check &#8212; re-running with traceback feedback suppressed, and inspecting
-          accepted rewrites for hard-coded literals &#8212; is the right next step before
-          treating 0.60 as a pure capability rate. Of 33 harvested candidates: 20 valid
-          organisms, 7 source-missing, 5 not-valid, 1 too-large.
+          <b>Leakage check &#8212; the expected values are load-bearing (run).</b> The
+          repair loop feeds the proposer the failing test's full output, which for
+          assertion failures includes the expected values, and the gate verifies an
+          oracle match with the held-out split off. We re-ran the 12 deploy-reachable
+          organisms through the same gate under two feedback regimes: a full-traceback
+          control, and a no-leak arm (<i>--tb=no</i> plus the failing node-ids, so the
+          proposer learns which tests fail but not their expected values).
+      - table:
+          header: ["Feedback regime", "Deploy-reachable (of 12)"]
+          col_widths: [3.6, 2.9]
+          highlight_row: 0
+          rows:
+            - ["Full traceback (control)", "11 / 12 - reproduces the headline"]
+            - ["No-leak (expected values withheld)", "3 / 12"]
+      - paragraph: >-
+          Withholding the expected values collapses the rate from ~0.92 to 0.25 on the
+          very organisms that succeeded. So <b>0.60 is test-feedback repair leaning on
+          the test's expected values, not autonomous re-derivation</b> &#8212; the loop
+          reads the failing test (as a developer would) and the concrete assertions do
+          ~2/3 of the work. In production the failing test is always present, so 0.60 is
+          the deployable test-feedback-repair rate; the <b>3/12 (~0.25)</b> that survive
+          value-withholding is the autonomy floor. Whether the answer-informed fixes
+          generalize or hard-code is still open: a hard-coded-literal scan flagged 16/32
+          control fixes, but on inspection those are mostly legitimate feature
+          identifiers, not input-hardcoding, so the scan is inconclusive &#8212; the
+          fuzzed differential is the real discriminator. Of 33 harvested candidates: 20
+          valid organisms, 7 source-missing, 5 not-valid, 1 too-large.
 
   - header: "2. The null: capable-agent artifact decoupling"
     blocks:
@@ -151,27 +172,32 @@ sections:
   - header: "4. The unifying thesis, and its limit"
     blocks:
       - paragraph: >-
-          Across the classes, traction tracked <b>how mechanical and agent-free the
-          verdict is</b>: a deterministic test on executed code yielded a gradient; a
-          judge or a capable agent's behavior did not. But the contrast is between two
-          instruments of unequal resolution (one resolves effects of 0.10, the other
-          only ~0.5), and oracle-presence is confounded with headroom and task type, so
-          the clean "oracle vs. agent" axis is a hypothesis this campaign suggests but
-          did not isolate. The disconfirming experiment never run: apply the
-          executable-oracle loop to an already-correct function (oracle present, no
-          headroom) &#8212; if the gradient vanishes, headroom, not the oracle, was
-          load-bearing. Practically, the implication stands: spend evolutionary budget
-          where an executable oracle and real headroom exist (code, fed by the shipped
-          propose-only triage sentinel), and not on artifact quality for capable,
-          name-inferable surfaces.
+          Across the classes, traction tracked <b>how concrete and mechanical the
+          verdict's signal is</b>: a deterministic test with literal expected values
+          yielded a gradient; a judge or a capable agent's behavior did not. The leakage
+          check makes the mechanism explicit &#8212; the gradient is the test's expected
+          values, exactly what the behavioral arm lacks &#8212; so the asymmetry is
+          sharpened. But it is still a contrast between two instruments of unequal
+          resolution (one resolves effects of 0.10, the other only ~0.5), and
+          oracle-presence is confounded with headroom and task type, so the clean
+          "oracle vs. agent" axis is a hypothesis this campaign suggests but did not
+          isolate. The disconfirming experiment never run: apply the loop to an
+          already-correct function (test present, no headroom) &#8212; if the gradient
+          vanishes, headroom, not the test, was load-bearing. Practically, the
+          implication stands: spend budget where a concrete executable test and real
+          headroom exist (code repair, fed the failing test by the shipped propose-only
+          triage sentinel &#8212; the production regime where 0.60 holds), and not on
+          artifact quality for capable, name-inferable surfaces.
 
   - header: "5. Limitations"
     blocks:
       - bullets:
           - >-
-            <b>Teach-to-the-test (top threat).</b> The proposer sees expected values in
-            test tracebacks and the held-out split is off, so 0.60 may overstate genuine
-            re-derivation until the leakage check is run.
+            <b>Test-feedback, not autonomous re-derivation (checked).</b> The leakage
+            check showed the test's expected values are load-bearing: withholding them
+            drops 11/12 to 3/12. So 0.60 is the test-feedback-repair rate (the production
+            regime), not autonomous re-derivation (~0.25); whether answer-informed fixes
+            generalize vs hard-code is still open (the literal-scan was inconclusive).
           - >-
             <b>Underpowered null.</b> n=7 resolves only effects above ~50%; the null is
             an upper bound on a large effect, scoped to one capable-agent class and
