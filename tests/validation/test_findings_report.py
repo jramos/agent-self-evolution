@@ -109,6 +109,17 @@ class TestBankedArtifact:
         prose = yaml.safe_load((REPO_ROOT / "reports" / "asymmetry_prose.yaml").read_text())
         assert check_provenance(prose, base_dir=REPO_ROOT) == []
 
+    def test_ledger_re_derives_deploy_reachable(self):
+        # The committed per-organism manifest must reproduce the headline 12/20, so a
+        # reader can audit which bugs deployed rather than trusting the aggregate.
+        rows = [json.loads(line) for line
+                in (REPO_ROOT / "reports" / "asymmetry_campaign_ledger.jsonl")
+                .read_text().splitlines() if line.strip()]
+        orgs = [r for r in rows if r.get("status") == "organism"]
+        deploy_reachable = sum(1 for r in orgs if sum(bool(s) for s in r["seeds"]) >= 2)
+        assert len(orgs) == 20
+        assert deploy_reachable == 12
+
     def test_headline_numbers_appear_in_body(self):
         prose = yaml.safe_load((REPO_ROOT / "reports" / "asymmetry_prose.yaml").read_text())
         body = []
@@ -123,6 +134,8 @@ class TestBankedArtifact:
                 elif "table" in block:
                     body.extend(str(c) for row in block["table"]["rows"] for c in row)
         text = " ".join(body)
-        # Tokens bound to the JSON-verified provenance, so the body can't drift.
-        for token in ("12 / 20", "0.60", "GREEN", "0.387", "0.781"):
+        # Numeric headline tokens bound to the JSON-verified provenance, so the body
+        # can't drift. ("GREEN" is verified via the provenance check, not the body —
+        # the doc deliberately recasts it as "clears the futility floor".)
+        for token in ("12 / 20", "0.60", "0.387", "0.781"):
             assert token in text, f"missing headline token in PDF body: {token!r}"

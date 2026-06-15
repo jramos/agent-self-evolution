@@ -88,8 +88,9 @@ Verdicts in the annotated `triage_queue.json`:
 | `source_missing` / `too_large` / `worktree_failed` | skipped before repair (source gone, too big for a whole-file rewrite, or isolation setup failed) |
 | `cost_ceiling` | the `--max-cost-usd` cap was hit; remaining candidates were not attempted |
 
-`--max-cost-usd` is a hard ceiling: the run aborts cleanly with a partial, still-valid
-queue when cumulative LLM cost crosses it.
+`--max-cost-usd` is **required** whenever `--attempt-top > 0` (the CLI refuses to run
+the repair loop uncapped) and is a hard ceiling: the run aborts cleanly with a partial,
+still-valid queue when cumulative LLM cost crosses it. The scan itself needs no cap.
 
 ## Scheduling the scan (opt-in, macOS launchd)
 

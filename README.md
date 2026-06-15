@@ -359,28 +359,34 @@ Cost: each task is one `hermes -z` run (~$0.05–$0.50). The bundled `patch.json
 
 | Phase | Target | Engine | Status |
 |-------|--------|--------|--------|
-| **Phase 1** | Skill files (SKILL.md) | DSPy + GEPA | ✅ [Validated](reports/phase1_validation_report.pdf) |
-| **Phase 2** | Tool descriptions + dual-signal deploy gate | DSPy + GEPA | ✅ [Validated](reports/phase2_validation_report.pdf) |
-| **Phase 3** | System prompt sections (Hermes + Claude Code) | DSPy + GEPA | ✅ [Validated](reports/phase3_validation_report.pdf) |
+| **Phase 1** | Skill files (SKILL.md) | DSPy + GEPA | ✅ [Validated](reports/phase1_validation_report.pdf) † |
+| **Phase 2** | Tool descriptions + dual-signal deploy gate | DSPy + GEPA | ✅ [Validated](reports/phase2_validation_report.pdf) † |
+| **Phase 3** | System prompt sections (Hermes + Claude Code) | DSPy + GEPA | ✅ [Validated](reports/phase3_validation_report.pdf) † |
 | **Phase 4** | Tool implementation code | Iterative test-feedback repair | ✅ [Validated](reports/asymmetry_findings.md) (code-evolution campaign) |
 | **Phase 5** | Continuous improvement loop | Propose-only triage sentinel | ✅ [Sentinel shipped](docs/operating_the_sentinel.md) |
 
+> **†** Phases 1–3 are validated as a working *mechanism* (the pipeline runs end-to-end and the gate catches regressions). The campaign below found that on a *capable* agent, evolving these artifacts does not measurably change behavior for tools whose function it can infer from their name — so the value of artifact-quality evolution is in regression-catching and weaker-tier / novel-contract surfaces, not improvement-finding on capable agents. See [Findings](#findings).
+
 ## Findings
 
-The campaign behind those phases produced one consolidated result — an **asymmetry**:
+The campaign behind those phases produced one consolidated, *spend-allocation* result —
+an **asymmetry**:
 
-> Self-evolution got deploy-grade traction in exactly one regime — when a ground-truth
-> **executable oracle** stands between the artifact and the verdict (code under
-> deterministic tests, no agent in the loop): **deploy-reachable 0.60 [Wilson
-> 0.39–0.78], N=20 real bugs, pre-registered kill line.** Where the signal is instead
-> an LLM judge or a capable agent's behavior, we measured **no detectable effect at our
-> power, on one capable-agent class** — in both directions (improving *and* degrading
-> the artifact). That bounds the effect; it is not proof of inertness.
+> Self-evolution got deploy-grade traction under a **conjunction** — an **executable
+> oracle**, real headroom, and a re-derivation task (code under deterministic tests):
+> **deploy-reachable 0.60 [Wilson 0.39–0.78] on N=20 real bugs**, clearing a
+> pre-registered *futility floor* (0.10). Where the signal is instead an LLM judge or a
+> capable agent's behavior, we measured **no detectable effect — but at a power that
+> resolves only large couplings** (n=7 per arm rules out only effects above ~50%), on
+> one capable-agent class, for tools whose behavior it can infer from their name. That
+> bounds the effect; it is not proof of inertness, and it is not a one-axis law.
 
-The boundary is sharp: traction tracks **how mechanical and agent-free the verdict is.**
-Dead ends (metamorphic verification 0/8, held-out independence 3/8, dependency-regression
-supply 0) delimit the regime rather than contradict it. Full result, honest CIs, and a
-provenance table: **[reports/asymmetry_findings.md](reports/asymmetry_findings.md)**
+Traction tracked **how mechanical and agent-free the verdict is** — though
+oracle-presence is confounded with headroom and task type, so the clean axis is
+suggested, not isolated. The dependency-regression *supply* of 0 is a real boundary;
+the metamorphic (0/8) and held-out (3/8) pilots are underpowered, not boundaries. Full
+result, honest CIs, validity threats, and a provenance table:
+**[reports/asymmetry_findings.md](reports/asymmetry_findings.md)**
 ([PDF](reports/asymmetry_report.pdf)).
 
 ## Engines
