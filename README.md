@@ -362,8 +362,8 @@ Cost: each task is one `hermes -z` run (~$0.05–$0.50). The bundled `patch.json
 | **Phase 1** | Skill files (SKILL.md) | DSPy + GEPA | ✅ [Validated](reports/phase1_validation_report.pdf) |
 | **Phase 2** | Tool descriptions + dual-signal deploy gate | DSPy + GEPA | ✅ [Validated](reports/phase2_validation_report.pdf) |
 | **Phase 3** | System prompt sections (Hermes + Claude Code) | DSPy + GEPA | ✅ [Validated](reports/phase3_validation_report.pdf) |
-| **Phase 4** | Tool implementation code | Darwinian Evolver | 🔲 Planned |
-| **Phase 5** | Continuous improvement loop | Automated pipeline | 🔲 Planned |
+| **Phase 4** | Tool implementation code | Iterative test-feedback repair | ✅ Validated (code-evolution campaign) |
+| **Phase 5** | Continuous improvement loop | Propose-only triage sentinel | ✅ [Sentinel shipped](docs/operating_the_sentinel.md) |
 
 ## Engines
 
@@ -380,6 +380,26 @@ Every evolved variant must pass:
 3. **Caching compatibility** — No mid-conversation changes
 4. **Semantic preservation** — Must not drift from original purpose
 5. **PR review** — All changes go through human review, never direct commit
+
+## Operating the sentinel
+
+The code-evolution loop has a **propose-only** front-end: a triage sentinel that
+scans a target repo's recent git stream for bugs the validated repair loop could
+fix, ranks them, and writes a triage queue. It never evolves code or opens a PR — a
+human reads the queue and decides what to attempt.
+
+```bash
+# Scan ($0, pure git, no LLM) — safe to schedule
+python -m evolution.monitor --repo /path/to/target-repo --since-days 90
+
+# Attempt the top candidates (the only step that spends; cost-capped, human-gated)
+python -m evolution.monitor --repo /path/to/target-repo --attempt-top 3 --max-cost-usd 5.0
+```
+
+The scan writes `triage_queue.json` + `triage_report.md`; `--attempt-top` reuses the
+validated repair loop and annotates each row with the oracle-gate verdict, still
+without opening a PR. See **[docs/operating_the_sentinel.md](docs/operating_the_sentinel.md)**
+for reading the queue, the verdict taxonomy, and an opt-in scheduled scan.
 
 ## Full Plan
 
