@@ -1157,16 +1157,32 @@ suspicion into a measured, both-directions certificate.
     model; the cross-version differential is parasitic on absent supply; a higher-churn
     repo is a pivot off the validated Hermes substrate, not a save.
 
-    **Frontiers mapped → redirect (panel-ranked).** With artifact-quality decoupled,
-    general no-oracle repair dead/narrow, and the dep-regression supply absent, the
-    durable wins are code re-derivation (~60% on real bugs) + the shipped sentinel.
-    Next options: (1) **bank the body of work** — headline the *asymmetry* (code
-    re-derivation works on executable-oracle bugs; artifact-quality is inert on capable
-    agents) — and operate the sentinel→loop as a standing capability; (2) **push N +
-    map the difficulty boundary** on the GREEN (harvest more bugs via the sentinel,
-    stratify) — the only remaining signal-buying build; (3) the **$10 MCP-description
-    probe** for closure on the last artifact surface. Item-10 CL-parallelism (serves
-    the decoupled path) and clade selection (no substrate) are skipped.
+    **Frontiers mapped → redirect (panel-ranked); options (1) and (2) SHIPPED.** With
+    artifact-quality decoupled, general no-oracle repair dead/narrow, and the
+    dep-regression supply absent, the durable wins are test-feedback code repair
+    (~0.60–0.74 on real bugs) + the shipped sentinel.
+    - (1) **Bank the body of work — SHIPPED.** The *asymmetry* is banked as a findings
+      report + a paper-style PDF rendered through a sibling renderer that **fails
+      closed** if a prose number drifts from its source JSON, with committed source
+      snapshots so it reproduces from version control (`reports/asymmetry_*`). The
+      sentinel is operationalized (runbook + `$0` scan wrapper writing a stable
+      `latest` pointer + an opt-in scheduled scan; `--attempt-top` now *requires*
+      `--max-cost-usd`). A 4-expert panel + two spend-backed self-checks hardened it.
+    - (2) **Push N + difficulty boundary — SHIPPED.** A 2nd campaign (fresh harvest,
+      same protocol, `$12`-capped at N=46) gives deploy-reachable **0.74 [0.60, 0.84]**,
+      corroborating N=20's 0.60 (honest range **~0.60–0.74**; ICC swung 0.33→0.63). The
+      difficulty curve answers "only easy bugs?" → **no**: by fix-LOC {≤5: 1.00, 6–20:
+      0.83, >20: **0.69**}, median fix 45 LOC, 35/46 large fixes — graceful degradation,
+      not a triviality cliff. No 2nd convention-repo exists locally, so true external
+      validity is unbuilt.
+    - **Positioning reframe (shipped).** The README now leads with the **deploy gate**
+      as the product (the evolver is one candidate source), so the decoupling null
+      reads as the gate working, not a failure; a "use the gate without evolving
+      anything" section surfaces the standalone CLIs.
+    - **Remaining open bets (need explicit go-aheads):** (3) the **$10 MCP-description
+      probe** (last untested artifact surface), and **true external validity** (a 2nd
+      corpus — real setup effort). Item-10 CL-parallelism (serves the decoupled path)
+      and clade selection (no substrate) are skipped.
 
 12. **Code-evolution pilot, gated on a measured signal** (`evolution/code/`,
     empty stub). Before any Darwinian loop: an A/A coefficient-of-variation
@@ -1251,16 +1267,25 @@ suspicion into a measured, both-directions certificate.
     on diverse, non-trivial tools (approval, browser_camofox, checkpoint_manager,
     cronjob_tools, discord_tool, env_passthrough, file_operations, file_tools, …),
     distinct from and harder than the Tier-A self-contained set — so the gradient
-    generalizes. The loop re-derives a correct (oracle-matching) fix for ~60% of real
-    bugs on a majority of seeds. A `max_tokens=8000` truncation artifact was caught and
-    fixed (whole-file rewrites of larger tools silently truncated → false failures;
-    raised to 32000 + a too-large exclusion). Cost tracking was a no-op until the
-    litellm cost callback was wired into the campaign (now real: N=20 cost ≈ $3.10, the
-    --max-cost-usd ceiling enforced). N=50 is available to tighten further but the GREEN
-    is robust at N=20; gates on a fresh go-ahead. The novel-bug-repair **product** (held-out split +
-    a live feed + solving held-out independence) is **deferred**; an oracle-gate honest
-    limitation — test-match catches broken covered behavior but not pure
-    input-hardcoding — is noted for the fuzzed-differential follow-up.
+    generalizes. A `max_tokens=8000` truncation artifact was caught and fixed
+    (whole-file rewrites of larger tools silently truncated → false failures; raised to
+    32000 + a too-large exclusion). Cost tracking was a no-op until the litellm cost
+    callback was wired in (now real: the --max-cost-usd ceiling is enforced).
+
+    **Corroborated + reframed (post-banking).** A larger run (N=46, $12-capped) gives
+    deploy-reachable **0.74 [0.60, 0.84]**, tightening the lower bound to 0.60 — honest
+    rate **~0.60–0.74** across both runs (ICC swung 0.33→0.63, so no single effective-N
+    is trustworthy). A **difficulty curve** shows repair holds on substantial bugs
+    (0.69 on >20-LOC fixes, median fix 45 LOC), not just one-liners. **The headline is
+    `test-feedback repair`, NOT autonomous re-derivation:** a leakage check (re-run with
+    the test's *expected values* withheld) drops 11/12 successes → 3/12, so 0.60–0.74 is
+    the deployable rate (the failing test is always present in production) and ~0.25 is
+    the autonomy floor — which *sharpens* the asymmetry (the test's concrete values are
+    the gradient the behavioral arm lacks). A **fuzzed differential** cleared the 4
+    control fixes it could meaningfully test (4/4 generalize on fresh inputs, 0 overfit)
+    but is thin (4 of 20). All banked in `reports/asymmetry_*`. The novel-bug-repair
+    **product** (held-out split + a live feed + solving held-out independence) remains
+    **deferred**.
 
 13. **Turn-level tool-sequence evaluation** (the salvage from item 4's
     deferral). Item 4's single-call miner died because Claude agentic turns are
