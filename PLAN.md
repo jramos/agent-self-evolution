@@ -2,19 +2,21 @@
 
 ## Vision
 
-A standalone optimization pipeline that systematically improves an agent's performance by evolving skills, prompts, tool descriptions, and agent configurations using automated optimization loops. Lives in its own repo (`jramos/agent-self-evolution`), operates ON a target agent's skill repo — not part of it. Originally built for Hermes Agent; now works for any agent framework that emits `<skill>/SKILL.md` files (Claude Code, Hermes, custom local layouts).
+A standalone pipeline that decides, rigorously, whether a proposed change to an agent — a skill, prompt, tool description, or piece of tool code — actually makes it better, and ships only the ones that do. A **noise-aware deploy gate** plus a **real-agent validation loop** are the durable product; reflective evolutionary search (DSPy + GEPA) is one optional source of candidate changes feeding the gate. Lives in its own repo (`jramos/agent-self-evolution`), operates ON a target agent's repo — not part of it. Originally built for Hermes Agent; now works for any agent framework that emits `<skill>/SKILL.md` files (Claude Code, Hermes, custom local layouts).
 
-Three complementary engines, unified under one workflow:
+> **Where this landed (current — the founding plan below is partly superseded; see [the findings report](reports/asymmetry_findings.md) and Forward Roadmap items 11–12).** The campaign behind this plan found that on a *capable* agent, evolving artifact *text* (skills, tool descriptions, prompt sections) does **not** measurably change behavior in either direction — so for those surfaces the pipeline is **regression-catching, not improvement-finding**, and the deploy gate (not the evolver) is the asset that holds up. The one surface with a real improvement gradient is **tool-code repair from failing-test feedback** (~0.60–0.74 on real bugs, and not only easy ones — ~0.69 on large >20-LOC fixes), honestly scoped as *test-feedback repair*, not autonomous re-derivation. Read the original tiers/phases below as the founding intent; the gate is the headline.
+
+Three engines were planned; what actually carried the value is noted inline:
 
 | Engine | What It Optimizes | License | Integration |
 |--------|------------------|---------|-------------|
-| **DSPy + GEPA** | Skills, prompts, instructions, tool descriptions | MIT | Native Python, primary engine |
-| **Darwinian Evolver** | Code files, algorithms, tool implementations | AGPL v3 | External CLI only |
+| **DSPy + GEPA** | Skills, prompts, instructions, tool descriptions | MIT | Native Python, candidate generator (decoupled from capable-agent behavior — see "Where this landed") |
+| **Iterative test-feedback repair** | Tool implementation code | MIT | Whole-file repair in an isolated worktree, gated by the deploy gate — *this is what shipped for code*; the planned AGPL Darwinian Evolver proved overkill (a capable proposer + a deterministic test does effective repair) |
 | **DSPy MIPROv2** | Few-shot examples, instruction text | MIT | Native Python, fallback optimizer |
 
-GEPA is the star — it's integrated into DSPy, reads execution traces to understand WHY things fail (not just that they fail), and works with as few as 3 examples. It outperforms both RL and previous DSPy optimizers.
+GEPA is a strong candidate *generator* — integrated into DSPy, it reads execution traces to understand WHY things fail (not just that they fail) and works with as few as 3 examples. But the campaign's durable result is that the **deploy gate** that adjudicates candidates, not the evolver, is the asset that holds up: on a capable agent, evolving artifact text doesn't move behavior (see "Where this landed").
 
-**Important: No GPU training required.** Everything in this plan operates via API calls only. DSPy+GEPA and MIPROv2 optimize the *text* of prompts, instructions, and few-shot examples — they mutate and evaluate strings, not model weights. The Darwinian Evolver evolves code files (also text). The only DSPy component that trains weights (`BootstrapFinetune`) is explicitly excluded from this plan. All evaluation runs through batch_runner making standard LLM API calls.
+**Important: No GPU training required.** Everything in this plan operates via API calls only. DSPy+GEPA and MIPROv2 optimize the *text* of prompts, instructions, and few-shot examples — they mutate and evaluate strings, not model weights. The code path repairs tool files (also text). The only DSPy component that trains weights (`BootstrapFinetune`) is explicitly excluded from this plan. All evaluation runs through batch_runner making standard LLM API calls.
 
 ---
 
@@ -39,12 +41,13 @@ GEPA is the star — it's integrated into DSPy, reads execution traces to unders
 - **Risk:** Must be careful not to break prompt caching — only optimize offline, deploy as new versions
 - **Example:** Evolve the "tool usage guidelines" section to reduce unnecessary tool calls
 
-### Tier 4: Code Evolution (High Value, Highest Risk)
+### Tier 4: Code Repair (the one improvement gradient — shipped)
 - **What:** Tool implementation code, helper functions
-- **How:** Darwinian Evolver with GitBasedOrganism, test via pytest + batch_runner
-- **Why it works:** Some tool implementations have subtle bugs or inefficiencies that evolutionary search can find
-- **Risk:** Code changes can break things — requires strong test suites as guardrails
-- **Example:** Evolve `file_tools.py` patch matching to handle more edge cases
+- **How (shipped):** iterative **test-feedback repair** — an LLM proposes a whole-file fix from the failing test's output, in a throwaway git worktree with an isolated venv, accepted only when it passes the gate (surface freeze, file scope, held-out split, baseline-diff regression floor). *Not* the planned Darwinian-evolver population, which proved overkill.
+- **Why it works:** a deterministic test is a concrete, executable oracle with no agent between the artifact and the verdict — the one place artifact quality is *not* decoupled from behavior.
+- **Result:** deploy-reachable ~0.60–0.74 on real harvested bugs (see Forward Roadmap item 12), honestly scoped as test-feedback repair, not autonomous re-derivation.
+- **Risk:** code changes can break things — the gate's anti-gaming checks (held-out split, freeze) are the guardrail.
+- **Example:** repair `file_tools.py` traversal handling to match the upstream fix.
 
 ---
 
@@ -71,7 +74,7 @@ GEPA is the star — it's integrated into DSPy, reads execution traces to unders
 │  4. RUN OPTIMIZER                           │
 │     - Primary: dspy.GEPA (reflective evolution)│
 │     - Fallback: dspy.MIPROv2 (bayesian opt)  │
-│     - Code: Darwinian Evolver (external CLI)  │
+│     - Code: test-feedback repair (gated)     │
 │                                             │
 │  5. EVALUATE & COMPARE                      │
 │     - Run optimized version on held-out test  │
@@ -157,8 +160,8 @@ hermes-agent-self-evolution/             # Standalone repo
 │   │
 │   ├── tools/                          # Phase 2: Tool description evolution
 │   ├── prompts/                        # Phase 3: System prompt evolution
-│   ├── code/                           # Phase 4: Code evolution (Darwinian Evolver)
-│   └── monitor/                        # Phase 5: Continuous loop
+│   ├── code/                           # Phase 4: Code repair (test-feedback, gated)
+│   └── monitor/                        # Phase 5: Propose-only triage sentinel
 │
 ├── datasets/                           # Generated eval datasets (gitignored, local)
 │   ├── skills/
@@ -194,11 +197,12 @@ python -m evolution.prompts.evolve_prompt_section \
     --section MEMORY_GUIDANCE \
     --iterations 5
 
-# Phase 4: Evolve tool code (uses Darwinian Evolver CLI)
-python -m evolution.code.evolve_tool_code \
-    --tool file_tools \
-    --bug-issue 742 \
-    --iterations 10
+# Phase 4: Repair a broken tool from its failing test, gated (shipped)
+python -m evolution.code.evolve_code \
+    --repo ~/.hermes/hermes-agent \
+    --tool tools/file_tools.py \
+    --visible-test tests/tools/test_file_tools_a.py \
+    --holdout-test tests/tools/test_file_tools_b.py
 
 # All commands output a PR branch + summary against hermes-agent. Human merges.
 ```
@@ -252,8 +256,8 @@ If a phase doesn't produce meaningful improvements (evolved variants aren't bett
 | **Phase 1** | Skill evolution | 3-4 weeks | Nothing — starts here | ≥1 skill measurably improved, no benchmark regression |
 | **Phase 2** | Tool descriptions | 2-3 weeks | Phase 1 infra (GEPA runner, eval framework) | Tool selection accuracy improved, no benchmark regression |
 | **Phase 3** | System prompt | 2-3 weeks | Phase 1-2 infra + validated benchmark gating | Behavioral tests pass, benchmarks hold or improve |
-| **Phase 4** | Code evolution | 3-4 weeks | Phases 1-3 + strong eval pipeline | Bugs fixed, tests pass, benchmarks hold |
-| **Phase 5** | Continuous loop | 2 weeks | All above working | Automated pipeline runs unattended |
+| **Phase 4** | Code repair (test-feedback, gated) | shipped | the deploy gate + worktree isolation | Oracle-matching fix on real bugs (~0.60–0.74) |
+| **Phase 5** | Continuous loop (propose-only sentinel) | shipped | Phase 4 + the sentinel | Ranked real-bug queue; human triggers any repair |
 
 **Total: ~13-17 weeks if all phases prove valuable.** But we may stop at Phase 1 or 2 if the returns diminish — no obligation to do all five.
 
@@ -557,7 +561,18 @@ The system prompt is assembled in `run_agent.py` / `agent/prompt_builder.py` fro
 
 9. **Benchmark gating again not built in (same as Phases 1–2).** The built-in deploy gate is paired-bootstrap CI plus the dual-condition rule on the holdout; `--benchmark-cmd` remains the external-benchmark hook. TBLite / YC-Bench wiring is left to the user's `--benchmark-cmd`.
 
-### Phase 4: Code Evolution via Darwinian Evolver
+### Phase 4: Code Repair (iterative test-feedback, gated)
+
+> **Status — shipped, but NOT via the Darwinian Evolver below.** The week-by-week
+> Darwinian-Evolver plan in this subsection is **superseded historical design**. What
+> actually shipped (`evolution/code/`) is iterative **test-feedback repair**: a capable
+> proposer rewrites the whole file from the failing test's output, in a throwaway
+> worktree, accepted only through the deploy gate (surface freeze, file scope, held-out
+> split, regression floor). The population/GitBasedOrganism machinery proved overkill —
+> a proposer + a deterministic test does effective repair. For the authoritative,
+> current status (deploy-reachable ~0.60–0.74, the leakage reframe, the difficulty
+> curve) see **Forward Roadmap item 12** and [the findings report](reports/asymmetry_findings.md). The original plan
+> is kept below as founding intent.
 
 **Goal:** Evolve tool implementation code for better performance and fewer bugs.
 
@@ -797,8 +812,10 @@ See the **Constraints & Guardrails** section above for the full enforcement list
 ### Licensing
 - DSPy: MIT ✓ (can import and integrate freely)
 - GEPA: MIT ✓ (integrated into DSPy, also standalone `uv pip install gepa`)
-- Darwinian Evolver: AGPL v3 ⚠️ (external CLI only, no Python imports)
-- All Hermes-native code: MIT ✓
+- ~~Darwinian Evolver: AGPL v3 ⚠️~~ — **not used.** Code evolution shipped as
+  test-feedback repair (no AGPL dependency), so this risk never materialized; the
+  whole repo stays MIT.
+- All code: MIT ✓
 
 ---
 
