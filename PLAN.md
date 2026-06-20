@@ -1280,6 +1280,33 @@ suspicion into a measured, both-directions certificate.
     sample (caught via an implausibly low $0.98 cost + a direct probe); re-run with
     `cache=False` + unique per-draw tags + a draws-vs-calls guard.
 
+    **Self-improvement intent — double-walled (verification + supply, supply
+    confirmed at scale).** The original Phase-4 intent (an agent improves its own
+    tools/usage) is blocked on two independent walls. *Verification:* a self-directed
+    loop where the agent authors both the test and the fix has no external oracle —
+    the gate's anti-gaming core (held-out split) is operator-supplied and the gate
+    rejects `holdout == visible` as a tautology, so self-authored-test + self-authored
+    fix removes the very checks that make a green test trustworthy (the agent grades
+    its own homework; the leakage result shows the test's expected values do ~2/3 of
+    the work). *Supply:* the reproducible-tool-bug feed a self-hardening loop needs is
+    structurally ~0. First mis-judged on a sparse Hermes `state.db` (6 sessions → 0;
+    an unrepresentative-sample over-claim, retracted), then measured on a large local
+    agent-session corpus (**836 sessions, 41,376 tool calls**): of ~3,000
+    tracebacks-in-tool-results, **71% were a file-read returning text that merely
+    contains an error string** (logs/test-output/transcripts), **24% were shell runs
+    of code/tests crashing** (the normal dev loop, fixed in-session), and **~0% were a
+    tool itself throwing a bug**; human corrections were abundant (**14.8%** of turns)
+    but target the agent's work/plan — the artifact-quality axis already shown
+    decoupled on capable agents. So scale yields volume but not the right fuel:
+    agents fix their own crashes in-loop and are corrected on their work, not on
+    reproducible tool internals. **Conclusion:** self-improvement is not reachable on
+    this substrate; the durable asset is the deploy gate (an adversarial verifier for
+    machine-authored patches), and the mapped boundary — *self-improvement is gated by
+    independent verification and a supply of verifiable failures, both structurally
+    scarce for a capable agent* — is the honest finding. Revisit only with a new
+    substrate (fleet telemetry; a weaker tier where artifacts couple; a novel-contract
+    MCP surface).
+
     **Loop shipped, then de-risked, then reframed to a measurement campaign.** The
     iterative test-feedback repair loop shipped (`evolution/code/`: `evolve_code`,
     isolated git-worktree+venv, a gate with surface-freeze, file-scope, a held-out
