@@ -11,7 +11,7 @@ Three engines were planned; what actually carried the value is noted inline:
 | Engine | What It Optimizes | License | Integration |
 |--------|------------------|---------|-------------|
 | **DSPy + GEPA** | Skills, prompts, instructions, tool descriptions | MIT | Native Python, candidate generator (decoupled from capable-agent behavior — see "Where this landed") |
-| **Iterative test-feedback repair** | Tool implementation code | MIT | Whole-file repair in an isolated worktree, gated by the deploy gate — *this is what shipped for code*; the planned AGPL Darwinian Evolver proved overkill (a capable proposer + a deterministic test does effective repair) |
+| **Iterative test-feedback repair** | Tool implementation code | MIT | Whole-file repair in an isolated worktree, gated by the deploy gate — *this is what shipped for code*. The planned AGPL Darwinian Evolver (population search) was **never run**; the iterative loop sufficed for the bugs it solves, but whether population-based evolutionary search would recover the ~30% the loop *fails* is being tested head-to-head (item 12) — not assumed |
 | **DSPy MIPROv2** | Few-shot examples, instruction text | MIT | Native Python, fallback optimizer |
 
 GEPA is a strong candidate *generator* — integrated into DSPy, it reads execution traces to understand WHY things fail (not just that they fail) and works with as few as 3 examples. But the campaign's durable result is that the **deploy gate** that adjudicates candidates, not the evolver, is the asset that holds up: on a capable agent, evolving artifact text doesn't move behavior (see "Where this landed").
@@ -43,7 +43,7 @@ GEPA is a strong candidate *generator* — integrated into DSPy, it reads execut
 
 ### Tier 4: Code Repair (the one improvement gradient — shipped)
 - **What:** Tool implementation code, helper functions
-- **How (shipped):** iterative **test-feedback repair** — an LLM proposes a whole-file fix from the failing test's output, in a throwaway git worktree with an isolated venv, accepted only when it passes the gate (surface freeze, file scope, held-out split, baseline-diff regression floor). *Not* the planned Darwinian-evolver population, which proved overkill.
+- **How (shipped):** iterative **test-feedback repair** — an LLM proposes a whole-file fix from the failing test's output, in a throwaway git worktree with an isolated venv, accepted only when it passes the gate (surface freeze, file scope, held-out split, baseline-diff regression floor). This is a single-proposer iterative loop, *not* the planned Darwinian-evolver population search — which was **never run**; whether it would do better on the bugs this loop fails is being tested head-to-head (item 12).
 - **Why it works:** a deterministic test is a concrete, executable oracle with no agent between the artifact and the verdict — the one place artifact quality is *not* decoupled from behavior.
 - **Result:** deploy-reachable ~0.60–0.74 on real harvested bugs (see Forward Roadmap item 12), honestly scoped as test-feedback repair, not autonomous re-derivation.
 - **Risk:** code changes can break things — the gate's anti-gaming checks (held-out split, freeze) are the guardrail.
@@ -563,16 +563,18 @@ The system prompt is assembled in `run_agent.py` / `agent/prompt_builder.py` fro
 
 ### Phase 4: Code Repair (iterative test-feedback, gated)
 
-> **Status — shipped, but NOT via the Darwinian Evolver below.** The week-by-week
-> Darwinian-Evolver plan in this subsection is **superseded historical design**. What
-> actually shipped (`evolution/code/`) is iterative **test-feedback repair**: a capable
-> proposer rewrites the whole file from the failing test's output, in a throwaway
-> worktree, accepted only through the deploy gate (surface freeze, file scope, held-out
-> split, regression floor). The population/GitBasedOrganism machinery proved overkill —
-> a proposer + a deterministic test does effective repair. For the authoritative,
-> current status (deploy-reachable ~0.60–0.74, the leakage reframe, the difficulty
-> curve) see **Forward Roadmap item 12** and [the findings report](reports/asymmetry_findings.md). The original plan
-> is kept below as founding intent.
+> **Status — a single-proposer test-feedback loop shipped; the Darwinian Evolver was
+> never run.** The week-by-week Darwinian-Evolver plan in this subsection is
+> **unbuilt** — what actually shipped (`evolution/code/`) is iterative test-feedback
+> repair: a capable proposer rewrites the whole file from the failing test's output, in
+> a throwaway worktree, accepted only through the deploy gate (surface freeze, file
+> scope, held-out split, regression floor). That loop works (deploy-reachable
+> ~0.60–0.74). What is **not** settled: whether the population-based evolutionary search
+> the authors intended would beat this loop on the ~30% of bugs it fails — that
+> head-to-head is in progress and has **not** been run before; do not read "the evolver
+> is overkill" as a tested result. For the authoritative current status (the leakage
+> reframe, the difficulty curve) see **Forward Roadmap item 12** and
+> [the findings report](reports/asymmetry_findings.md). The original plan is kept below as founding intent.
 
 **Goal:** Evolve tool implementation code for better performance and fewer bugs.
 
@@ -1254,6 +1256,18 @@ suspicion into a measured, both-directions certificate.
     self-hosting on the agent's own tools — is the campaign's first viable
     improvement-finding direction, distinct from the capable-agent artifact-quality
     decoupling.**
+
+    **Precise scope of what was tested (important — earlier framing conflated two
+    things).** "The multi-round loop IS justified" means *iterating a single proposer
+    with test feedback* beats one-shot — that is tested and true. It does **NOT** mean
+    the **Darwinian Evolver's population-based search** (a population of candidate
+    fixes, fitness-guided selection on partial credit, recombination across
+    generations) was evaluated — that was **never run**. The "machinery is overkill"
+    line is therefore an *inference* from the iterative probe, not a head-to-head, and
+    it is weakest exactly on the ~26–31% of real bugs the loop *fails* (the 0/3 and 1/3
+    organisms) — the regime where evolutionary exploration is supposed to help. A
+    head-to-head (evolutionary proxy vs the single-proposer loop, on the loop's
+    failures) is the proof; until it runs, do not treat the evolver as disproven.
 
     **Loop shipped, then de-risked, then reframed to a measurement campaign.** The
     iterative test-feedback repair loop shipped (`evolution/code/`: `evolve_code`,
