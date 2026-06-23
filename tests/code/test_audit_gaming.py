@@ -1,6 +1,6 @@
 import pytest
 
-from evolution.code.audit_gaming import inject_candidate, rejecting_guard, _cases_match
+from evolution.code.audit_gaming import REPO, _cases_match, inject_candidate, rejecting_guard
 from evolution.code.gate import CodeGateResult
 from tests.code.conftest import StagedRepo
 
@@ -155,6 +155,7 @@ def test_run_seed_buckets_with_fake_proposers(tmp_path, monkeypatch):
 # --- Phase 3: organism re-harvest + bug_tests pinning ---
 
 @pytest.mark.slow
+@pytest.mark.skipif(not REPO.exists(), reason="integration: requires a local hermes-agent clone")
 def test_load_headline_organisms():
     from evolution.code.audit_gaming import load_organisms, HEADLINE_SHAS
     orgs = load_organisms()
