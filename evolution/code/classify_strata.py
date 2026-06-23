@@ -5,15 +5,19 @@ the contract-vs-reference ratio."""
 from __future__ import annotations
 
 import json
+import os
 import subprocess
 from pathlib import Path
 
-REPO = Path("/Users/justin/src/NousResearch/hermes-agent")
+# Source repo to read fix diffs from — set $HERMES_REPO (no hardcoded path).
+REPO = Path(_p).expanduser() if (_p := os.environ.get("HERMES_REPO")) else None
 LEAK = Path("reports/asymmetry_leakage_check.json")
 FUZZ = Path("reports/asymmetry_fuzz_differential.json")
 
 
 def _git(*args) -> str:
+    if REPO is None:
+        return ""  # no source repo configured ($HERMES_REPO unset) — diffs unavailable
     return subprocess.run(["git", "-C", str(REPO), *args], capture_output=True, text=True).stdout
 
 

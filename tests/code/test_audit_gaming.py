@@ -155,7 +155,7 @@ def test_run_seed_buckets_with_fake_proposers(tmp_path, monkeypatch):
 # --- Phase 3: organism re-harvest + bug_tests pinning ---
 
 @pytest.mark.slow
-@pytest.mark.skipif(not REPO.exists(), reason="integration: requires a local hermes-agent clone")
+@pytest.mark.skipif(REPO is None or not REPO.exists(), reason="integration: set $HERMES_REPO to a local source-repo clone")
 def test_load_headline_organisms():
     from evolution.code.audit_gaming import load_organisms, HEADLINE_SHAS
     orgs = load_organisms()

@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import ast
 import json
+import os
 import subprocess
 from pathlib import Path
 from typing import Optional
@@ -14,7 +15,17 @@ from evolution.code.gate import CodeGateResult, run_code_oracle_gate
 from evolution.code.repair import Proposer, RepairEngine, RepairResult, _TRUNCATION_FLOOR, _strip_fences, build_dspy_proposer
 from evolution.code.worktree import WorktreeEnv
 
-REPO = Path("/Users/justin/src/NousResearch/hermes-agent")
+# Source repo to harvest from — set $HERMES_REPO (no hardcoded path).
+REPO = Path(_p).expanduser() if (_p := os.environ.get("HERMES_REPO")) else None
+
+
+def _require_repo() -> Path:
+    """The configured source repo, or a clear error if $HERMES_REPO is unset/missing."""
+    if REPO is None or not REPO.exists():
+        raise RuntimeError(
+            "set $HERMES_REPO to a local source-repo clone before harvesting "
+            "(e.g. export HERMES_REPO=/path/to/hermes-agent)")
+    return REPO
 HEADLINE_SHAS = {("tools/patch_parser.py", "5e743559e0"),
                  ("tools/fuzzy_match.py", "6bd0be30be"),
                  ("tools/fuzzy_match.py", "5e6427a42c")}
@@ -199,19 +210,19 @@ def load_organisms(extra: int = 3):
     """Re-harvest the graded organism set by fix_sha (organisms are not stored).
     Headline set + `extra` more spanning oracle richness (test-function count)."""
     from evolution.code.harvest import harvest_candidates
-    cands = harvest_candidates(REPO, None, max_commits_per_tool=60, since_days=None)
+    cands = harvest_candidates(_require_repo(), None, max_commits_per_tool=60, since_days=None)
     by_key = {(c.tool_path, c.fix_sha[:10]): c for c in cands}
     headline = [by_key[k] for k in HEADLINE_SHAS if k in by_key]
 
     if len(headline) < len(HEADLINE_SHAS):
         # Retry with a wider window before giving up.
-        cands = harvest_candidates(REPO, None, max_commits_per_tool=120, since_days=None)
+        cands = harvest_candidates(_require_repo(), None, max_commits_per_tool=120, since_days=None)
         by_key = {(c.tool_path, c.fix_sha[:10]): c for c in cands}
         headline = [by_key[k] for k in HEADLINE_SHAS if k in by_key]
 
     def richness(c):
         try:
-            return sum(1 for ln in (REPO / c.test_path).read_text().splitlines()
+            return sum(1 for ln in (_require_repo() / c.test_path).read_text().splitlines()
                        if ln.lstrip().startswith("def test_"))
         except Exception:
             return 0
@@ -235,7 +246,7 @@ def setup_organism(env, candidate):
     env.assert_authoritative(candidate.tool_path.split("/")[0])
     from evolution.code.harvest import _failures
     proc = subprocess.run(
-        ["git", "-C", str(REPO), "show", f"{candidate.parent_sha}:{candidate.tool_path}"],
+        ["git", "-C", str(_require_repo()), "show", f"{candidate.parent_sha}:{candidate.tool_path}"],
         capture_output=True, text=True)
     if proc.returncode != 0:
         raise ValueError(f"git show failed for {candidate.parent_sha}:{candidate.tool_path}: "
@@ -374,7 +385,7 @@ def adjudicate_main():
                 test_path = org_slips[0]["bug_tests"][0].split("::")[0]
 
             try:
-                env = WorktreeEnv.create(REPO, base_ref=fix_sha_full, base_python=None)
+                env = WorktreeEnv.create(_require_repo(), base_ref=fix_sha_full, base_python=None)
             except Exception as e:
                 msg = f"worktree_failed:{type(e).__name__}:{str(e)[:120]}"
                 print(f"  SKIP: {msg}")
@@ -389,7 +400,7 @@ def adjudicate_main():
             try:
                 env.assert_authoritative(tool_path.split("/")[0])
                 oracle_src = subprocess.run(
-                    ["git", "-C", str(REPO), "show", f"{fix_sha_full}:{tool_path}"],
+                    ["git", "-C", str(_require_repo()), "show", f"{fix_sha_full}:{tool_path}"],
                     capture_output=True, text=True).stdout
 
                 test_src = ""
@@ -511,7 +522,7 @@ def main():
         for c in orgs:
             key = f"{c.tool_path}@{c.fix_sha[:10]}"
             try:
-                env = WorktreeEnv.create(REPO, base_ref=c.fix_sha, base_python=None)
+                env = WorktreeEnv.create(_require_repo(), base_ref=c.fix_sha, base_python=None)
             except Exception as e:
                 records.append({"organism": key, "error": f"worktree:{type(e).__name__}:{str(e)[:200]}"}); continue
             try:

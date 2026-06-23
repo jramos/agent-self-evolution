@@ -34,4 +34,4 @@ Tested the *proper* method on httpx — select the PR's **added** test functions
 
 **Decisive lesson:** a proper harvest needs **per-commit-era environment reconstruction** (the right interpreter + pinned deps per commit) — exactly why SWE-bench/SWE-smith build per-instance environments, and why porting the supply is a major infrastructure effort, not a probe. **Recommendation:** do NOT rebuild this from scratch — **adopt SWE-smith's existing 50k-instance feed + per-repo environments** (~$1360 already spent upstream) if a portable supply is wanted. The project's durable contribution — the deploy GATE and the measured boundary — *composes* with an external feed; it does not need to manufacture one.
 
-Env note: the agent venv gained httpx's test deps (trio/trustme/uvicorn/cryptography); `uv sync` restores it. httpx is cloned read-only at `/Users/justin/src/httpx`.
+Env note: the validity filter needs the target repo's test deps (for httpx: trio/trustme/uvicorn/cryptography) and a local read-only clone of the source repo (configured via `$HERMES_REPO`).
