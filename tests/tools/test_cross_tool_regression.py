@@ -124,7 +124,6 @@ def _scripted_judge_score(self, *, task, expected_tool, chosen_tool, agent_reaso
         correctness=s,
         procedure_following=s,
         conciseness=s,
-        length_penalty=0.0,
         feedback="" if correct else "wrong tool",
         profile="balanced",
     )

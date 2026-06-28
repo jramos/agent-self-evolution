@@ -62,9 +62,8 @@ class ToolJudge:
     Mirrors the skill-shaped judge's contract but takes the four
     tool-selection input fields (``task``, ``expected_tool``,
     ``chosen_tool``, ``agent_reasoning``) instead of the three
-    skill-shaped fields. Returns a ``FitnessScore`` with
-    ``length_penalty=0.0`` — length pressure on the tool path lives in
-    the proposer's budget-aware slope, not the judge.
+    skill-shaped fields. Returns a ``FitnessScore``; length pressure on the
+    tool path lives in the proposer's budget-aware slope, not the judge.
     """
 
     def __init__(self, config: EvolutionConfig):
@@ -108,7 +107,6 @@ class ToolJudge:
             correctness=_clamp_to_unit(result.correctness),
             procedure_following=_clamp_to_unit(result.procedure_following),
             conciseness=_clamp_to_unit(result.conciseness),
-            length_penalty=0.0,
             feedback=str(result.feedback),
             profile=self.profile,
         )

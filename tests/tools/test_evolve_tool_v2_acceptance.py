@@ -118,7 +118,6 @@ def _saturated_judge() -> MagicMock:
         correctness=1.0,
         procedure_following=1.0,
         conciseness=1.0,
-        length_penalty=0.0,
         feedback="judge stub",
         profile="balanced",
     )

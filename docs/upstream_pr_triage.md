@@ -56,6 +56,15 @@ record dispositions so we don't re-litigate the same clusters every cycle.
   (the codebase isn't ruff-clean — needs a line-length policy first) and kept `gitleaks` separate
   (#107). Hooks enforce on changed files; a one-time `--all-files` cleanup (~18 EOF/whitespace
   nits, mostly report JSONs) is a deferred follow-up.
+- **2026-06-28** — #134 (graduated skill-size cap) **investigated → not applicable**. The
+  premise — a pre-cap length-penalty "cliff" in `LLMJudge.score` that docks under-cap skills — is
+  dead code on our fork: no caller passes the `artifact_size`/`max_size` the penalty needs, so it
+  is always 0.0 and docks nothing. Length pressure is handled on purpose by the proposer's length
+  budget and two hard deploy ceilings (`_check_size`/`max_skill_size` and the baseline-scaled
+  `effective_absolute_char_ceiling`); building the graduated ramp would re-introduce a
+  deliberately-removed mechanism. Removed the vestigial `length_penalty` instead (the field, the
+  ratio/penalty computation, and the unused `artifact_size`/`max_size` params) — behavior-preserving,
+  since the penalty was always 0.0, so `composite` values are unchanged; full non-slow suite green.
 
 ## Action items (open)
 
@@ -66,7 +75,7 @@ not "merge the PR." Our-code anchors point at where the change would land.
 |---|---|---|---|---|---|
 | #132 | **Parameter-description evolution** — AST reader/writer for `parameters.properties.{name}.description`; dot-labeled `[[tool.param]]` GEPA targets | A genuinely missing evolution axis. We have the constraint stub but no evolver touches param descriptions. | `evolution/core/constraints.py:112` (`max_param_desc_size` stub), `evolution/tools/tool_source.py` (treats `input_schema` read-only), `tool_module.py` | **Investigated → NULL** (axis saturated — param-description text doesn't move agent value-selection; see review log, 2026-06-28) | ✅ |
 | #102 (+ #26) | Skill importer reads Hermes **`state.db`** (SQLite) + filters machine-generated user messages; #26 adds a 3-stage relevance filter (LLM keyword expansion + full-corpus scan) | Our skill importer reads stale `~/.hermes/sessions/*.json`; our own validation path proves `state.db` is canonical. The skill path lags the tool path on data quality + recall. | `evolution/core/external_importers.py` (`HermesSessionImporter`, `RelevanceFilter`); cf. `evolution/validation/hermes_runner.py` (`parse_session_from_db`) | **DONE** — `iter_hermes_sessions` now reads `state.db` first; both skill + tool paths fixed (importer 0 → real pairs). #26 recall improvement deferred. | ✅ |
-| #134 | Graduated / class-aware skill-size cap (soft target + hard ceiling + ramp) | Our fitness still has a **pre-cap length-penalty cliff** that docks skills already under the cap. | `evolution/core/fitness.py:111-115` (the cliff), reconcile with `evolution/core/constraints.py:241-267` (`effective_absolute_char_ceiling`) | ADOPT (adapted; drop the brittle keyword `is_reference_skill` heuristic) | ☐ |
+| #134 | Graduated / class-aware skill-size cap (soft target + hard ceiling + ramp) | Premise was a **pre-cap length-penalty cliff** in fitness that docks under-cap skills — but on our fork that penalty is dead code (no caller passes the size it needs, so it is always 0.0). Length pressure is handled deliberately by the proposer's length budget + two hard deploy ceilings. | `evolution/core/fitness.py` (the dead `length_penalty`), `evolution/core/constraints.py` (`_check_size`, `effective_absolute_char_ceiling`) | **Investigated → not applicable** (dead-code premise; removed the vestigial penalty rather than build the ramp; see review log, 2026-06-28) | ✅ |
 | #106 | `.github/dependabot.yml` + `.pre-commit-config.yaml` | Missing infra hygiene; we have neither. | `.github/`, repo root; reconcile with `.github/workflows/tests.yml` (py3.10–3.13 matrix) | **DONE** — added `dependabot.yml` (uv + github-actions) + `.pre-commit-config.yaml` (hygiene hooks); ruff + gitleaks (#107) deferred | ✅ |
 | #133 | Cross-phase orchestrator + unified `evolve_all` CLI — **shape only** (dependency-ordered phases, fault isolation, JSONL run history) | We have no unified driver sequencing skills→tools→prompts→params; only per-subsystem. Compounds with #132. | `evolution/monitor/` (sentinel/queue — keep the propose-only/human-in-loop boundary) | CHERRY-PICK (shell only; keep our gated evolvers) | ☐ |
 | #127 | Broad-benchmark-regression-as-a-gate, applied to the **skill** path | We have the regression-floor/oracle analogue for **code** only. | `evolution/code/gate.py` (the code analogue); skill deploy gate in `evolution/skills/evolve_skill.py` | INVESTIGATE | ☐ |
@@ -130,7 +139,7 @@ These commit material that violates our non-exposure posture; never import them:
 For traceability of this cycle. Disposition key: A=adopt, C=cherry-pick, I=investigate,
 S=skip (already covered / superseded), X=do-not-merge.
 
-- **Constraint-validator / skill-assembly**: #7 S, #23 S, #50 S, #51 (C, dir guard), #53 S, #95 S, #97 S, #104 S, #113 S, #114 S, #134 **A**
+- **Constraint-validator / skill-assembly**: #7 S, #23 S, #50 S, #51 (C, dir guard), #53 S, #95 S, #97 S, #104 S, #113 S, #114 S, #134 **n/a (investigated)**
 - **GEPA / DSPy 3.x compat**: #13 S, #14 S, #35 S, #46 S, #48 S, #73 S, #91 S, #109 S, #137 S (parked: secret-scan constraint)
 - **Fitness / judge / significance + skill extraction**: #5 S, #24 S, #49 S, #25 S, #28 S, #136 (parked: BCa diagnostic)
 - **Model providers / backends**: #8 S, #15 S, #19 S, #22 S, #85 **I**, #92 S, #112 S

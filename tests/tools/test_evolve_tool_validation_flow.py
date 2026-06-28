@@ -124,7 +124,6 @@ def _scripted_judge_score(*, target_score: float, regression_score: float):
             correctness=score,
             procedure_following=score,
             conciseness=score,
-            length_penalty=0.0,
             feedback="" if correct else "wrong tool",
             profile="balanced",
         )

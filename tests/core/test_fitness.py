@@ -24,7 +24,6 @@ def _stub_judge(score: float = 0.7, feedback: str = "explanatory feedback") -> M
         correctness=score,
         procedure_following=score,
         conciseness=score,
-        length_penalty=0.0,
         feedback=feedback,
     )
     return judge

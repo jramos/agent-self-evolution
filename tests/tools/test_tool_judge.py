@@ -183,7 +183,6 @@ class TestMakeToolFitnessMetric:
             correctness=1.0,
             procedure_following=1.0,
             conciseness=1.0,
-            length_penalty=0.0,
             feedback="",
             profile="balanced",
         )
@@ -257,7 +256,6 @@ class TestToolJudge:
         assert result.correctness == 0.9
         assert result.procedure_following == 0.8
         assert result.conciseness == 0.7
-        assert result.length_penalty == 0.0
         assert result.feedback == "reasoning was a bit verbose"
         assert result.profile == "balanced"
 
