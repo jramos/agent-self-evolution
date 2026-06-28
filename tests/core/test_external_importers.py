@@ -15,6 +15,7 @@ Tests cover:
 """
 
 import json
+import sqlite3
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch, MagicMock
@@ -608,6 +609,157 @@ class TestIterHermesSessions:
             results = list(iter_hermes_sessions())
 
         assert [sid for sid, _ in results] == ["new", "old"]
+
+
+# --- state.db sourcing (triage #102) -------------------------------------------------
+
+def _make_hermes_state_db(path, sessions):
+    """Write a minimal hermes-shaped ``state.db``.
+
+    ``sessions``: list of ``(session_id, source, started_at, messages)``. Each message
+    is ``{"role", "content"?, "tool_calls"?, "tool_calls_raw"?}`` — ``tool_calls`` is
+    JSON-serialized; ``tool_calls_raw`` is inserted verbatim (to exercise malformed text).
+    """
+    conn = sqlite3.connect(path)
+    conn.executescript(
+        "CREATE TABLE sessions (id TEXT PRIMARY KEY, source TEXT, model TEXT, started_at REAL);"
+        "CREATE TABLE messages (id INTEGER PRIMARY KEY AUTOINCREMENT, session_id TEXT, "
+        "role TEXT, content TEXT, tool_calls TEXT);"
+    )
+    for session_id, source, started_at, messages in sessions:
+        conn.execute(
+            "INSERT INTO sessions (id, source, model, started_at) VALUES (?, ?, ?, ?)",
+            (session_id, source, "m", started_at),
+        )
+        for m in messages:
+            if "tool_calls_raw" in m:
+                tc = m["tool_calls_raw"]
+            elif m.get("tool_calls") is not None:
+                tc = json.dumps(m["tool_calls"])
+            else:
+                tc = None
+            conn.execute(
+                "INSERT INTO messages (session_id, role, content, tool_calls) VALUES (?, ?, ?, ?)",
+                (session_id, m["role"], m.get("content"), tc),
+            )
+    conn.commit()
+    conn.close()
+
+
+@pytest.fixture(autouse=True)
+def _isolate_hermes_state_db(tmp_path, monkeypatch):
+    """``iter_hermes_sessions`` now reads ``~/.hermes/state.db`` first; a real db on the
+    dev/CI box would hijack the JSON-fixture tests. Default ``STATE_DB`` to an absent
+    path — the state.db tests below override it explicitly."""
+    monkeypatch.setattr(HermesSessionImporter, "STATE_DB", tmp_path / "no_state.db")
+
+
+class TestIterHermesSessionsFromDb:
+    """state.db is the canonical store; iter_hermes_sessions reads it first."""
+
+    def test_pairs_user_assistant_from_db(self, tmp_path, monkeypatch):
+        db = tmp_path / "state.db"
+        _make_hermes_state_db(db, [
+            ("s1", "cli", 1.0, [
+                {"role": "user", "content": "Refactor the auth module please"},
+                {"role": "assistant", "content": "Done — extracted a helper."},
+            ]),
+        ])
+        monkeypatch.setattr(HermesSessionImporter, "STATE_DB", db)
+        msgs = HermesSessionImporter.extract_messages()
+        assert len(msgs) == 1
+        assert msgs[0]["source"] == "hermes"
+        assert msgs[0]["task_input"] == "Refactor the auth module please"
+        assert msgs[0]["assistant_response"] == "Done — extracted a helper."
+        assert msgs[0]["session_id"] == "s1"
+
+    def test_mines_all_sessions_source_agnostic(self, tmp_path, monkeypatch):
+        db = tmp_path / "state.db"
+        _make_hermes_state_db(db, [
+            ("s1", "cli", 1.0, [
+                {"role": "user", "content": "First task with enough length"},
+                {"role": "assistant", "content": "First answer."},
+            ]),
+            ("s2", "cli", 2.0, [
+                {"role": "user", "content": "Second task with enough length"},
+                {"role": "assistant", "content": "Second answer."},
+            ]),
+        ])
+        monkeypatch.setattr(HermesSessionImporter, "STATE_DB", db)
+        tasks = {m["task_input"] for m in HermesSessionImporter.extract_messages()}
+        assert tasks == {"First task with enough length", "Second task with enough length"}
+
+    def test_strips_model_switch_note_prefix(self, tmp_path, monkeypatch):
+        note = ("[Note: model was just switched from openai/gpt-5.4 to claude-opus-4-7 "
+                "via Anthropic. Adjust your self-identification accordingly.]")
+        db = tmp_path / "state.db"
+        _make_hermes_state_db(db, [
+            ("s1", "cli", 1.0, [
+                {"role": "user", "content": f"{note}\n\nPlease summarize the changelog"},
+                {"role": "assistant", "content": "Here is the summary."},
+            ]),
+        ])
+        monkeypatch.setattr(HermesSessionImporter, "STATE_DB", db)
+        msgs = HermesSessionImporter.extract_messages()
+        assert len(msgs) == 1
+        # Note stripped, genuine instruction kept (NOT dropped).
+        assert msgs[0]["task_input"] == "Please summarize the changelog"
+
+    def test_note_only_message_is_dropped(self, tmp_path, monkeypatch):
+        note = ("[Note: model was just switched from a to b via c. "
+                "Adjust your self-identification accordingly.]")
+        db = tmp_path / "state.db"
+        _make_hermes_state_db(db, [
+            ("s1", "cli", 1.0, [
+                {"role": "user", "content": note},  # nothing real after stripping
+                {"role": "assistant", "content": "ok"},
+            ]),
+        ])
+        monkeypatch.setattr(HermesSessionImporter, "STATE_DB", db)
+        assert HermesSessionImporter.extract_messages() == []
+
+    def test_tool_calls_decoded_as_list(self, tmp_path, monkeypatch):
+        db = tmp_path / "state.db"
+        _make_hermes_state_db(db, [
+            ("s1", "cli", 1.0, [
+                {"role": "user", "content": "Find the config file for me"},
+                {"role": "assistant", "content": "",
+                 "tool_calls": [{"function": {"name": "search_files"}}]},
+            ]),
+        ])
+        monkeypatch.setattr(HermesSessionImporter, "STATE_DB", db)
+        _, msg_list = list(iter_hermes_sessions())[0]
+        tc = [m["tool_calls"] for m in msg_list if m["role"] == "assistant"][0]
+        assert isinstance(tc, list) and tc[0]["function"]["name"] == "search_files"
+
+    def test_malformed_tool_calls_become_none(self, tmp_path, monkeypatch):
+        db = tmp_path / "state.db"
+        _make_hermes_state_db(db, [
+            ("s1", "cli", 1.0, [
+                {"role": "user", "content": "Do the thing with enough length"},
+                {"role": "assistant", "content": "x", "tool_calls_raw": "{not json"},
+            ]),
+        ])
+        monkeypatch.setattr(HermesSessionImporter, "STATE_DB", db)
+        _, msg_list = list(iter_hermes_sessions())[0]
+        assert [m["tool_calls"] for m in msg_list if m["role"] == "assistant"] == [None]
+
+    def test_falls_back_to_json_when_db_empty(self, tmp_path, monkeypatch):
+        db = tmp_path / "state.db"
+        _make_hermes_state_db(db, [])  # tables exist, no rows
+        monkeypatch.setattr(HermesSessionImporter, "STATE_DB", db)
+        json_dir = tmp_path / "sessions"
+        json_dir.mkdir()
+        (json_dir / "s.json").write_text(json.dumps({
+            "session_id": "from-json",
+            "messages": [
+                {"role": "user", "content": "JSON fallback task with length"},
+                {"role": "assistant", "content": "from json"},
+            ],
+        }))
+        monkeypatch.setattr(HermesSessionImporter, "SESSION_DIR", json_dir)
+        msgs = HermesSessionImporter.extract_messages()
+        assert len(msgs) == 1 and msgs[0]["session_id"] == "from-json"
 
 
 class TestSkillNameMatching:

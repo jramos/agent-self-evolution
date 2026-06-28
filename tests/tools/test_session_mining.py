@@ -1,6 +1,7 @@
 """Tests for evolution.tools.session_mining — Hermes session log mining."""
 
 import json
+import sqlite3
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
@@ -43,6 +44,35 @@ def _write_session(dir_path: Path, name: str, messages: list[dict], session_id: 
     if session_id:
         payload["session_id"] = session_id
     (dir_path / f"{name}.json").write_text(json.dumps(payload))
+
+
+class TestHermesToolImporterFromStateDb:
+    """The tool path mines ``state.db`` too — iter_hermes_sessions is DB-first."""
+
+    def test_extracts_candidate_from_state_db(self, manifest, tmp_path):
+        db = tmp_path / "state.db"
+        conn = sqlite3.connect(db)
+        conn.executescript(
+            "CREATE TABLE sessions (id TEXT PRIMARY KEY, source TEXT, model TEXT, started_at REAL);"
+            "CREATE TABLE messages (id INTEGER PRIMARY KEY AUTOINCREMENT, session_id TEXT, "
+            "role TEXT, content TEXT, tool_calls TEXT);"
+        )
+        conn.execute(
+            "INSERT INTO sessions (id, source, model, started_at) VALUES ('s1', 'cli', 'm', 1.0)"
+        )
+        conn.execute(
+            "INSERT INTO messages (session_id, role, content, tool_calls) VALUES (?, ?, ?, ?)",
+            ("s1", "user", "Find every TODO comment in the source tree", None),
+        )
+        conn.execute(
+            "INSERT INTO messages (session_id, role, content, tool_calls) VALUES (?, ?, ?, ?)",
+            ("s1", "assistant", "", json.dumps([{"function": {"name": "search_files"}}])),
+        )
+        conn.commit()
+        conn.close()
+        with patch.object(HermesSessionImporter, "STATE_DB", db):
+            candidates, _drops = HermesToolImporter.extract_candidates(manifest)
+        assert len(candidates) == 1
 
 
 class TestExtractToolName:

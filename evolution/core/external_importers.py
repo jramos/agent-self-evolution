@@ -25,6 +25,7 @@ Usage from evolve_skill.py:
 import json
 import re
 import random
+import sqlite3
 from pathlib import Path
 from typing import Optional
 
@@ -334,6 +335,7 @@ class HermesSessionImporter:
     """
 
     SESSION_DIR = Path.home() / ".hermes" / "sessions"
+    STATE_DB = Path.home() / ".hermes" / "state.db"
 
     @staticmethod
     def extract_messages(limit: int = 0) -> list[dict]:
@@ -383,17 +385,90 @@ class HermesSessionImporter:
         return messages
 
 
-def iter_hermes_sessions():
-    """Yield ``(session_id, messages)`` for each Hermes session file.
+# Hermes prepends a model-switch note onto the user's turn (not a standalone
+# message), e.g. "[Note: model was just switched from X to Y ...]\n\n<real text>".
+# The note carries no nested ']'. Strip it and keep the genuine instruction.
+_MODEL_SWITCH_NOTE = re.compile(r"^\s*\[Note: model was just switched from[^\]]*\]\s*")
 
-    Walks ``~/.hermes/sessions/*.json`` newest-first by mtime. Skips files
-    that fail to parse and sessions with no ``messages`` list. The yielded
-    ``messages`` is the raw list — callers are responsible for whatever
-    pair / tool-call extraction they need.
+
+def _strip_model_switch_note(content: str) -> str:
+    """Drop a leading Hermes model-switch note, preserving the real user text."""
+    return _MODEL_SWITCH_NOTE.sub("", content, count=1)
+
+
+def _iter_hermes_sessions_from_db(db_path: Path) -> list[tuple[str, list[dict]]]:
+    """Read ``(session_id, messages)`` for every session in a Hermes ``state.db``.
+
+    ``state.db`` is the canonical store — modern ``hermes`` persists sessions here,
+    not to ``sessions/*.json``. Mines ALL sessions: it never reads or filters
+    ``sessions.source`` (that column records launch origin, not relevance; filtering
+    it would starve mining). Each message is ``{"role", "content", "tool_calls"}``
+    with ``tool_calls`` decoded to a list (``None`` if absent/malformed) — the same
+    shape the JSON path yields, so both the skill and tool consumers are unchanged.
+    Read-only; any SQLite error abstains (returns ``[]``) so a locked/corrupt db
+    falls back to the JSON path.
+    """
+    if not db_path.exists():
+        return []
+    try:
+        conn = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True)
+    except sqlite3.Error:
+        return []
+    out: list[tuple[str, list[dict]]] = []
+    try:
+        conn.row_factory = sqlite3.Row
+        session_rows = conn.execute(
+            "SELECT id FROM sessions ORDER BY started_at DESC"
+        ).fetchall()
+        for srow in session_rows:
+            session_id = srow["id"]
+            msg_rows = conn.execute(
+                "SELECT role, content, tool_calls FROM messages "
+                "WHERE session_id = ? ORDER BY id",
+                (session_id,),
+            ).fetchall()
+            msgs: list[dict] = []
+            for m in msg_rows:
+                role = m["role"]
+                if role not in ("user", "assistant"):
+                    continue
+                content = m["content"] or ""
+                if role == "user":
+                    content = _strip_model_switch_note(content)
+                raw_tc = m["tool_calls"]
+                tool_calls = None
+                if raw_tc:
+                    try:
+                        tool_calls = json.loads(raw_tc)
+                    except (json.JSONDecodeError, ValueError, TypeError):
+                        tool_calls = None
+                msgs.append({"role": role, "content": content, "tool_calls": tool_calls})
+            if msgs:
+                out.append((session_id, msgs))
+    except sqlite3.Error:
+        return []
+    finally:
+        conn.close()
+    return out
+
+
+def iter_hermes_sessions():
+    """Yield ``(session_id, messages)`` for each Hermes session.
+
+    Reads the canonical SQLite ``state.db`` first; if it yields no sessions
+    (absent, empty, or unreadable) falls back to the legacy
+    ``~/.hermes/sessions/*.json`` files (newest-first by mtime). The yielded
+    ``messages`` is a list of ``{"role", "content", "tool_calls"}`` dicts —
+    callers do their own pair / tool-call extraction.
 
     Shared by ``HermesSessionImporter`` (skill-path) and
     ``evolution.tools.session_mining`` (tool-path).
     """
+    db_sessions = _iter_hermes_sessions_from_db(HermesSessionImporter.STATE_DB)
+    if db_sessions:
+        yield from db_sessions
+        return
+
     if not HermesSessionImporter.SESSION_DIR.exists():
         return
 
