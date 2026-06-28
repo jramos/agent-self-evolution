@@ -28,20 +28,19 @@ class FitnessScore:
     correctness: float = 0.0
     procedure_following: float = 0.0
     conciseness: float = 0.0
-    length_penalty: float = 0.0
     feedback: str = ""
     profile: str = "balanced"
 
     @property
     def composite(self) -> float:
-        """Weighted composite. Length penalty is subtracted, then floored at 0."""
+        """Profile-weighted composite of the three sub-scores, floored at 0."""
         w_correctness, w_procedure, w_conciseness = _PROFILE_WEIGHTS[self.profile]
         raw = (
             w_correctness * self.correctness
             + w_procedure * self.procedure_following
             + w_conciseness * self.conciseness
         )
-        return max(0.0, raw - self.length_penalty)
+        return max(0.0, raw)
 
 
 class LLMJudge:
@@ -86,8 +85,6 @@ class LLMJudge:
         task_input: str,
         expected_behavior: str,
         agent_output: str,
-        artifact_size: Optional[int] = None,
-        max_size: Optional[int] = None,
     ) -> FitnessScore:
         """Score an agent output using LLM-as-judge."""
 
@@ -107,18 +104,10 @@ class LLMJudge:
         procedure_following = _clamp_to_unit(result.procedure_following)
         conciseness = _clamp_to_unit(result.conciseness)
 
-        # Penalty ramps from 0 at 90% of max_size to 0.3 at 100%+.
-        length_penalty = 0.0
-        if artifact_size is not None and max_size is not None:
-            ratio = artifact_size / max_size
-            if ratio > 0.9:
-                length_penalty = min(0.3, (ratio - 0.9) * 3.0)
-
         return FitnessScore(
             correctness=correctness,
             procedure_following=procedure_following,
             conciseness=conciseness,
-            length_penalty=length_penalty,
             feedback=str(result.feedback),
             profile=self.profile,
         )
