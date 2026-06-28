@@ -42,6 +42,13 @@ record dispositions so we don't re-litigate the same clusters every cycle.
   the agent infers it from the task + param name. Did not build the `evolution/parameters/`
   subsystem; ~$1 spent vs. a six-file build. (Probe + results are a local spike under
   `spikes/param_probe/`, uncommitted per convention; reproducible via `probe.py`.)
+- **2026-06-28** — #102 (skill/tool importer sourced stale JSON) **fixed**.
+  `iter_hermes_sessions` read `~/.hermes/sessions/*.json` — request-error dumps with no
+  `messages` key — so the skill *and* tool mining paths silently got zero sessions. Now reads
+  the canonical `state.db` first (JSON fallback), mines all sessions regardless of
+  `sessions.source`, and strips the prepended model-switch note while keeping the real
+  instruction. End-to-end: the importer went 0 → real pairs; full non-slow suite green.
+  The #26 `RelevanceFilter` recall improvement remains a follow-up.
 
 ## Action items (open)
 
@@ -51,7 +58,7 @@ not "merge the PR." Our-code anchors point at where the change would land.
 | # | What | Why we'd benefit | Our-code anchor | Disposition | Status |
 |---|---|---|---|---|---|
 | #132 | **Parameter-description evolution** — AST reader/writer for `parameters.properties.{name}.description`; dot-labeled `[[tool.param]]` GEPA targets | A genuinely missing evolution axis. We have the constraint stub but no evolver touches param descriptions. | `evolution/core/constraints.py:112` (`max_param_desc_size` stub), `evolution/tools/tool_source.py` (treats `input_schema` read-only), `tool_module.py` | **Investigated → NULL** (axis saturated — param-description text doesn't move agent value-selection; see review log, 2026-06-28) | ✅ |
-| #102 (+ #26) | Skill importer reads Hermes **`state.db`** (SQLite) + filters machine-generated user messages; #26 adds a 3-stage relevance filter (LLM keyword expansion + full-corpus scan) | Our skill importer reads stale `~/.hermes/sessions/*.json`; our own validation path proves `state.db` is canonical. The skill path lags the tool path on data quality + recall. | `evolution/core/external_importers.py` (`HermesSessionImporter`, `RelevanceFilter`); cf. `evolution/validation/hermes_runner.py` (`parse_session_from_db`) | CHERRY-PICK | ☐ |
+| #102 (+ #26) | Skill importer reads Hermes **`state.db`** (SQLite) + filters machine-generated user messages; #26 adds a 3-stage relevance filter (LLM keyword expansion + full-corpus scan) | Our skill importer reads stale `~/.hermes/sessions/*.json`; our own validation path proves `state.db` is canonical. The skill path lags the tool path on data quality + recall. | `evolution/core/external_importers.py` (`HermesSessionImporter`, `RelevanceFilter`); cf. `evolution/validation/hermes_runner.py` (`parse_session_from_db`) | **DONE** — `iter_hermes_sessions` now reads `state.db` first; both skill + tool paths fixed (importer 0 → real pairs). #26 recall improvement deferred. | ✅ |
 | #134 | Graduated / class-aware skill-size cap (soft target + hard ceiling + ramp) | Our fitness still has a **pre-cap length-penalty cliff** that docks skills already under the cap. | `evolution/core/fitness.py:111-115` (the cliff), reconcile with `evolution/core/constraints.py:241-267` (`effective_absolute_char_ceiling`) | ADOPT (adapted; drop the brittle keyword `is_reference_skill` heuristic) | ☐ |
 | #106 | `.github/dependabot.yml` + `.pre-commit-config.yaml` | Missing infra hygiene; we have neither. | `.github/`, repo root; reconcile with `.github/workflows/tests.yml` (py3.10–3.13 matrix) | ADOPT (reconcile pins) | ☐ |
 | #133 | Cross-phase orchestrator + unified `evolve_all` CLI — **shape only** (dependency-ordered phases, fault isolation, JSONL run history) | We have no unified driver sequencing skills→tools→prompts→params; only per-subsystem. Compounds with #132. | `evolution/monitor/` (sentinel/queue — keep the propose-only/human-in-loop boundary) | CHERRY-PICK (shell only; keep our gated evolvers) | ☐ |
@@ -120,7 +127,7 @@ S=skip (already covered / superseded), X=do-not-merge.
 - **GEPA / DSPy 3.x compat**: #13 S, #14 S, #35 S, #46 S, #48 S, #73 S, #91 S, #109 S, #137 S (parked: secret-scan constraint)
 - **Fitness / judge / significance + skill extraction**: #5 S, #24 S, #49 S, #25 S, #28 S, #136 (parked: BCa diagnostic)
 - **Model providers / backends**: #8 S, #15 S, #19 S, #22 S, #85 **I**, #92 S, #112 S
-- **Session importers / discovery / guardrails**: #26 **C**, #40 S (subset of #102), #102 **C**, #94 X
+- **Session importers / discovery / guardrails**: #26 **C** (deferred follow-up), #40 S (subset of #102), #102 **done**, #94 X
 - **Reliability / real-mutation / gating + code evolver**: #16 S, #17 X, #75 S, #89 S, #126 S, #127 **I**
 - **Phase / HSE mega-PRs**: #30 S, #42 S, #86 S, #98 S, #108 S, #117 S, #120 S
 - **eksays Phase 1–5**: #129 S, #130 S, #131 S, #132 **null (investigated)**, #133 **C**
