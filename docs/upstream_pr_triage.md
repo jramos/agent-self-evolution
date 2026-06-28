@@ -33,6 +33,15 @@ record dispositions so we don't re-litigate the same clusters every cycle.
 - **2026-06-28** — First full review. 70 open PRs → 9 thematic groups → ~7 actionable
   items after dedup. No upstream PR was incorporated wholesale; the value is in *gaps the
   upstream crowd built that we skipped*, not fixes to anything we got wrong.
+- **2026-06-28** — #132 (parameter-description evolution) **investigated → null**. A
+  measure-first kill-gate compared precise vs. name-only parameter descriptions on the case
+  most favorable to signal (the hermes `terminal` background/notify *convention*, carried
+  entirely in prose), scoring the agent's supplied argument values: **capable model 10/10 vs
+  10/10; weak `gpt-5.4-nano` 23/26 vs 27/29** (reps=3). The non-saturated weak model had room
+  to benefit from the guidance and didn't — the description text does not move value-selection;
+  the agent infers it from the task + param name. Did not build the `evolution/parameters/`
+  subsystem; ~$1 spent vs. a six-file build. (Probe + results are a local spike under
+  `spikes/param_probe/`, uncommitted per convention; reproducible via `probe.py`.)
 
 ## Action items (open)
 
@@ -41,7 +50,7 @@ not "merge the PR." Our-code anchors point at where the change would land.
 
 | # | What | Why we'd benefit | Our-code anchor | Disposition | Status |
 |---|---|---|---|---|---|
-| #132 | **Parameter-description evolution** — AST reader/writer for `parameters.properties.{name}.description`; dot-labeled `[[tool.param]]` GEPA targets | A genuinely missing evolution axis. We have the constraint stub but no evolver touches param descriptions. | `evolution/core/constraints.py:112` (`max_param_desc_size` stub), `evolution/tools/tool_source.py` (treats `input_schema` read-only), `tool_module.py` | ADOPT (mechanism; score via our closed-loop gate, not their synthetic metric) | ☐ |
+| #132 | **Parameter-description evolution** — AST reader/writer for `parameters.properties.{name}.description`; dot-labeled `[[tool.param]]` GEPA targets | A genuinely missing evolution axis. We have the constraint stub but no evolver touches param descriptions. | `evolution/core/constraints.py:112` (`max_param_desc_size` stub), `evolution/tools/tool_source.py` (treats `input_schema` read-only), `tool_module.py` | **Investigated → NULL** (axis saturated — param-description text doesn't move agent value-selection; see review log, 2026-06-28) | ✅ |
 | #102 (+ #26) | Skill importer reads Hermes **`state.db`** (SQLite) + filters machine-generated user messages; #26 adds a 3-stage relevance filter (LLM keyword expansion + full-corpus scan) | Our skill importer reads stale `~/.hermes/sessions/*.json`; our own validation path proves `state.db` is canonical. The skill path lags the tool path on data quality + recall. | `evolution/core/external_importers.py` (`HermesSessionImporter`, `RelevanceFilter`); cf. `evolution/validation/hermes_runner.py` (`parse_session_from_db`) | CHERRY-PICK | ☐ |
 | #134 | Graduated / class-aware skill-size cap (soft target + hard ceiling + ramp) | Our fitness still has a **pre-cap length-penalty cliff** that docks skills already under the cap. | `evolution/core/fitness.py:111-115` (the cliff), reconcile with `evolution/core/constraints.py:241-267` (`effective_absolute_char_ceiling`) | ADOPT (adapted; drop the brittle keyword `is_reference_skill` heuristic) | ☐ |
 | #106 | `.github/dependabot.yml` + `.pre-commit-config.yaml` | Missing infra hygiene; we have neither. | `.github/`, repo root; reconcile with `.github/workflows/tests.yml` (py3.10–3.13 matrix) | ADOPT (reconcile pins) | ☐ |
@@ -114,5 +123,5 @@ S=skip (already covered / superseded), X=do-not-merge.
 - **Session importers / discovery / guardrails**: #26 **C**, #40 S (subset of #102), #102 **C**, #94 X
 - **Reliability / real-mutation / gating + code evolver**: #16 S, #17 X, #75 S, #89 S, #126 S, #127 **I**
 - **Phase / HSE mega-PRs**: #30 S, #42 S, #86 S, #98 S, #108 S, #117 S, #120 S
-- **eksays Phase 1–5**: #129 S, #130 S, #131 S, #132 **A**, #133 **C**
+- **eksays Phase 1–5**: #129 S, #130 S, #131 S, #132 **null (investigated)**, #133 **C**
 - **Misc / infra / tests**: #20 S, #21 S, #45 S, #69 X, #76 S, #77 S, #78 S, #79 S, #80 S, #100 S, #101 S, #105 S, #106 **A**, #107 (parked)
