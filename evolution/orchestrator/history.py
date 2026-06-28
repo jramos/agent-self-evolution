@@ -1,8 +1,8 @@
 """JSONL run history + summary rendering for the orchestrator.
 
 Append-only ``run_history.jsonl`` (one row per executed phase) following the
-``campaign.py`` ledger pattern: resume reads it back into a ``done`` set keyed on
-``spec_index:phase:name`` and skips completed phases. ``summary.json`` /
+``campaign.py`` ledger pattern: resume reads it back into a ``done`` map (keyed
+``spec_index:phase:name`` → row) and skips completed phases. ``summary.json`` /
 ``summary.md`` aggregate the run and surface the human-in-loop handoff — the
 ``deployable`` list of ``decision==deploy`` run dirs to review.
 """
@@ -10,7 +10,10 @@ Append-only ``run_history.jsonl`` (one row per executed phase) following the
 from __future__ import annotations
 
 import json
+import logging
 from pathlib import Path
+
+logger = logging.getLogger(__name__)
 
 HISTORY_SCHEMA_VERSION = "1"
 LEDGER_NAME = "run_history.jsonl"
@@ -31,10 +34,15 @@ def load_done(ledger_path: Path) -> dict[str, dict]:
     if not path.exists():
         return {}
     done: dict[str, dict] = {}
-    for line in path.read_text().splitlines():
-        if line.strip():
+    for lineno, line in enumerate(path.read_text().splitlines(), start=1):
+        if not line.strip():
+            continue
+        try:
             row = json.loads(line)
-            done[row_key(row)] = row
+        except json.JSONDecodeError:
+            logger.warning("skipping unparseable %s line %d", LEDGER_NAME, lineno)
+            continue
+        done[row_key(row)] = row
     return done
 
 
@@ -47,7 +55,7 @@ def build_summary(rows: list[dict], *, run_id: str, stopped_early: bool) -> dict
         decision = r.get("decision")
         if decision:
             by_decision[decision] = by_decision.get(decision, 0) + 1
-        if decision == "deploy":
+        if decision == "deploy" and r.get("status") == "passed":
             deployable.append(
                 {"phase": r["phase"], "name": r["name"], "run_dir": r.get("run_dir")}
             )

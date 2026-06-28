@@ -99,6 +99,10 @@ def _validate_phase(raw, *, index: int, adapters) -> PhaseSpec:
         raise SpecError(
             f"{where}: 'create_pr' is a top-level phase field, not an 'args' key"
         )
+    if "output_dir" in args or "output-dir" in args:
+        raise SpecError(
+            f"{where}: 'output_dir' is set by the orchestrator, not an 'args' key"
+        )
 
     create_pr = raw.get("create_pr", False)
     if not isinstance(create_pr, bool):

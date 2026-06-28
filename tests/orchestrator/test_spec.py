@@ -52,6 +52,14 @@ def test_create_pr_inside_args_raises(tmp_path):
         """))
 
 
+def test_output_dir_inside_args_raises(tmp_path):
+    with pytest.raises(SpecError, match="set by the orchestrator"):
+        load_spec(_write(tmp_path, """
+            phases:
+              - { phase: skills, name: demo, args: { output_dir: /tmp/x } }
+        """))
+
+
 def test_create_pr_on_prompts_raises(tmp_path):
     with pytest.raises(SpecError, match="does not support create_pr"):
         load_spec(_write(tmp_path, """

@@ -33,10 +33,11 @@ def _enforce_propose_only(spec: RunSpec, *, allow_pr: bool) -> RunSpec:
             continue
         cost_flag = PHASE_ADAPTERS[p.phase].cost_flag
         eff = {**spec.defaults, **p.args}
-        if cost_flag is not None and cost_flag not in eff:
+        # `0` is a valid (abort-on-first-call) ceiling; only absent/null is rejected.
+        if cost_flag is not None and eff.get(cost_flag) is None:
             raise click.UsageError(
                 f"phase '{p.phase}' (name {p.name!r}) sets create_pr with --allow-pr "
-                f"but no spend ceiling; add '{cost_flag}' to its args."
+                f"but no spend ceiling; set '{cost_flag}' in its args."
             )
     return spec
 
@@ -54,12 +55,15 @@ def _enforce_propose_only(spec: RunSpec, *, allow_pr: bool) -> RunSpec:
 @click.option("--base-output", default=None, type=click.Path(file_okay=False, path_type=Path),
               help="Orchestrator run root (ledger + summary + per-phase dirs). "
                    "Default: output/orchestrator/<timestamp>/.")
+@click.option("--phase-timeout", default=None, type=click.FloatRange(min=1.0),
+              help="Per-phase wall-clock timeout (seconds). A phase exceeding it is killed "
+                   "and recorded as failed. Default: no timeout.")
 @click.option("--dry-run", is_flag=True, default=False,
               help="Resolve + record each phase's argv without launching subprocesses.")
 @click.option("--allow-pr", is_flag=True, default=False,
               help="Honor create_pr in the spec. Without it, ALL phases are forced to "
                    "no-PR regardless of the spec (propose-only default).")
-def main(spec_path, only, resume, stop_on_error, base_output, dry_run, allow_pr):
+def main(spec_path, only, resume, stop_on_error, base_output, phase_timeout, dry_run, allow_pr):
     spec = load_spec(spec_path)
     spec = _enforce_propose_only(spec, allow_pr=allow_pr)
 
@@ -70,7 +74,7 @@ def main(spec_path, only, resume, stop_on_error, base_output, dry_run, allow_pr)
                   f"[dim]{run_root}[/dim]" + (" [yellow](dry-run)[/yellow]" if dry_run else ""))
     summary = run_pipeline(
         spec, run_root=run_root, only=only or None, stop_on_error=stop_on_error,
-        resume=resume, dry_run=dry_run,
+        resume=resume, dry_run=dry_run, phase_timeout=phase_timeout,
     )
     console.print(render_summary_md(summary))
     console.print(f"\n  run root: [dim]{run_root}[/dim]")

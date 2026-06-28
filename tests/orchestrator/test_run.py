@@ -18,7 +18,7 @@ def make_runner(plan=None, default=(0, {"decision": "deploy"})):
     plan = plan or {}
     calls = []
 
-    def runner(argv, *, env, cwd):
+    def runner(argv, *, env, cwd, timeout=None):
         calls.append(argv)
         out = Path(argv[argv.index("--output-dir") + 1])
         exit_code, gate = plan.get(out.name, default)
@@ -46,6 +46,9 @@ class TestReconcile:
     def test_deploy_and_dry_run_pass(self):
         assert reconcile({"decision": "deploy"}, 0) == ("passed", "deploy")
         assert reconcile({"decision": "dry_run"}, 0) == ("passed", "dry_run")
+
+    def test_gate_without_decision_key_recorded_as_unknown(self):
+        assert reconcile({}, 0) == ("passed", "unknown")
 
 
 def _spec(*phases):
@@ -133,7 +136,7 @@ class TestSequencer:
     def test_runner_exception_is_aborted_not_crash(self, tmp_path):
         spec = _spec(PhaseSpec("skills", "demo", {}))
 
-        def boom(argv, *, env, cwd):
+        def boom(argv, *, env, cwd, timeout=None):
             raise RuntimeError("runner blew up")
 
         summary = run_pipeline(spec, run_root=tmp_path, phase_runner=boom, clock=_CLOCK)
@@ -146,3 +149,60 @@ class TestSequencer:
         assert (tmp_path / "summary.json").exists()
         assert (tmp_path / "summary.md").exists()
         assert (tmp_path / "run_history.jsonl").exists()
+
+    def test_aborted_gate_decision_halts_under_stop_on_error(self, tmp_path):
+        spec = _spec(
+            PhaseSpec("skills", "demo", {}),
+            PhaseSpec("tools", "demo", {"manifest": "m.json"}),
+        )
+        runner = make_runner({"skills-demo": (2, {"decision": "aborted"})})  # cost-ceiling
+        summary = run_pipeline(spec, run_root=tmp_path, phase_runner=runner,
+                               stop_on_error=True, clock=_CLOCK)
+        assert len(runner.calls) == 1 and summary["stopped_early"] is True
+        assert summary["phases"][0]["status"] == "aborted"
+
+    def test_denied_does_not_halt_under_stop_on_error(self, tmp_path):
+        spec = _spec(
+            PhaseSpec("skills", "demo", {}),
+            PhaseSpec("tools", "demo", {"manifest": "m.json"}),
+        )
+        runner = make_runner({"skills-demo": (3, {"decision": "denied"})})  # saturation
+        summary = run_pipeline(spec, run_root=tmp_path, phase_runner=runner,
+                               stop_on_error=True, clock=_CLOCK)
+        assert len(runner.calls) == 2 and summary["stopped_early"] is False
+        assert summary["by_status"].get("denied") == 1
+
+    def test_resume_retries_failed_phase_but_skips_passed(self, tmp_path):
+        spec = _spec(
+            PhaseSpec("skills", "demo", {}),
+            PhaseSpec("tools", "demo", {"manifest": "m.json"}),
+        )
+        run_pipeline(spec, run_root=tmp_path,
+                     phase_runner=make_runner({"skills-demo": (1, None)}), clock=_CLOCK)
+        second = make_runner()  # this time skills would write a gate too
+        summary = run_pipeline(spec, run_root=tmp_path, phase_runner=second,
+                               resume=True, clock=_CLOCK)
+        assert len(second.calls) == 1  # only the previously-failed phase is retried
+        assert "--skill" in second.calls[0]
+        statuses = {r["phase"]: r["status"] for r in summary["phases"]}
+        assert statuses == {"skills": "passed", "tools": "passed"}
+
+    def test_dry_run_then_resume_runs_for_real(self, tmp_path):
+        spec = _spec(PhaseSpec("skills", "demo", {}))
+        run_pipeline(spec, run_root=tmp_path, phase_runner=make_runner(),
+                     dry_run=True, clock=_CLOCK)
+        runner = make_runner()
+        run_pipeline(spec, run_root=tmp_path, phase_runner=runner, resume=True, clock=_CLOCK)
+        assert len(runner.calls) == 1  # a dry-run row is not treated as done
+
+    def test_stale_gate_cleared_before_relaunch(self, tmp_path):
+        spec = _spec(PhaseSpec("skills", "demo", {}))
+        run_pipeline(spec, run_root=tmp_path,
+                     phase_runner=make_runner({"skills-demo": (0, {"decision": "deploy"})}),
+                     clock=_CLOCK)
+        # Same run root, no --resume: the phase now "crashes" without writing a gate.
+        summary = run_pipeline(spec, run_root=tmp_path,
+                               phase_runner=make_runner({"skills-demo": (1, None)}),
+                               clock=_CLOCK)
+        assert summary["phases"][0]["status"] == "failed"  # not the stale deploy gate
+        assert summary["deployable"] == []

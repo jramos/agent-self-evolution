@@ -1,10 +1,11 @@
 """The sequencer: run each phase as an isolated subprocess, capture its verdict.
 
-Control flow per phase: resolve effective args → build argv → run via the
-injected ``phase_runner`` (default: ``subprocess.run`` — the process boundary is
-the fault isolation) → read the phase's ``gate_decision.json`` at the deterministic
-``--output-dir`` → reconcile to a (status, decision) → append a ledger row →
-continue, or halt under ``--stop-on-error``.
+Control flow per phase: resolve effective args → build argv → clear any stale
+run dir → run via the injected ``phase_runner`` (default: ``subprocess.run`` —
+the process boundary is the fault isolation) → read the phase's
+``gate_decision.json`` at the deterministic ``--output-dir`` → reconcile to a
+(status, decision) → append a ledger row → continue, or halt under
+``--stop-on-error``.
 
 Status (did the phase produce a verdict cleanly) is distinct from decision (what
 the gate said): a clean run whose gate rejected the candidate is
@@ -14,7 +15,9 @@ the gate said): a clean run whose gate rejected the candidate is
 from __future__ import annotations
 
 import json
+import logging
 import os
+import shutil
 import subprocess
 from datetime import datetime, timezone
 from pathlib import Path
@@ -31,18 +34,28 @@ from evolution.orchestrator.history import (
 )
 from evolution.orchestrator.spec import PhaseSpec, RunSpec
 
+logger = logging.getLogger(__name__)
+
 _HALT_STATUSES = {"failed", "aborted"}
+# A phase is "done" for --resume only if it produced a real verdict. failed /
+# aborted phases (and dry-run "skipped" rows) are re-run — resuming a crashed
+# run should retry the phase that crashed, not skip it.
+_RESUME_DONE_STATUSES = {"passed", "denied"}
 
 
 def _utcnow() -> datetime:
     return datetime.now(timezone.utc)
 
 
-def default_phase_runner(argv: list[str], *, env: dict, cwd: Path) -> int:
+def default_phase_runner(argv: list[str], *, env: dict, cwd: Path, timeout: float | None = None) -> int:
     """Run a phase as a subprocess and return its exit code. A phase crash,
     SystemExit, or cost-ceiling abort is just a non-zero code here — it cannot
-    take down the orchestrator."""
-    return subprocess.run(argv, env=env, cwd=str(cwd)).returncode
+    take down the orchestrator. A wedged phase is killed at ``timeout`` seconds
+    and reported as exit 124 (no gate written → reconciles to ``failed``)."""
+    try:
+        return subprocess.run(argv, env=env, cwd=str(cwd), timeout=timeout).returncode
+    except subprocess.TimeoutExpired:
+        return 124  # subprocess.run kills the child before raising
 
 
 def read_gate(run_dir: Path) -> dict | None:
@@ -98,6 +111,7 @@ def run_pipeline(
     stop_on_error: bool = False,
     resume: bool = False,
     dry_run: bool = False,
+    phase_timeout: float | None = None,
     phase_runner=default_phase_runner,
     clock=_utcnow,
     cwd: Path = Path("."),
@@ -107,8 +121,12 @@ def run_pipeline(
     ledger = run_root / LEDGER_NAME
     run_id = clock().strftime("%Y%m%d_%H%M%S")
 
-    done = load_done(ledger) if resume else {}
-    rows: list[dict] = sorted(done.values(), key=lambda r: r["spec_index"]) if resume else []
+    done: dict[str, dict] = {}
+    rows: list[dict] = []
+    if resume:
+        done = {k: v for k, v in load_done(ledger).items()
+                if v.get("status") in _RESUME_DONE_STATUSES}
+        rows = sorted(done.values(), key=lambda r: r["spec_index"])
     stopped_early = False
 
     for spec_index, ps in enumerate(spec.phases):
@@ -131,16 +149,27 @@ def run_pipeline(
             append_row(ledger, row)
             continue
 
+        # Clear any stale artifacts so read_gate can only ever see THIS run's
+        # verdict — otherwise a phase that dies before rewriting its gate would
+        # be reconciled against a prior run's (possibly "deploy") gate file.
+        if run_dir.exists():
+            shutil.rmtree(run_dir)
+
         started_at = clock().isoformat()
         error = None
         try:
-            exit_code = phase_runner(argv, env=os.environ.copy(), cwd=cwd)
+            exit_code = phase_runner(argv, env=os.environ.copy(), cwd=cwd, timeout=phase_timeout)
         except Exception as exc:  # the runner itself failing != the phase failing
             exit_code, error = -1, repr(exc)
+            logger.warning("orchestrator: phase_runner raised for %s/%s: %s",
+                           ps.phase, ps.name, exc)
         gate = read_gate(run_dir)
         status, decision = reconcile(gate, exit_code)
         if error is not None:
             status = "aborted"
+        if status != "passed":
+            logger.info("orchestrator: %s/%s → %s (%s, exit=%s)",
+                        ps.phase, ps.name, status, decision, exit_code)
 
         row = _row(run_id=run_id, spec_index=spec_index, ps=eff, status=status,
                    decision=decision, exit_code=exit_code, run_dir=run_dir, argv=argv,

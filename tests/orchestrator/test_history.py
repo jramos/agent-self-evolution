@@ -42,6 +42,14 @@ def test_build_summary_aggregates_and_lists_deployable():
     assert summary["n_phases"] == 3
 
 
+def test_deployable_requires_passed_status():
+    # An aborted phase whose stale/partial gate says "deploy" must NOT be offered
+    # for deploy review.
+    rows = [_row(0, "code", "c", "aborted", "deploy", run_dir="output/x")]
+    summary = build_summary(rows, run_id="R", stopped_early=False)
+    assert summary["deployable"] == []
+
+
 def test_render_summary_md_mentions_propose_only_and_deployable():
     rows = [_row(0, "tools", "fetch", "passed", "deploy", run_dir="output/x")]
     md = render_summary_md(build_summary(rows, run_id="RID", stopped_early=False))
