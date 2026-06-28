@@ -729,6 +729,7 @@ def evolve(
     pr_branch_prefix: str = "evolve/",
     pr_draft: bool = False,
     pr_allow_dirty: bool = False,
+    output_dir: Optional[Path] = None,
 ):
     """Main evolution function — orchestrates the full optimization loop."""
 
@@ -811,7 +812,9 @@ def evolve(
     # dataset-gen LM calls + GEPA reflection + holdout eval. Reused later
     # for evolved_skill.md and gate_decision.json.
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    output_dir = Path("output") / skill_name / timestamp
+    if output_dir is None:
+        output_dir = Path("output") / skill_name / timestamp
+    output_dir = Path(output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
     run_log_path = output_dir / "run.log"
     file_handler = logging.FileHandler(run_log_path)
@@ -1947,6 +1950,11 @@ def evolve(
 @click.option("--eval-source", default="synthetic", type=click.Choice(["synthetic", "golden", "sessiondb"]),
               help="Source for evaluation dataset")
 @click.option("--dataset-path", default=None, help="Path to existing eval dataset (JSONL)")
+@click.option("--output-dir", "output_dir", default=None,
+              type=click.Path(file_okay=False, path_type=Path),
+              help="Write run artifacts to this exact directory instead of the default "
+                   "output/<skill>/<timestamp>/. Used by the cross-phase orchestrator "
+                   "for deterministic run-dir capture.")
 @click.option(
     "--optimizer-model",
     default=None,
@@ -2399,7 +2407,7 @@ def evolve(
          "debugging task. Hitting the timeout abstains the task verdict rather "
          "than failing it, so over-tight values silently produce no-signal runs.",
 )
-def main(skill, iterations, eval_source, dataset_path, optimizer_model, reflection_model,
+def main(skill, iterations, eval_source, dataset_path, output_dir, optimizer_model, reflection_model,
          eval_model, skill_source_dir, dry_run, seed, budget, no_fallback,
          quality_gate, growth_free_threshold,
          growth_quality_slope, max_absolute_chars, inferiority_tolerance,
@@ -2443,6 +2451,7 @@ def main(skill, iterations, eval_source, dataset_path, optimizer_model, reflecti
             iterations=iterations,
             eval_source=eval_source,
             dataset_path=dataset_path,
+            output_dir=output_dir,
             optimizer_model=optimizer_model,
             reflection_model=reflection_model,
             eval_model=eval_model,

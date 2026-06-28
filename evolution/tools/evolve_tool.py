@@ -1494,6 +1494,11 @@ def evolve(
         "discovery before spending judge + GEPA budget on a full run."
     ),
 )
+@click.option("--output-dir", default=None,
+              type=click.Path(file_okay=False, path_type=Path),
+              help="Write run artifacts to this exact directory instead of the default "
+                   "output/tools/<tool>/<timestamp>/. Used by the cross-phase orchestrator "
+                   "for deterministic run-dir capture.")
 @click.option(
     "--max-total-cost-usd",
     default=None,
@@ -1740,6 +1745,7 @@ def main(
     enable_confusable_bucket: bool,
     eval_source: str,
     dry_run: bool,
+    output_dir: Optional[Path],
     max_total_cost_usd: Optional[float],
     benchmark_cmd: Optional[str],
     benchmark_timeout_seconds: int,
@@ -1791,6 +1797,7 @@ def main(
             enable_confusable_bucket=enable_confusable_bucket,
             eval_source=eval_source,
             dry_run=dry_run,
+            output_dir=output_dir,
             max_total_cost_usd=max_total_cost_usd,
             benchmark_cmd=benchmark_cmd,
             benchmark_timeout_seconds=benchmark_timeout_seconds,

@@ -1,0 +1,46 @@
+# Sample run-spec for the cross-phase orchestrator.
+#
+#   python -m evolution.orchestrator --spec examples/orchestrator/sample_run.yaml --dry-run
+#
+# Phases run in the order listed (canonical: skills -> tools -> prompts -> code).
+# Each phase's `args` keys are that phase's own CLI flag names in snake_case
+# (e.g. `eval_source` -> --eval-source); the orchestrator supplies --output-dir
+# itself for deterministic verdict capture, so don't set it here.
+#
+# Propose-only: nothing deploys, and no PRs open unless you both set `create_pr`
+# on a phase AND pass --allow-pr. A create_pr phase must also carry its spend
+# ceiling (skills/tools: max_total_cost_usd; prompts has no PR path).
+
+# Optional. Merged into every phase (a phase's own args win on conflict).
+# Caveat: a default key must be a valid flag for EVERY phase it reaches, so keep
+# it empty unless you're running a subset that shares the flag (--only).
+defaults: {}
+
+phases:
+  - phase: skills
+    name: web_research
+    args:
+      eval_source: golden
+      iterations: 8
+      max_total_cost_usd: 50
+
+  - phase: tools
+    name: fetch_url
+    args:
+      manifest: manifests/fetch_url.json
+      iterations: 5
+      max_total_cost_usd: 50
+
+  - phase: prompts
+    name: tool_selection
+    args:
+      tasks: datasets/prompts/tool_selection.jsonl
+      target: hermes
+
+  - phase: code
+    name: hermes/tools/fetch_url.py
+    args:
+      repo: /path/to/hermes-checkout
+      visible_test: tests/test_fetch_url_visible.py
+      holdout_test: tests/test_fetch_url_holdout.py
+      repair_rounds: 5

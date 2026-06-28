@@ -69,6 +69,20 @@ Full usage guide for every target (tools, prompts, session-history evals, tuning
 
 Phases 1–3 are validated as a working *mechanism* (the pipeline runs end-to-end and the gate catches regressions); on a *capable* agent, evolving these artifacts mostly catches regressions rather than finding improvements — see [Findings](#findings) for where evolution actually pays off.
 
+## Run Phases Together
+
+Sequence the per-phase evolvers from one run-spec instead of invoking each by hand. The orchestrator runs them in order (skills → tools → prompts → code), isolates each as a subprocess, and writes a JSONL run history + summary to its run root. It is **propose-only**: it never deploys, and opens no PRs unless you pass `--allow-pr`.
+
+```bash
+# Validate a run-spec without spending (prints each phase's resolved command):
+python -m evolution.orchestrator --spec examples/orchestrator/sample_run.yaml --dry-run
+
+# Run it for real — continue-on-error by default; --only restricts to a subset:
+python -m evolution.orchestrator --spec examples/orchestrator/sample_run.yaml --only skills --only tools
+```
+
+See [`examples/orchestrator/sample_run.yaml`](examples/orchestrator/sample_run.yaml) for the spec format.
+
 ## Use the Gate Without Evolution
 
 The gate is useful whether or not GEPA generated the candidate. Bring your own change and ask whether it's real — none of these run evolutionary search:
