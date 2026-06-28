@@ -49,6 +49,13 @@ record dispositions so we don't re-litigate the same clusters every cycle.
   `sessions.source`, and strips the prepended model-switch note while keeping the real
   instruction. End-to-end: the importer went 0 → real pairs; full non-slow suite green.
   The #26 `RelevanceFilter` recall improvement remains a follow-up.
+- **2026-06-28** — #106 (Dependabot + pre-commit) **added**. `.github/dependabot.yml` (weekly
+  `uv` + `github-actions`) and `.pre-commit-config.yaml` (hygiene hooks: trailing-whitespace,
+  end-of-file-fixer, check-yaml/toml, check-merge-conflict, check-added-large-files with
+  `uv.lock` excluded); `pre-commit` added to the dev group. Dropped upstream's `ruff`/`ruff-format`
+  (the codebase isn't ruff-clean — needs a line-length policy first) and kept `gitleaks` separate
+  (#107). Hooks enforce on changed files; a one-time `--all-files` cleanup (~18 EOF/whitespace
+  nits, mostly report JSONs) is a deferred follow-up.
 
 ## Action items (open)
 
@@ -60,7 +67,7 @@ not "merge the PR." Our-code anchors point at where the change would land.
 | #132 | **Parameter-description evolution** — AST reader/writer for `parameters.properties.{name}.description`; dot-labeled `[[tool.param]]` GEPA targets | A genuinely missing evolution axis. We have the constraint stub but no evolver touches param descriptions. | `evolution/core/constraints.py:112` (`max_param_desc_size` stub), `evolution/tools/tool_source.py` (treats `input_schema` read-only), `tool_module.py` | **Investigated → NULL** (axis saturated — param-description text doesn't move agent value-selection; see review log, 2026-06-28) | ✅ |
 | #102 (+ #26) | Skill importer reads Hermes **`state.db`** (SQLite) + filters machine-generated user messages; #26 adds a 3-stage relevance filter (LLM keyword expansion + full-corpus scan) | Our skill importer reads stale `~/.hermes/sessions/*.json`; our own validation path proves `state.db` is canonical. The skill path lags the tool path on data quality + recall. | `evolution/core/external_importers.py` (`HermesSessionImporter`, `RelevanceFilter`); cf. `evolution/validation/hermes_runner.py` (`parse_session_from_db`) | **DONE** — `iter_hermes_sessions` now reads `state.db` first; both skill + tool paths fixed (importer 0 → real pairs). #26 recall improvement deferred. | ✅ |
 | #134 | Graduated / class-aware skill-size cap (soft target + hard ceiling + ramp) | Our fitness still has a **pre-cap length-penalty cliff** that docks skills already under the cap. | `evolution/core/fitness.py:111-115` (the cliff), reconcile with `evolution/core/constraints.py:241-267` (`effective_absolute_char_ceiling`) | ADOPT (adapted; drop the brittle keyword `is_reference_skill` heuristic) | ☐ |
-| #106 | `.github/dependabot.yml` + `.pre-commit-config.yaml` | Missing infra hygiene; we have neither. | `.github/`, repo root; reconcile with `.github/workflows/tests.yml` (py3.10–3.13 matrix) | ADOPT (reconcile pins) | ☐ |
+| #106 | `.github/dependabot.yml` + `.pre-commit-config.yaml` | Missing infra hygiene; we have neither. | `.github/`, repo root; reconcile with `.github/workflows/tests.yml` (py3.10–3.13 matrix) | **DONE** — added `dependabot.yml` (uv + github-actions) + `.pre-commit-config.yaml` (hygiene hooks); ruff + gitleaks (#107) deferred | ✅ |
 | #133 | Cross-phase orchestrator + unified `evolve_all` CLI — **shape only** (dependency-ordered phases, fault isolation, JSONL run history) | We have no unified driver sequencing skills→tools→prompts→params; only per-subsystem. Compounds with #132. | `evolution/monitor/` (sentinel/queue — keep the propose-only/human-in-loop boundary) | CHERRY-PICK (shell only; keep our gated evolvers) | ☐ |
 | #127 | Broad-benchmark-regression-as-a-gate, applied to the **skill** path | We have the regression-floor/oracle analogue for **code** only. | `evolution/code/gate.py` (the code analogue); skill deploy gate in `evolution/skills/evolve_skill.py` | INVESTIGATE | ☐ |
 | #85 | Claude Code **subscription** backend — FastAPI OpenAI-compatible shim over `claude-agent-sdk` | A new capability: our OAuth backends cover OpenAI-Codex + Nous, not Claude-subscription. Plugs in as `provider: custom` + `base_url`, no code-layer change → cheaper evolution. | `evolution/core/hermes_provider.py` (`resolve_default_lm`); standalone `scripts/` proxy | INVESTIGATE (verify `claude-agent-sdk` subscription-auth still viable) | ☐ |
@@ -131,4 +138,4 @@ S=skip (already covered / superseded), X=do-not-merge.
 - **Reliability / real-mutation / gating + code evolver**: #16 S, #17 X, #75 S, #89 S, #126 S, #127 **I**
 - **Phase / HSE mega-PRs**: #30 S, #42 S, #86 S, #98 S, #108 S, #117 S, #120 S
 - **eksays Phase 1–5**: #129 S, #130 S, #131 S, #132 **null (investigated)**, #133 **C**
-- **Misc / infra / tests**: #20 S, #21 S, #45 S, #69 X, #76 S, #77 S, #78 S, #79 S, #80 S, #100 S, #101 S, #105 S, #106 **A**, #107 (parked)
+- **Misc / infra / tests**: #20 S, #21 S, #45 S, #69 X, #76 S, #77 S, #78 S, #79 S, #80 S, #100 S, #101 S, #105 S, #106 **done**, #107 (parked)

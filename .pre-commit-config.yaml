@@ -1,0 +1,18 @@
+# Opt-in local hygiene hooks. Enable with: uv run pre-commit install
+# One-shot over the tree: uv run pre-commit run --all-files
+#
+# Scope is intentionally limited to checks that pass on the current codebase.
+# Code-style hooks (ruff / ruff-format) are deferred until a line-length policy is
+# set or the tree is reformatted; secret scanning (gitleaks) is tracked separately.
+repos:
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v6.0.0
+    hooks:
+      - id: trailing-whitespace
+      - id: end-of-file-fixer
+      - id: check-yaml
+      - id: check-toml
+      - id: check-merge-conflict
+      - id: check-added-large-files
+        args: [--maxkb=500]
+        exclude: '^uv\.lock$'  # the committed lockfile is legitimately large (~824 KB)

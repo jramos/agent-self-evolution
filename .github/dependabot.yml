@@ -1,0 +1,20 @@
+version: 2
+updates:
+  # Python dependencies. Dependabot's native `uv` ecosystem (GA 2025) reads pyproject +
+  # uv.lock directly and updates the lockfile. Requires uv.lock committed (it is); only
+  # raises update PRs for deps that carry a version constraint in pyproject (ours do).
+  - package-ecosystem: "uv"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    open-pull-requests-limit: 5
+    labels:
+      - "dependencies"
+  # GitHub Actions pinned in .github/workflows/ (actions/checkout, astral-sh/setup-uv).
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    labels:
+      - "dependencies"
+      - "ci"
