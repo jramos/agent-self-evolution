@@ -1,9 +1,9 @@
 version: 2
 updates:
-  # Python dependencies (PEP-621 pyproject). Dependabot's `pip` ecosystem reads our
-  # project deps; uv.lock is not auto-updated, but CI's `uv sync` re-resolves so PRs
-  # stay green. Switch to a `uv` ecosystem if/when Dependabot supports one.
-  - package-ecosystem: "pip"
+  # Python dependencies. Dependabot's native `uv` ecosystem (GA 2025) reads pyproject +
+  # uv.lock directly and updates the lockfile. Requires uv.lock committed (it is); only
+  # raises update PRs for deps that carry a version constraint in pyproject (ours do).
+  - package-ecosystem: "uv"
     directory: "/"
     schedule:
       interval: "weekly"
