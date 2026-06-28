@@ -1,0 +1,20 @@
+version: 2
+updates:
+  # Python dependencies (PEP-621 pyproject). Dependabot's `pip` ecosystem reads our
+  # project deps; uv.lock is not auto-updated, but CI's `uv sync` re-resolves so PRs
+  # stay green. Switch to a `uv` ecosystem if/when Dependabot supports one.
+  - package-ecosystem: "pip"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    open-pull-requests-limit: 5
+    labels:
+      - "dependencies"
+  # GitHub Actions pinned in .github/workflows/ (actions/checkout, astral-sh/setup-uv).
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    labels:
+      - "dependencies"
+      - "ci"
