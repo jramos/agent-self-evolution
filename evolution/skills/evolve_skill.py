@@ -70,14 +70,6 @@ from evolution.core.search_telemetry import (
 )
 from evolution.core.saturation_telemetry import record_saturation_telemetry
 from evolution.core.skill_sources import discover_skill_sources
-
-# Without this, the BudgetAwareProposer + LMTimingCallback logs stay
-# invisible: Python's root logger defaults to WARNING when unconfigured.
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s %(levelname)s %(name)s: %(message)s",
-    datefmt="%Y/%m/%d %H:%M:%S",
-)
 from evolution.core.dataset_builder import SyntheticDatasetBuilder, EvalDataset, GoldenDatasetLoader
 from evolution.core.external_importers import build_dataset_from_external
 from evolution.core.stats import paired_bootstrap
@@ -95,7 +87,7 @@ from evolution.core.lm_timing_callback import (
     register_litellm_cost_callback,
     register_litellm_failure_callback,
 )
-from evolution.skills.budget_aware_proposer import BudgetAwareProposer, ProposerMode
+from evolution.skills.budget_aware_proposer import BudgetAwareProposer
 from evolution.skills.skill_module import (
     SkillModule,
     load_skill,
@@ -103,6 +95,14 @@ from evolution.skills.skill_module import (
     reassemble_skill,
 )
 from evolution.skills.knee_point import select_knee_point, CandidatePick
+
+# Without this, the BudgetAwareProposer + LMTimingCallback logs stay
+# invisible: Python's root logger defaults to WARNING when unconfigured.
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s %(levelname)s %(name)s: %(message)s",
+    datefmt="%Y/%m/%d %H:%M:%S",
+)
 
 console = Console()
 
@@ -802,10 +802,10 @@ def evolve(
 
     if dry_run:
         resolved_budget = _resolve_budget(iterations, budget)
-        console.print(f"\n[bold green]DRY RUN — setup validated successfully.[/bold green]")
+        console.print("\n[bold green]DRY RUN — setup validated successfully.[/bold green]")
         console.print(f"  Would generate eval dataset (source: {eval_source})")
         console.print(f"  Would run GEPA optimization (budget={resolved_budget})")
-        console.print(f"  Would validate constraints and create PR")
+        console.print("  Would validate constraints and create PR")
         return
 
     # Created up-front (not after GEPA) so the FileHandler captures
@@ -929,7 +929,7 @@ def evolve(
 
             # Static checks only — the growth-with-quality gate runs later on
             # the evolved artifact once there's a holdout improvement signal.
-            console.print(f"\n[bold]Validating baseline constraints[/bold]")
+            console.print("\n[bold]Validating baseline constraints[/bold]")
             validator = ConstraintValidator(config)
             baseline_constraints = validator.validate_static(skill["raw"], "skill")
             all_pass = True
@@ -949,7 +949,7 @@ def evolve(
             # whenever Hermes was doing the resolving.
             _optimizer_lm = resolve_default_lm(role="optimizer", explicit_model=optimizer_model)
             _eval_lm = resolve_default_lm(role="eval", explicit_model=eval_model)
-            console.print(f"\n[bold]Configuring optimizer[/bold]")
+            console.print("\n[bold]Configuring optimizer[/bold]")
             console.print(f"  Optimizer: GEPA (budget={gepa_budget})")
             console.print(f"  Optimizer model: {_optimizer_lm.model} ({_optimizer_lm.source})")
             console.print(f"  Eval model: {_eval_lm.model} ({_eval_lm.source})")
@@ -1257,7 +1257,7 @@ def evolve(
 
             # Fail-fast on broken artifacts before spending judge-call budget on
             # the holdout. Growth-with-quality is checked after the holdout.
-            console.print(f"\n[bold]Validating evolved skill (static checks)[/bold]")
+            console.print("\n[bold]Validating evolved skill (static checks)[/bold]")
             static_constraints = validator.validate_static(evolved_full, "skill")
             static_pass = True
             for c in static_constraints:
@@ -1366,7 +1366,7 @@ def evolve(
 
             if use_cl_primary:
                 console.print(
-                    f"\n[bold]Evaluating evolved skill body on closed-loop suite[/bold] "
+                    "\n[bold]Evaluating evolved skill body on closed-loop suite[/bold] "
                     "(weak_signal band → CL-primary gate)"
                 )
                 cl_eval_cost_before = COST_LEDGER.summary().get("total_usd", 0.0)
@@ -1531,7 +1531,7 @@ def evolve(
                 )
                 console.print(f"  Wrote {band_path.name}")
 
-            console.print(f"\n[bold]Validating growth against holdout improvement[/bold]")
+            console.print("\n[bold]Validating growth against holdout improvement[/bold]")
             bootstrap = paired_bootstrap(
                 baseline_per_example,
                 evolved_per_example,

@@ -8,7 +8,6 @@ from unittest.mock import patch, MagicMock
 import pytest
 
 from evolution.core.dataset_builder import (
-    EvalDataset,
     EvalExample,
     GoldenDatasetLoader,
     SyntheticDatasetBuilder,

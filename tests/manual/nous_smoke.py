@@ -37,14 +37,13 @@ import time
 from collections import deque
 from datetime import datetime, timezone, timedelta
 from http.server import BaseHTTPRequestHandler, HTTPServer
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List
 
 import litellm
 
 # Override module-level URLs BEFORE importing nous_lm so the constants
 # pick up the local server. Real callers would set HERMES_PORTAL_BASE_URL
 # in their shell; we set it here for the in-process smoke.
-import os
 _PORT_HOLDER = {"port": 0}
 
 

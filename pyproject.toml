@@ -50,6 +50,7 @@ dev = [
     "pytest>=7.0",
     "pytest-asyncio>=0.21",
     "pre-commit>=3.5",
+    "ruff>=0.15,<0.16",
 ]
 
 [project.urls]
@@ -72,3 +73,19 @@ python_files = ["test_*.py"]
 markers = [
     "slow: requires local integration resources (e.g. a source-repo clone); deselect with -m 'not slow'",
 ]
+
+[tool.ruff]
+target-version = "py310"
+
+[tool.ruff.lint]
+# Linter-only adoption: ruff's default rule set (pyflakes + a curated pycodestyle
+# subset). The formatter and line-length (E501) are deliberately deferred — the
+# tree is written to a ~100-char style, so a one-shot reformat (line-length 100,
+# recorded in .git-blame-ignore-revs) is tracked separately, not gated here.
+select = ["E4", "E7", "E9", "F"]
+
+[tool.ruff.lint.per-file-ignores]
+# Tests favor compact fixtures: allow mid-file imports (E402), one-line compound
+# statements (E702), and ambiguous local names (E741). Every pyflakes (F) rule —
+# the real-bug class (unused imports/vars, undefined names) — stays enforced here.
+"tests/**" = ["E402", "E702", "E741"]

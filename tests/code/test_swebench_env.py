@@ -185,7 +185,6 @@ def test_reset_file_invalidates_graded_cache(monkeypatch):
 
 def test_failing_tests_resolves_from_graded_report(monkeypatch):
     """failing_tests returns ids in F2P.failure ∪ P2P.failure, plus ungraded ids."""
-    from evolution.code.swebench import env as env_mod
 
     e = _make_env()
     e._graded = {

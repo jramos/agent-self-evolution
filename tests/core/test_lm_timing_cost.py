@@ -21,7 +21,6 @@ from evolution.core.lm_timing_callback import (
     COST_LEDGER,
     CostCeilingExceeded,
     CostLedger,
-    LMTimingCallback,
     _log_litellm_cost,
 )
 

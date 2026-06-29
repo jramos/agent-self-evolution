@@ -6,7 +6,6 @@ mutate the skill text and evaluate the results.
 """
 
 import logging
-import re
 from pathlib import Path
 from typing import Optional
 

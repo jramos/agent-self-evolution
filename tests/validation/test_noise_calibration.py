@@ -1,6 +1,4 @@
 """A/A noise-floor probe: aggregation math + the calibrate_noise loop."""
-import json
-from pathlib import Path
 
 import pytest
 
@@ -9,7 +7,6 @@ from evolution.validation.noise_calibration import (
     aggregate_noise,
     calibrate_noise,
     load_noise_sidecar,
-    noise_sidecar_path,
     noise_tolerances,
     write_noise_sidecar,
 )

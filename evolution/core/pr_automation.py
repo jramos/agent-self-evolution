@@ -149,9 +149,9 @@ def _format_pr_body(gate_decision: dict[str, Any], metrics: dict[str, Any]) -> s
             if required is not None:
                 headline += f" (required ≥ {required})"
             lines += [headline, ""]
-        lines += [f"Decision signal: `closed_loop`", ""]
+        lines += ["Decision signal: `closed_loop`", ""]
     else:
-        lines += [f"Decision signal: `synthetic`", ""]
+        lines += ["Decision signal: `synthetic`", ""]
 
     if reason:
         lines += [f"Reason: `{reason}`", ""]

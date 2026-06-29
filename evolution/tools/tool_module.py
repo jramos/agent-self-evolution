@@ -8,6 +8,8 @@ constrains the mutation to the sentinel-delimited region.
 
 from __future__ import annotations
 
+from typing import Optional
+
 import dspy
 
 from evolution.tools.tool_source import (

@@ -16,7 +16,6 @@ Tests cover:
 
 import json
 import sqlite3
-from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch, MagicMock
 

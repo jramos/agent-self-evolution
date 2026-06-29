@@ -15,7 +15,6 @@ from types import SimpleNamespace
 from unittest.mock import MagicMock
 
 import dspy
-import pytest
 
 from evolution.core.fitness import (
     FitnessScore,

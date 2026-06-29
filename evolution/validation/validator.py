@@ -31,7 +31,6 @@ from evolution.validation.artifact_installer import (
     sha256_of,
 )
 from evolution.validation.report import (
-    PhaseResult,
     TaskResult,
     ValidationReport,
     compute_win_loss,

@@ -18,7 +18,7 @@ from unittest.mock import patch
 import pytest
 from click.testing import CliRunner
 
-from evolution.core.hermes_provider import HermesProviderError, ResolvedLM
+from evolution.core.hermes_provider import HermesProviderError
 from evolution.skills.evolve_skill import main as evolve_skill_main
 
 

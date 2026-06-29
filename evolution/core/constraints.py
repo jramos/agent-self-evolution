@@ -4,7 +4,6 @@ Every candidate variant must pass ALL constraints before it can be
 considered valid. Failed constraints = immediate rejection.
 """
 
-from pathlib import Path
 from dataclasses import dataclass
 from typing import Optional
 

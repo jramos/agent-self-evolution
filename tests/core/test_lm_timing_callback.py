@@ -9,9 +9,7 @@ on a slow CI machine.
 from __future__ import annotations
 
 import logging
-import threading
 from types import SimpleNamespace
-from unittest.mock import patch
 
 import litellm
 import pytest

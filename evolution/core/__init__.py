@@ -8,3 +8,12 @@ from evolution.core.skill_sources import (
     SkillSource,
     discover_skill_sources,
 )
+
+__all__ = [
+    "EvolutionConfig",
+    "ClaudeCodeSkillSource",
+    "HermesSkillSource",
+    "LocalDirSkillSource",
+    "SkillSource",
+    "discover_skill_sources",
+]

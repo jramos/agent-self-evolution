@@ -16,7 +16,6 @@ from __future__ import annotations
 import json
 import textwrap
 from pathlib import Path
-from typing import Optional
 
 import pytest
 
@@ -25,7 +24,6 @@ from evolution.core.hermes_provider import (
     ResolvedLM,
     _coerce_priority,
     _is_pool_entry_usable,
-    _pick_pool_entry,
     _redact_lm,
     resolve_default_lm,
     resolved_lms_dump,

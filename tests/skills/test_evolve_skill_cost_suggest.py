@@ -17,7 +17,6 @@ import pytest
 from click.testing import CliRunner
 
 from evolution.core.cost_advisor import CheaperAlternative
-from evolution.core.hermes_provider import HermesProviderError
 from evolution.skills.evolve_skill import main as evolve_skill_main
 
 
@@ -71,7 +70,7 @@ class TestCostSuggestionFiringRules:
             "evolution.skills.evolve_skill._find_cheaper_alternative",
             return_value=_fake_alternative(),
         ) as mock_finder, \
-             patch("evolution.skills.evolve_skill._preflight_lm_credentials") as mock_preflight, \
+             patch("evolution.skills.evolve_skill._preflight_lm_credentials"), \
              patch("evolution.skills.evolve_skill._build_optimizer_and_compile") as mock_build:
             # Stop the run right after preflight + advisor — we only care
             # about the wiring, not what GEPA does with the result.

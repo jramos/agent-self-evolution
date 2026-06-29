@@ -3,17 +3,14 @@
 from __future__ import annotations
 
 import json
-from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 import pytest
 from click.testing import CliRunner
 
-from evolution.validation.agent_runner import AgentRunResult, TaskRunContext
 from evolution.validation.closed_loop import main
 from evolution.validation.report import (
     PhaseResult,
-    TaskResult,
     ValidationReport,
     WinLoss,
 )

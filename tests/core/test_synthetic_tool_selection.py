@@ -5,7 +5,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from evolution.core.dataset_builder import EvalExample, SyntheticDatasetBuilder
+from evolution.core.dataset_builder import SyntheticDatasetBuilder
 from evolution.tools.tool_source import ToolManifest
 
 FIXTURES = Path(__file__).parent.parent / "fixtures" / "tool_manifests"

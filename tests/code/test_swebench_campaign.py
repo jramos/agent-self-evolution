@@ -1,4 +1,3 @@
-from pathlib import Path
 from evolution.code.swebench.loader import SWEInstance
 from evolution.code.swebench.campaign import instances_to_candidates, _arm_cost_ledger
 from evolution.code.campaign import run_campaign

@@ -25,7 +25,6 @@ from evolution.core.hermes_provider import (
     _BEDROCK_DEFAULT_MODEL,
     _BEDROCK_DEFAULT_REGION,
     HermesProviderError,
-    ResolvedLM,
     resolve_default_lm,
 )
 

@@ -273,14 +273,8 @@ class TestClosedLoopValidatorHappyPath:
              "expected_tools": ["write_file"], "forbidden_tools": ["patch"]},
         ])
         installer = _StubInstaller(target)
-        runner = _ScriptedRunner(target, {
-            b"# baseline\n": ["patch", "write_file"],  # picks correctly per task
-            b"# evolved\n":  ["patch", "patch"],       # overclaims: uses patch for both
-        })
-        # The runner returns the same seq for every task in the phase (a
-        # simplification); to model task-specific behavior, override.
-
-        # Override runner to return task-specific results.
+        # A per-task runner: baseline picks correctly per task, evolved
+        # overclaims (uses patch for both), so the evolved arm loses a task.
         class _PerTaskRunner:
             target_path = target
             calls = 0
