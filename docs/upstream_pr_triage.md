@@ -77,6 +77,25 @@ record dispositions so we don't re-litigate the same clusters every cycle.
   JSONL run history + summary. Verdict status is grounded in the gate file (not the evolvers'
   inconsistent exit codes); `--allow-pr` is required to honor any PR opt-in (default strips it). Also
   added the missing `--output-dir` CLI option to the skills and tools evolvers so capture is uniform.
+- **2026-06-28** — #127 (broad-benchmark-regression-as-a-gate, on the **skill** path) **investigated →
+  already covered**. The premise — "we have the regression-floor/oracle analogue for code only" — does
+  not hold up: the broad-benchmark deploy gate is the `--benchmark-cmd` hook, and it is symmetric across
+  evolvers. `evolve_skill.py` stages `evolved_skill.md`/`baseline_skill.md`, passes `$EVOLVED_PATH`/
+  `$BASELINE_PATH`/`$RUN_DIR`, fails closed on nonzero exit, and records the outcome in `gate_decision.json`
+  — the *same* `run_benchmark_hook` (`evolution/core/quality_gate.py`) the code evolver uses for its
+  full-suite tier (`evolve_code.py`). Upstream's `benchmark_gate.py` (a hard-coded TBLite command → JSON
+  `{score|pass_rate}` → 2% absolute floor) is a strict special case of our BYO hook: the user runs the broad
+  benchmark on both arms and applies any floor inside the command (a 2% floor reproduces upstream's
+  threshold). The one thing the **code** path uniquely has — the automatic per-candidate Tier-5 `tests/tools`
+  regression floor (`evolution/code/gate.py`, baseline-vs-repaired diff) — has **no cheap analogue for
+  skills**: a skill is a scoped, opt-in instruction artifact installed in isolation per task
+  (`SkillFileInstaller`), so it can't deterministically break a sibling the way a code edit to tool A breaks
+  tool B's unit test. Its only broad-regression failure mode (a widened trigger that mis-fires on unrelated
+  tasks) is stochastic agentic behavior detectable solely by expensive rollout — exactly what the opt-in hook
+  provides — so no automatic skill backstop is warranted. No code change; added a skill broad-regression
+  `--benchmark-cmd` recipe to `docs/usage.md` to retire the perception gap. (Note: the standalone
+  `evolution.validation.closed_loop` CLI is **not** the skill's broad gate — it is tool-only, requires
+  `--tool`/`--hermes-repo`, and even inline scores the skill's *own* task suite, not a broad benchmark.)
 
 ## Action items (open)
 
@@ -90,7 +109,7 @@ not "merge the PR." Our-code anchors point at where the change would land.
 | #134 | Graduated / class-aware skill-size cap (soft target + hard ceiling + ramp) | Premise was a **pre-cap length-penalty cliff** in fitness that docks under-cap skills — but on our fork that penalty is dead code (no caller passes the size it needs, so it is always 0.0). Length pressure is handled deliberately by the proposer's length budget + two hard deploy ceilings. | `evolution/core/fitness.py` (the dead `length_penalty`), `evolution/core/constraints.py` (`_check_size`, `effective_absolute_char_ceiling`) | **Investigated → not applicable** (dead-code premise; removed the vestigial penalty rather than build the ramp; see review log, 2026-06-28) | ✅ |
 | #106 | `.github/dependabot.yml` + `.pre-commit-config.yaml` | Missing infra hygiene; we have neither. | `.github/`, repo root; reconcile with `.github/workflows/tests.yml` (py3.10–3.13 matrix) | **DONE** — added `dependabot.yml` (uv + github-actions) + `.pre-commit-config.yaml` (hygiene hooks); ruff + gitleaks (#107) deferred | ✅ |
 | #133 | Cross-phase orchestrator + unified `evolve_all` CLI — **shape only** (dependency-ordered phases, fault isolation, JSONL run history) | We had no unified driver sequencing skills→tools→prompts→code; only per-subsystem. | `evolution/orchestrator/` (new); borrows upstream's shape, keeps our gated evolvers + propose-only boundary | **DONE** — built native `python -m evolution.orchestrator` (subprocess-isolated phases, gate-grounded verdicts, JSONL history); rejected upstream's in-process coupling + bundled cruft + auto-scheduler | ✅ |
-| #127 | Broad-benchmark-regression-as-a-gate, applied to the **skill** path | We have the regression-floor/oracle analogue for **code** only. | `evolution/code/gate.py` (the code analogue); skill deploy gate in `evolution/skills/evolve_skill.py` | INVESTIGATE | ☐ |
+| #127 | Broad-benchmark-regression-as-a-gate, applied to the **skill** path | We have the regression-floor/oracle analogue for **code** only. | `evolution/code/gate.py` (the code analogue); skill deploy gate in `evolution/skills/evolve_skill.py` | **Investigated → already covered** (the broad-benchmark gate is the `--benchmark-cmd` hook, symmetric with the code evolver's full-suite tier via the shared `run_benchmark_hook`; code's automatic `tests/tools` floor has no cheap analogue for scoped skill artifacts — see review log, 2026-06-28) | ✅ |
 | #85 | Claude Code **subscription** backend — FastAPI OpenAI-compatible shim over `claude-agent-sdk` | A new capability: our OAuth backends cover OpenAI-Codex + Nous, not Claude-subscription. Plugs in as `provider: custom` + `base_url`, no code-layer change → cheaper evolution. | `evolution/core/hermes_provider.py` (`resolve_default_lm`); standalone `scripts/` proxy | INVESTIGATE (verify `claude-agent-sdk` subscription-auth still viable) | ☐ |
 
 ## Optional / low-value (parked)
@@ -156,7 +175,7 @@ S=skip (already covered / superseded), X=do-not-merge.
 - **Fitness / judge / significance + skill extraction**: #5 S, #24 S, #49 S, #25 S, #28 S, #136 (parked: BCa diagnostic)
 - **Model providers / backends**: #8 S, #15 S, #19 S, #22 S, #85 **I**, #92 S, #112 S
 - **Session importers / discovery / guardrails**: #26 **C** (deferred follow-up), #40 S (subset of #102), #102 **done**, #94 X
-- **Reliability / real-mutation / gating + code evolver**: #16 S, #17 X, #75 S, #89 S, #126 S, #127 **I**
+- **Reliability / real-mutation / gating + code evolver**: #16 S, #17 X, #75 S, #89 S, #126 S, #127 **covered (investigated)**
 - **Phase / HSE mega-PRs**: #30 S, #42 S, #86 S, #98 S, #108 S, #117 S, #120 S
 - **eksays Phase 1–5**: #129 S, #130 S, #131 S, #132 **null (investigated)**, #133 **done (built native)**
 - **Misc / infra / tests**: #20 S, #21 S, #45 S, #69 X, #76 S, #77 S, #78 S, #79 S, #80 S, #100 S, #101 S, #105 S, #106 **done**, #107 (parked)
