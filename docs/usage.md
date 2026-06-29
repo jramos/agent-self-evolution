@@ -141,6 +141,17 @@ uv run python -m evolution.tools.evolve_tool --tool X --manifest Y \
 
 On cost abort, `gate_decision.json` carries `decision="aborted"`, `reason="cost_ceiling_exceeded"`, and the full `cost_summary`. The `--benchmark-cmd` hook receives `EVOLVED_PATH`, `BASELINE_PATH`, `RUN_DIR`, `TARGET_NAME`, `ARTIFACT_TYPE` and runs under `/bin/sh -c` (invoke binaries by full name; the command string is yours — don't pass strings you didn't write).
 
+`--benchmark-cmd` is artifact-agnostic — the same hook backs the skill, tool, and code evolvers (for code it is the full-suite deploy tier). That makes it the **broad-benchmark regression gate** for the skill path: to reject a skill that improves its own eval but regresses a *broad* capability benchmark, run that benchmark on both arms inside the command and exit nonzero past a floor. The hook is a binary exit-code gate — it hands you both `$BASELINE_PATH` and `$EVOLVED_PATH`; running each arm and choosing the regression floor is yours (a 2%-absolute floor reproduces the conventional benchmark-gate threshold):
+
+```bash
+# Broad-benchmark regression gate for a skill: score $BASELINE_PATH and $EVOLVED_PATH
+# on a broad suite, exit nonzero if the evolved arm drops past the floor
+uv run python -m evolution.skills.evolve_skill --skill X \
+    --benchmark-cmd 'broad_bench.py --baseline "$BASELINE_PATH" --evolved "$EVOLVED_PATH" --max-regression 0.02'
+```
+
+Use this when the failure mode is *broad* (an evolved skill whose widened trigger mis-fires on unrelated tasks). When the regression you care about is on the skill's *own* tasks, prefer the behavioral oracle (`--closed-loop-during-evolution` / `--closed-loop-gate-primary`, below) — it is task-specific, not broad.
+
 ## Saturation pre-flight
 
 Every `evolve_skill` / `evolve_tool` run first scores the baseline on the holdout (and the closed-loop suite, if configured) and classifies into `healthy` / `no_headroom` / `weak_signal` / `uniform_failure`, refusing to spend GEPA budget on an already-saturated baseline:
