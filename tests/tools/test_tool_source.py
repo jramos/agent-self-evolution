@@ -1,7 +1,6 @@
 """Tests for evolution.tools.tool_source — manifest loading and mutation."""
 
 import json
-import re
 from pathlib import Path
 
 import pytest

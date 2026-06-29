@@ -844,7 +844,6 @@ class TestBenchmarkCmdHook:
     passes; nonzero exit / timeout / spawn error flips to reject."""
 
     def test_benchmark_pass_keeps_deploy_decision(self, temp_manifest: Path, tmp_path: Path):
-        import subprocess as _subprocess
         manifest = ToolManifest.from_json_file(temp_manifest)
         run_dir = tmp_path / "run"
         fake_run = SimpleNamespace(returncode=0, stdout="ok\n", stderr="")

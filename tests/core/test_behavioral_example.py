@@ -4,7 +4,6 @@ from __future__ import annotations
 
 from pathlib import Path
 
-import pytest
 
 from evolution.core.behavioral_example import build_behavioral_examples
 from evolution.validation.task import TaskSuite

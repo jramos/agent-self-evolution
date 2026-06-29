@@ -20,7 +20,7 @@ import os
 import shutil
 import tempfile
 from pathlib import Path
-from typing import Optional, Protocol
+from typing import Protocol
 
 from evolution.prompts.hermes_prompt_source import HermesPromptSource
 from evolution.tools.hermes_source import HermesToolSource

@@ -1,9 +1,9 @@
 # Opt-in local hygiene hooks. Enable with: uv run pre-commit install
 # One-shot over the tree: uv run pre-commit run --all-files
 #
-# Scope is intentionally limited to checks that pass on the current codebase.
-# Code-style hooks (ruff / ruff-format) are deferred until a line-length policy is
-# set or the tree is reformatted; secret scanning (gitleaks) is tracked separately.
+# ruff lints (check + autofix) under the rule set in pyproject.toml. The ruff
+# *formatter* (ruff-format) is still deferred until a one-shot line-length-100
+# reformat lands; secret scanning (gitleaks) is tracked separately.
 repos:
   - repo: https://github.com/pre-commit/pre-commit-hooks
     rev: v6.0.0
@@ -16,3 +16,9 @@ repos:
       - id: check-added-large-files
         args: [--maxkb=500]
         exclude: '^uv\.lock$'  # the committed lockfile is legitimately large (~824 KB)
+
+  - repo: https://github.com/astral-sh/ruff-pre-commit
+    rev: v0.15.20
+    hooks:
+      - id: ruff  # linter only (no ruff-format); config in pyproject.toml [tool.ruff]
+        args: [--fix]

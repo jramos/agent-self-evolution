@@ -142,11 +142,11 @@ def main() -> int:
     if args.agent_model:
         print(f"  ✓ Agent model override: {args.agent_model}")
     else:
-        print(f"  ✓ Agent model: <Hermes config default>")
+        print("  ✓ Agent model: <Hermes config default>")
     if args.task_timeout_seconds:
         print(f"  ✓ Task timeout override: {args.task_timeout_seconds}s")
     else:
-        print(f"  ✓ Task timeout: 120s (default)")
+        print("  ✓ Task timeout: 120s (default)")
 
     _section("Constructing closed-loop cache")
     from evolution.skills.evolve_skill import _maybe_build_closed_loop_cache_skill

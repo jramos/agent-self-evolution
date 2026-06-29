@@ -8,9 +8,7 @@ tests/tools/test_evolve_tool_cl_aware_gate.py.
 
 from __future__ import annotations
 
-import pytest
 
-from evolution.core.constraints import ConstraintResult
 from evolution.core.quality_gate import (
     CL_PRIMARY_GROWTH_FREE_THRESHOLD,
     CL_PRIMARY_GROWTH_SLOPE,

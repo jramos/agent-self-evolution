@@ -5,7 +5,6 @@ Symmetric to tests/tools/test_evolve_tool_saturation_preflight.py.
 
 from __future__ import annotations
 
-from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 import pytest

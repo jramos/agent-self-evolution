@@ -483,7 +483,7 @@ def adjudicate_main():
         }
         Path(out).write_text(json.dumps(result, indent=2))
         cost = COST_LEDGER.summary().get("total_usd", 0)
-        print(f"\n=== adjudication complete ===")
+        print("\n=== adjudication complete ===")
         print(f"real_fix={total.get('real_fix',0)}  slip={total.get('slip',0)}  "
               f"not_fuzzable={total.get('not_fuzzable',0)}  cost=${cost:.2f}")
         print(f"wrote {out}")
@@ -510,8 +510,10 @@ def main():
         rlm = resolve_default_lm(role="optimizer")
         lm = dspy.LM(rlm.model, **rlm.lm_kwargs, temperature=0.7, max_tokens=PROPOSER_MAX_TOKENS)
         dspy.configure(callbacks=[LMTimingCallback()])
-        register_litellm_cost_callback(); register_litellm_failure_callback()
-        COST_LEDGER.reset(); COST_LEDGER.set_ceiling(max_cost)
+        register_litellm_cost_callback()
+        register_litellm_failure_callback()
+        COST_LEDGER.reset()
+        COST_LEDGER.set_ceiling(max_cost)
         orgs = load_organisms()
         if organisms:
             wanted = set(organisms.split(","))
@@ -524,15 +526,19 @@ def main():
             try:
                 env = WorktreeEnv.create(_require_repo(), base_ref=c.fix_sha, base_python=None)
             except Exception as e:
-                records.append({"organism": key, "error": f"worktree:{type(e).__name__}:{str(e)[:200]}"}); continue
+                records.append({"organism": key, "error": f"worktree:{type(e).__name__}:{str(e)[:200]}"})
+                continue
             try:
                 base_src, bug_tests, oracle_failures = setup_organism(env, c)
                 if not bug_tests:
-                    records.append({"organism": key, "skip": "no_bug_tests"}); continue
-                pins.setdefault(key, list(bug_tests)); assert_pin(pins, key, bug_tests)
+                    records.append({"organism": key, "skip": "no_bug_tests"})
+                    continue
+                pins.setdefault(key, list(bug_tests))
+                assert_pin(pins, key, bug_tests)
                 for s in range(seeds):
                     if COST_LEDGER.summary().get("total_usd", 0) >= max_cost:
-                        records.append({"organism": key, "seed": s, "skip": "cost_ceiling"}); break
+                        records.append({"organism": key, "seed": s, "skip": "cost_ceiling"})
+                        break
                     env.write_tool(c.tool_path, base_src)
                     seed_recs = run_seed(env, c, base_src, bug_tests, oracle_failures, lm, s)
                     for r in seed_recs:

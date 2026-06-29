@@ -9,7 +9,6 @@ Path given, and defaults to None (the legacy output/<skill>/<timestamp>/ path).
 
 from __future__ import annotations
 
-from pathlib import Path
 from unittest.mock import patch
 
 from click.testing import CliRunner

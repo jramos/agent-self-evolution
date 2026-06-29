@@ -8,7 +8,6 @@ still covered by tests/skills/test_evolve_skill_validation_flow.py.
 import json
 from pathlib import Path
 
-import pytest
 
 from evolution.core.constraints import ConstraintResult
 from evolution.core.quality_gate import (

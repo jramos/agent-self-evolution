@@ -19,8 +19,8 @@ def _cands(n, tool="tools/t.py"):
 
 class TestStratify:
     def test_interleaves_and_caps_per_tool(self):
-        cands = ([Candidate(f"tools/a.py", "t", f"a{i}", f"pa{i}") for i in range(5)]
-                 + [Candidate(f"tools/b.py", "t", f"b{i}", f"pb{i}") for i in range(5)])
+        cands = ([Candidate("tools/a.py", "t", f"a{i}", f"pa{i}") for i in range(5)]
+                 + [Candidate("tools/b.py", "t", f"b{i}", f"pb{i}") for i in range(5)])
         out = stratify(cands, max_per_tool=2)
         assert len(out) == 4  # 2 per tool
         tools = [c.tool_path for c in out]

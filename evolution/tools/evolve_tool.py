@@ -510,7 +510,7 @@ def evolve(
 
             sessiondb_drops: Optional[dict[str, int]] = None
             if eval_source == "synthetic":
-                console.print(f"\n[bold]Building tool-selection eval dataset[/bold] (synthetic, three buckets)")
+                console.print("\n[bold]Building tool-selection eval dataset[/bold] (synthetic, three buckets)")
                 if dry_run:
                     # Synthetic dataset gen is itself an LM call; --dry-run skips it.
                     # The "would generate N" line mirrors the skill-path dry-run shape.
@@ -534,7 +534,7 @@ def evolve(
                 )
             elif eval_source == "sessiondb":
                 console.print(
-                    f"\n[bold]Building tool-selection eval dataset[/bold] (sessiondb, Hermes only)"
+                    "\n[bold]Building tool-selection eval dataset[/bold] (sessiondb, Hermes only)"
                 )
                 console.print(
                     "  [dim]Claude Code and Copilot logs don't carry tool-call data — only Hermes "
@@ -614,7 +614,7 @@ def evolve(
                 )
                 sys.exit(1)
 
-            console.print(f"\n[bold]Validating baseline description[/bold]")
+            console.print("\n[bold]Validating baseline description[/bold]")
             validator = ConstraintValidator(config)
             baseline_constraints = validator.validate_static(baseline_description, "tool_description")
             for c in baseline_constraints:
@@ -836,7 +836,7 @@ def evolve(
             else:
                 evolved_description = optimized_module.description_text
 
-            console.print(f"\n[bold]Validating evolved description (static checks)[/bold]")
+            console.print("\n[bold]Validating evolved description (static checks)[/bold]")
             static_constraints = validator.validate_static(evolved_description, "tool_description")
             static_pass = True
             for c in static_constraints:
@@ -938,7 +938,7 @@ def evolve(
 
             if use_cl_primary:
                 console.print(
-                    f"\n[bold]Evaluating evolved description on closed-loop suite[/bold] "
+                    "\n[bold]Evaluating evolved description on closed-loop suite[/bold] "
                     "(weak_signal band → CL-primary gate)"
                 )
                 cl_eval_cost_before = COST_LEDGER.summary().get("total_usd", 0.0)
@@ -1039,7 +1039,7 @@ def evolve(
                     f"  [{color}]{icon} cl_primary_gate[/{color}]: {cl_constraint.message}"
                 )
 
-            console.print(f"\n[bold]Validating growth against holdout improvement[/bold]")
+            console.print("\n[bold]Validating growth against holdout improvement[/bold]")
             bootstrap = paired_bootstrap(
                 baseline_per_example,
                 evolved_per_example,

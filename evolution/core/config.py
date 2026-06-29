@@ -6,7 +6,6 @@ The default list is built by sniffing the environment: HERMES_AGENT_REPO,
 ~/.claude/plugins/cache, plus any explicit --skill-source-dir from the CLI.
 """
 
-import os
 from pathlib import Path
 from dataclasses import dataclass, field
 from typing import Optional

@@ -3,7 +3,6 @@ from __future__ import annotations
 
 from unittest.mock import MagicMock
 
-import dspy
 
 from evolution.prompts.prompt_module import (
     _close_sentinel,

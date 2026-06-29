@@ -9,13 +9,11 @@ import re
 import subprocess
 from datetime import datetime
 from pathlib import Path
-from unittest.mock import MagicMock, patch
+from unittest.mock import patch
 
-import pytest
 from rich.console import Console
 
 from evolution.core.pr_automation import (
-    PRResult,
     _atomic_copy,
     _branch_name,
     _format_pr_body,

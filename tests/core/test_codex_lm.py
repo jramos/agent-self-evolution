@@ -21,7 +21,6 @@ from unittest.mock import MagicMock, patch
 import httpx
 import pytest
 
-from evolution.core.codex_headers import CODEX_OAUTH_TOKEN_URL
 from evolution.core.codex_lm import (
     CodexLM,
     _format_refresh_error,

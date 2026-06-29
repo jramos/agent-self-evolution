@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import json
-from pathlib import Path
 
 import pytest
 
@@ -11,7 +10,6 @@ from evolution.validation.agent_runner import AgentRunResult
 from evolution.validation.report import (
     PhaseResult,
     TaskResult,
-    WinLoss,
     ValidationReport,
     compute_win_loss,
     decide,

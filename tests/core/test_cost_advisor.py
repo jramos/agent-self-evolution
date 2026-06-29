@@ -15,7 +15,6 @@ from unittest.mock import patch
 import pytest
 
 from evolution.core.cost_advisor import (
-    CheaperAlternative,
     _MIN_INPUT_COST_RATIO,
     _namespace,
     _version_tuple,
