@@ -96,6 +96,22 @@ record dispositions so we don't re-litigate the same clusters every cycle.
   `--benchmark-cmd` recipe to `docs/usage.md` to retire the perception gap. (Note: the standalone
   `evolution.validation.closed_loop` CLI is **not** the skill's broad gate — it is tool-only, requires
   `--tool`/`--hermes-repo`, and even inline scores the skill's *own* task suite, not a broad benchmark.)
+- **2026-06-28** — #85 (Claude Code subscription backend — FastAPI OpenAI-compatible shim over
+  `claude-agent-sdk`) **investigated → SKIP (ToS-prohibited + server-side-blocked)**. The proposed
+  design re-exposes Pro/Max subscription OAuth as a `provider:custom` + `base_url` endpoint for the
+  framework's LM roles — exactly the pattern Anthropic banned. Anthropic's compliance docs (updated
+  2026-02-19/20) state: *"Using OAuth tokens obtained through Claude Free, Pro, or Max accounts in any
+  other product, tool, or service — including the Agent SDK — is not permitted and constitutes a
+  violation of the Consumer Terms of Service"*; subscription OAuth is exclusive to Claude Code +
+  claude.ai. It is also enforced at the wire: since 2026-01-09 subscription OAuth tokens are rejected
+  outside the official CLI (the OpenClaw/OpenCode/Roo Code/Goose sweep), and subscriptions stopped
+  covering third-party tools on 2026-04-04 — so the shim is neither permitted nor technically viable.
+  The legitimate path is unaffected and already present: our closed-loop agent backend drives the
+  **real `claude -p` CLI** with `CLAUDE_CODE_OAUTH_TOKEN` (the sanctioned scripts/CI use of the official
+  product, not a re-exposing shim). What it does *not* buy is cheap subscription inference for the GEPA
+  optimizer/judge roles — the part #85 wanted and the part that is prohibited. Claude inference for
+  evolution stays on API-key billing via `resolve_default_lm`. No code change. (Sources: Claude Code
+  Authentication docs, code.claude.com/docs/en/authentication; The Register, 2026-02-20.)
 
 ## Action items (open)
 
@@ -110,7 +126,7 @@ not "merge the PR." Our-code anchors point at where the change would land.
 | #106 | `.github/dependabot.yml` + `.pre-commit-config.yaml` | Missing infra hygiene; we have neither. | `.github/`, repo root; reconcile with `.github/workflows/tests.yml` (py3.10–3.13 matrix) | **DONE** — added `dependabot.yml` (uv + github-actions) + `.pre-commit-config.yaml` (hygiene hooks); ruff + gitleaks (#107) deferred | ✅ |
 | #133 | Cross-phase orchestrator + unified `evolve_all` CLI — **shape only** (dependency-ordered phases, fault isolation, JSONL run history) | We had no unified driver sequencing skills→tools→prompts→code; only per-subsystem. | `evolution/orchestrator/` (new); borrows upstream's shape, keeps our gated evolvers + propose-only boundary | **DONE** — built native `python -m evolution.orchestrator` (subprocess-isolated phases, gate-grounded verdicts, JSONL history); rejected upstream's in-process coupling + bundled cruft + auto-scheduler | ✅ |
 | #127 | Broad-benchmark-regression-as-a-gate, applied to the **skill** path | We have the regression-floor/oracle analogue for **code** only. | `evolution/code/gate.py` (the code analogue); skill deploy gate in `evolution/skills/evolve_skill.py` | **Investigated → already covered** (the broad-benchmark gate is the `--benchmark-cmd` hook, symmetric with the code evolver's full-suite tier via the shared `run_benchmark_hook`; code's automatic `tests/tools` floor has no cheap analogue for scoped skill artifacts — see review log, 2026-06-28) | ✅ |
-| #85 | Claude Code **subscription** backend — FastAPI OpenAI-compatible shim over `claude-agent-sdk` | A new capability: our OAuth backends cover OpenAI-Codex + Nous, not Claude-subscription. Plugs in as `provider: custom` + `base_url`, no code-layer change → cheaper evolution. | `evolution/core/hermes_provider.py` (`resolve_default_lm`); standalone `scripts/` proxy | INVESTIGATE (verify `claude-agent-sdk` subscription-auth still viable) | ☐ |
+| #85 | Claude Code **subscription** backend — FastAPI OpenAI-compatible shim over `claude-agent-sdk` | A new capability: our OAuth backends cover OpenAI-Codex + Nous, not Claude-subscription. Plugs in as `provider: custom` + `base_url`, no code-layer change → cheaper evolution. | `evolution/core/hermes_provider.py` (`resolve_default_lm`); standalone `scripts/` proxy | **Investigated → SKIP (ToS-prohibited)** — re-exposing Pro/Max subscription OAuth via an OpenAI shim / the Agent SDK violates Anthropic's Consumer Terms (clarified 2026-02-19/20) and is server-side-blocked since 2026-01-09; the sanctioned `claude -p` + `CLAUDE_CODE_OAUTH_TOKEN` backend is already present, but it doesn't give cheap subscription inference for the GEPA roles (see review log, 2026-06-28) | ✅ |
 
 ## Optional / low-value (parked)
 
@@ -141,7 +157,8 @@ not "merge the PR." Our-code anchors point at where the change would land.
   scoring; #28's deterministic text-similarity proxy is a step backward.
 - **Model providers** (#8, #15, #19, #22, #92, #112): subsumed by `resolve_default_lm`
   (~20 providers, OpenAI-wire/local, two OAuth backends with token refresh the PRs lack).
-  Only #85 (Claude subscription) is genuinely new.
+  #85 (Claude subscription) looked genuinely new but is **SKIP** — re-exposing subscription
+  OAuth is ToS-prohibited and server-side-blocked (see review log, 2026-06-28).
 - **#126 local-first code evolver** — *hard skip*. Its fitness is
   `0.25·AST-complexity + 0.25·keyword-coverage + 0.5·self-LLM-judge` with no held-out
   split, no oracle, no regression floor, no surface freeze, and it writes to disk ungated —
@@ -173,7 +190,7 @@ S=skip (already covered / superseded), X=do-not-merge.
 - **Constraint-validator / skill-assembly**: #7 S, #23 S, #50 S, #51 (C, dir guard), #53 S, #95 S, #97 S, #104 S, #113 S, #114 S, #134 **n/a (investigated)**
 - **GEPA / DSPy 3.x compat**: #13 S, #14 S, #35 S, #46 S, #48 S, #73 S, #91 S, #109 S, #137 S (parked: secret-scan constraint)
 - **Fitness / judge / significance + skill extraction**: #5 S, #24 S, #49 S, #25 S, #28 S, #136 (parked: BCa diagnostic)
-- **Model providers / backends**: #8 S, #15 S, #19 S, #22 S, #85 **I**, #92 S, #112 S
+- **Model providers / backends**: #8 S, #15 S, #19 S, #22 S, #85 **SKIP (ToS, investigated)**, #92 S, #112 S
 - **Session importers / discovery / guardrails**: #26 **C** (deferred follow-up), #40 S (subset of #102), #102 **done**, #94 X
 - **Reliability / real-mutation / gating + code evolver**: #16 S, #17 X, #75 S, #89 S, #126 S, #127 **covered (investigated)**
 - **Phase / HSE mega-PRs**: #30 S, #42 S, #86 S, #98 S, #108 S, #117 S, #120 S
