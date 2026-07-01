@@ -127,6 +127,22 @@ record dispositions so we don't re-litigate the same clusters every cycle.
   built then overridden, F841). Full non-slow suite green (1754 passed). Making the `lint` job a *required*
   status check is a one-line branch-protection change for the maintainer; gitleaks (#107) and the one-time
   pre-commit `--all-files` hygiene pass remain deferred.
+- **2026-06-30** — Incremental sweep. Backlog 70 → **72 open**; **two new PRs since the 2026-06-28 cycle**,
+  both **already covered → SKIP** (no action):
+  - **#139** (MaxFreedomPollard, "emit a pull request for an evolved skill") — its central premise, *"there is
+    no git or `gh` code anywhere in the tree; only a `create_pr` flag and a dry-run print exist,"* is true of
+    **upstream**, not our fork. We already ship `evolution/core/pr_automation.py` (`create_pr`) wired into **all
+    four** evolvers (skills `evolve_skill.py:1737`, tools, prompts, code), gated behind `--create-pr` flags and
+    governed centrally by the orchestrator's propose-only boundary (`--allow-pr`, `__main__.py:26`
+    `_enforce_propose_only`). #139 adds the last-mile PR step for the **skill path only** — a strict subset of
+    what we have, minus the cross-phase propose-only enforcement. The dry-run line it cites as "the only trace"
+    (`evolve_skill.py:808`) is just the `--dry-run` message; the real path is at line 1737. Nothing to adopt.
+  - **#140** (aranya-chatterjee, "Fix evolve_skill validation and assembly bugs (fixes #119)") — all three code
+    bugs land in settled clusters and are already fixed here: Bug 1 (validate `evolved_full` not `evolved_body`)
+    is the constraint-validator cluster — we validate the reassembled full text at `evolve_skill.py:1261`; Bug 2
+    (nested frontmatter on reassembly) is **#104**, already done — `reassemble_skill` strips a leading
+    frontmatter-like block (`skill_module.py:118`); Bug 3 (declare `optuna`) is **#41/#105**, already done — it
+    ships via `dspy[optuna]` in the `miprov2` extra. Re-fix of already-covered ground.
 
 ## Action items (open)
 
@@ -159,9 +175,14 @@ not "merge the PR." Our-code anchors point at where the change would land.
 ## Already covered — do not re-review (unless our code in that area changes)
 
 - **Constraint-validator "validate `evolved_full` not `evolved_body`" cluster**
-  (#7, #23, #50, #53, #95, #97, #104, #113, #114): we validate the reassembled full skill
+  (#7, #23, #50, #53, #95, #97, #104, #113, #114, #140): we validate the reassembled full skill
   at every gate; upstream's patched call site (`validate_all(evolved_body, …)`) doesn't
-  exist in our tree.
+  exist in our tree. #140 (fixes #119) also re-fixes #104 (frontmatter strip) + #41/#105 (optuna
+  dep), both already done here — see review log, 2026-06-30.
+- **PR emission / last-mile automation** (#139): we already have `evolution/core/pr_automation.py`
+  (`create_pr`) wired into all four evolvers behind `--create-pr`, with the orchestrator's
+  propose-only `--allow-pr` boundary on top. #139 adds a skill-only subset of this — see review
+  log, 2026-06-30.
 - **GEPA / DSPy 3.x compat** (#13, #14, #35, #46, #48, #73, #91, #109, #137-core): moot —
   we pin `dspy>=3.2.0,<3.3` + a gepa git override and call the modern API
   (`max_full_evals`, `reflection_lm`, 5-arg metric); the SkillModule "GEPA mutates
@@ -211,3 +232,10 @@ S=skip (already covered / superseded), X=do-not-merge.
 - **Phase / HSE mega-PRs**: #30 S, #42 S, #86 S, #98 S, #108 S, #117 S, #120 S
 - **eksays Phase 1–5**: #129 S, #130 S, #131 S, #132 **null (investigated)**, #133 **done (built native)**
 - **Misc / infra / tests**: #20 S, #21 S, #45 S, #69 X, #76 S, #77 S, #78 S, #79 S, #80 S, #100 S, #101 S, #105 S, #106 **done**, #107 (parked)
+
+### Delta — 72 open PRs (2026-06-30)
+
+Two new since the 2026-06-28 snapshot; both **S (already covered)**, no backlog regroup needed:
+
+- **PR emission / automation**: #139 S (skill-only subset of our `pr_automation.create_pr` + orchestrator `--allow-pr`)
+- **Constraint-validator / assembly**: #140 S (fixes #119 — re-fix of the `evolved_full` cluster + #104 frontmatter strip + #41/#105 optuna dep)
