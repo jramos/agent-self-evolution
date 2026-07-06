@@ -143,6 +143,33 @@ record dispositions so we don't re-litigate the same clusters every cycle.
     (nested frontmatter on reassembly) is **#104**, already done — `reassemble_skill` strips a leading
     frontmatter-like block (`skill_module.py:118`); Bug 3 (declare `optuna`) is **#41/#105**, already done — it
     ships via `dspy[optuna]` in the `miprov2` extra. Re-fix of already-covered ground.
+- **2026-07-06** — Incremental sweep. Backlog steady at **72 open** (6 opened, 6 closed since 2026-06-30);
+  **six new PRs #142–#147**. Five already covered → SKIP; **one genuinely-new latent bug surfaced → new
+  action item** (symlink-aware skill resolver, see table):
+  - **#142** (bob0x-ai, "GEPA 3.2.x compat + symlink resolver + validator false-positive") — 6 fixes, 5 already
+    covered: three GEPA/DSPy-3.2 compat items (explicit `reflection_lm`, `max_full_evals`-only, 5-arg metric)
+    are the GEPA-compat cluster; `validate_all(body)` → `raw` is the constraint-validator cluster; one is
+    provider-specific. **The 6th is real and new here:** `find_skill` traversal via `Path.rglob("SKILL.md")`
+    does not descend into **symlinked** skill dirs on Python <3.13 — our `skill_sources.py:63/67/80` use exactly
+    that. Promoted to an action item (CHERRY-PICK, recommended).
+  - **#143** (diegokolling, "read Hermes session history from state.db, not dead JSON") — **our #102**, already
+    done; `iter_hermes_sessions`/`_iter_state_db_sessions` read `state.db` **read-only** (`mode=ro`,
+    `external_importers.py:414`) with JSON fallback. #143's only extras are cross-platform DB discovery
+    (`HERMES_STATE_DB` env override + Windows `%LOCALAPPDATA%`) — marginal for our macOS/Linux posture; the
+    one-line env override is a trivial optional pickup, not worth a cycle. SKIP.
+  - **#144 / #145** (Sunwo0u, "HSE … sanitized evidence packet") — report-bundle-only PRs (9 and 13 files, all
+    under `reports/…`), no reusable mechanism — the same status-token evidence pattern already skipped for
+    #108/#117/#120. SKIP.
+  - **#146** (mgandal, "extract evolved instruction with overfit/collapse guard") — premise (*"`skill_text` is
+    an input field never mutated, so evolved == baseline"*) is **upstream-only**: our `skill_text` is a
+    `@property` over `signature.instructions` (`skill_module.py:113`), the surface GEPA mutates — the
+    extraction cluster (#5/#24/#49). Its metric caveat (keyword-overlap prefers boilerplate) is moot — we
+    default to `LLMJudge` + closed-loop behavioral scoring. SKIP.
+  - **#147** (andreransom58-coder, "DSPy compat + report material skill diffs honestly") — overlaps #142
+    (GEPA compat), #140 (optuna, validate full file), #146 (extraction). Its one distinct idea — track
+    `material_diff` separately so a run never claims a deployable win when the saved `SKILL.md` is
+    byte-identical to baseline — is largely subsumed here: an identical artifact scores ~0 improvement and our
+    behavioral deploy gate won't deploy it. Low-value belt-and-suspenders; parked, not adopted. SKIP.
 
 ## Action items (open)
 
@@ -158,6 +185,7 @@ not "merge the PR." Our-code anchors point at where the change would land.
 | #133 | Cross-phase orchestrator + unified `evolve_all` CLI — **shape only** (dependency-ordered phases, fault isolation, JSONL run history) | We had no unified driver sequencing skills→tools→prompts→code; only per-subsystem. | `evolution/orchestrator/` (new); borrows upstream's shape, keeps our gated evolvers + propose-only boundary | **DONE** — built native `python -m evolution.orchestrator` (subprocess-isolated phases, gate-grounded verdicts, JSONL history); rejected upstream's in-process coupling + bundled cruft + auto-scheduler | ✅ |
 | #127 | Broad-benchmark-regression-as-a-gate, applied to the **skill** path | We have the regression-floor/oracle analogue for **code** only. | `evolution/code/gate.py` (the code analogue); skill deploy gate in `evolution/skills/evolve_skill.py` | **Investigated → already covered** (the broad-benchmark gate is the `--benchmark-cmd` hook, symmetric with the code evolver's full-suite tier via the shared `run_benchmark_hook`; code's automatic `tests/tools` floor has no cheap analogue for scoped skill artifacts — see review log, 2026-06-28) | ✅ |
 | #85 | Claude Code **subscription** backend — FastAPI OpenAI-compatible shim over `claude-agent-sdk` | A new capability: our OAuth backends cover OpenAI-Codex + Nous, not Claude-subscription. Plugs in as `provider: custom` + `base_url`, no code-layer change → cheaper evolution. | `evolution/core/hermes_provider.py` (`resolve_default_lm`); standalone `scripts/` proxy | **Investigated → SKIP (ToS-prohibited)** — re-exposing Pro/Max subscription OAuth via an OpenAI shim / the Agent SDK violates Anthropic's Consumer Terms (clarified 2026-02-19/20) and is server-side-blocked since 2026-01-09; the sanctioned `claude -p` + `CLAUDE_CODE_OAUTH_TOKEN` backend is already present, but it doesn't give cheap subscription inference for the GEPA roles (see review log, 2026-06-28) | ✅ |
+| #142 (partial) | **Symlink-aware skill resolver** — `find_skill` traversal follows symlinked skill directories | `Path.rglob("SKILL.md")` doesn't descend into symlinked dirs on Python <3.13; a Hermes layout that symlinks user-installed skills into the framework tree would silently resolve "not found." Real latent bug in a path we own. | `evolution/core/skill_sources.py:63,67,80` (three `rglob("SKILL.md")` call sites) | **CHERRY-PICK (recommended, open)** — small fix; swap to symlink-following traversal (guard against symlink cycles — `os.walk(followlinks=True)` alone doesn't). Only the symlink item; the other five #142 fixes are already-covered clusters (GEPA compat, validate-full). Pending go-ahead. | ⬜ |
 
 ## Optional / low-value (parked)
 
@@ -239,3 +267,12 @@ Two new since the 2026-06-28 snapshot; both **S (already covered)**, no backlog 
 
 - **PR emission / automation**: #139 S (skill-only subset of our `pr_automation.create_pr` + orchestrator `--allow-pr`)
 - **Constraint-validator / assembly**: #140 S (fixes #119 — re-fix of the `evolved_full` cluster + #104 frontmatter strip + #41/#105 optuna dep)
+
+### Delta — 72 open PRs (2026-07-06)
+
+Six new (#142–#147); 5 S, 1 new action item. No backlog regroup:
+
+- **GEPA/DSPy compat + resolver**: #142 — 5 fixes S (compat cluster + validate-full), **1 → action item** (symlink-aware skill resolver, `skill_sources.py`)
+- **Session importers**: #143 S (our #102 — state.db read-only already shipped; only cross-platform discovery extras)
+- **Phase / HSE mega-PRs**: #144 S, #145 S (Sunwo0u sanitized evidence packets, report-only, no mechanism)
+- **Fitness / judge / skill extraction**: #146 S (extraction cluster — our `skill_text` is a property over instructions), #147 S (compat + `material_diff` reporting subsumed by our behavioral gate)
