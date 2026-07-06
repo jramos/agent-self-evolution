@@ -170,6 +170,20 @@ record dispositions so we don't re-litigate the same clusters every cycle.
     `material_diff` separately so a run never claims a deployable win when the saved `SKILL.md` is
     byte-identical to baseline — is largely subsumed here: an identical artifact scores ~0 improvement and our
     behavioral deploy gate won't deploy it. Low-value belt-and-suspenders; parked, not adopted. SKIP.
+- **2026-07-06** — #142 (partial, symlink-aware skill resolver) **fixed**. `HermesSkillSource` discovery used
+  `Path.rglob("SKILL.md")` at three sites; `rglob` refuses to descend into **symlinked** directories on Python
+  <3.13 (the `recurse_symlinks` kwarg is 3.13-only), so a Hermes layout that symlinks user-installed skills into
+  the framework tree resolved "not found" (reproduced red on 3.13: the symlinked-*directory* discovery tests
+  failed while the symlinked-*file* case already worked, since `rglob` matches symlinked files). Replaced all
+  three sites with one private `_iter_skill_files(root)` helper: `os.walk(followlinks=True)` + a `(st_dev,
+  st_ino)` visited-set cycle guard (prunes a symlink pointing back to an ancestor — provably terminating) +
+  per-level `sort()` for deterministic first-match-wins; `onerror`/`stat` failures are debug-logged and skipped
+  (parity with the old silent skip). `find_skill` now walks once and runs both passes over the materialized
+  list. Scope held to `HermesSkillSource` — the flat `ClaudeCode`/`LocalDir` sources already follow symlinks via
+  `is_file()`/`iterdir()` (noted inline). 9 new symlink tests (correctness C1–C5, cycle/permission/dangling
+  safety S1–S3, determinism D1) with an `os.symlink`-unavailable skip-guard; full non-slow suite green (1763
+  passed, +9), ruff clean. The other five #142 fixes are already-covered clusters (GEPA/DSPy compat,
+  validate-full) — not adopted.
 
 ## Action items (open)
 
@@ -185,7 +199,7 @@ not "merge the PR." Our-code anchors point at where the change would land.
 | #133 | Cross-phase orchestrator + unified `evolve_all` CLI — **shape only** (dependency-ordered phases, fault isolation, JSONL run history) | We had no unified driver sequencing skills→tools→prompts→code; only per-subsystem. | `evolution/orchestrator/` (new); borrows upstream's shape, keeps our gated evolvers + propose-only boundary | **DONE** — built native `python -m evolution.orchestrator` (subprocess-isolated phases, gate-grounded verdicts, JSONL history); rejected upstream's in-process coupling + bundled cruft + auto-scheduler | ✅ |
 | #127 | Broad-benchmark-regression-as-a-gate, applied to the **skill** path | We have the regression-floor/oracle analogue for **code** only. | `evolution/code/gate.py` (the code analogue); skill deploy gate in `evolution/skills/evolve_skill.py` | **Investigated → already covered** (the broad-benchmark gate is the `--benchmark-cmd` hook, symmetric with the code evolver's full-suite tier via the shared `run_benchmark_hook`; code's automatic `tests/tools` floor has no cheap analogue for scoped skill artifacts — see review log, 2026-06-28) | ✅ |
 | #85 | Claude Code **subscription** backend — FastAPI OpenAI-compatible shim over `claude-agent-sdk` | A new capability: our OAuth backends cover OpenAI-Codex + Nous, not Claude-subscription. Plugs in as `provider: custom` + `base_url`, no code-layer change → cheaper evolution. | `evolution/core/hermes_provider.py` (`resolve_default_lm`); standalone `scripts/` proxy | **Investigated → SKIP (ToS-prohibited)** — re-exposing Pro/Max subscription OAuth via an OpenAI shim / the Agent SDK violates Anthropic's Consumer Terms (clarified 2026-02-19/20) and is server-side-blocked since 2026-01-09; the sanctioned `claude -p` + `CLAUDE_CODE_OAUTH_TOKEN` backend is already present, but it doesn't give cheap subscription inference for the GEPA roles (see review log, 2026-06-28) | ✅ |
-| #142 (partial) | **Symlink-aware skill resolver** — `find_skill` traversal follows symlinked skill directories | `Path.rglob("SKILL.md")` doesn't descend into symlinked dirs on Python <3.13; a Hermes layout that symlinks user-installed skills into the framework tree would silently resolve "not found." Real latent bug in a path we own. | `evolution/core/skill_sources.py:63,67,80` (three `rglob("SKILL.md")` call sites) | **CHERRY-PICK (recommended, open)** — small fix; swap to symlink-following traversal (guard against symlink cycles — `os.walk(followlinks=True)` alone doesn't). Only the symlink item; the other five #142 fixes are already-covered clusters (GEPA compat, validate-full). Pending go-ahead. | ⬜ |
+| #142 (partial) | **Symlink-aware skill resolver** — `find_skill` traversal follows symlinked skill directories | `Path.rglob("SKILL.md")` doesn't descend into symlinked dirs on Python <3.13; a Hermes layout that symlinks user-installed skills into the framework tree would silently resolve "not found." Real latent bug in a path we own. | `evolution/core/skill_sources.py` (`HermesSkillSource`, was 3 `rglob("SKILL.md")` sites) | **DONE** — replaced the three `rglob` sites with one cycle-safe `_iter_skill_files` helper (`os.walk(followlinks=True)` + `(st_dev, st_ino)` visited-set + sorted deterministic order); only `HermesSkillSource` touched (flat ClaudeCode/LocalDir sources already follow symlinks via `is_file()`). 9 new symlink tests, full non-slow suite green (1763) — see review log, 2026-07-06 | ✅ |
 
 ## Optional / low-value (parked)
 
@@ -272,7 +286,7 @@ Two new since the 2026-06-28 snapshot; both **S (already covered)**, no backlog 
 
 Six new (#142–#147); 5 S, 1 new action item. No backlog regroup:
 
-- **GEPA/DSPy compat + resolver**: #142 — 5 fixes S (compat cluster + validate-full), **1 → action item** (symlink-aware skill resolver, `skill_sources.py`)
+- **GEPA/DSPy compat + resolver**: #142 — 5 fixes S (compat cluster + validate-full), **1 → DONE** (symlink-aware skill resolver, `skill_sources.py`; see review log, 2026-07-06)
 - **Session importers**: #143 S (our #102 — state.db read-only already shipped; only cross-platform discovery extras)
 - **Phase / HSE mega-PRs**: #144 S, #145 S (Sunwo0u sanitized evidence packets, report-only, no mechanism)
 - **Fitness / judge / skill extraction**: #146 S (extraction cluster — our `skill_text` is a property over instructions), #147 S (compat + `material_diff` reporting subsumed by our behavioral gate)

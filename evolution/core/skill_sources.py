@@ -21,10 +21,49 @@ from __future__ import annotations
 
 import logging
 import os
+from collections.abc import Iterator
 from pathlib import Path
 from typing import Optional, Protocol, runtime_checkable
 
 logger = logging.getLogger(__name__)
+
+
+def _iter_skill_files(root: Path) -> Iterator[Path]:
+    """Yield every ``SKILL.md`` under ``root``, following symlinked directories.
+
+    Uses ``os.walk(followlinks=True)`` rather than ``Path.rglob("SKILL.md")``,
+    which silently refuses to descend into symlinked subtrees on Python <3.13.
+    The standard Hermes layout symlinks user-installed skills into the framework
+    tree, so ``rglob`` missed them entirely (discovery reported "not found").
+
+    A ``(st_dev, st_ino)`` visited-set makes the symlink-following walk
+    cycle-safe (a symlink pointing back to an ancestor is pruned rather than
+    followed forever). Directory entries are sorted so discovery order is
+    deterministic and reproducible across runs and platforms. Unreadable
+    directories are skipped (debug-logged), matching the previous behavior.
+    """
+    visited: set[tuple[int, int]] = set()
+
+    def _onerror(err: OSError) -> None:
+        logger.debug("skill discovery: skipping unreadable path (%s)", err)
+
+    for dirpath, dirnames, filenames in os.walk(
+        root, followlinks=True, onerror=_onerror
+    ):
+        try:
+            st = os.stat(dirpath)
+        except OSError as err:  # dir vanished / unreadable between walk and stat
+            _onerror(err)
+            dirnames[:] = []
+            continue
+        key = (st.st_dev, st.st_ino)
+        if key in visited:
+            dirnames[:] = []  # already walked this real dir → prune (cycle guard)
+            continue
+        visited.add(key)
+        dirnames.sort()  # deterministic descent order
+        if "SKILL.md" in filenames:
+            yield Path(dirpath) / "SKILL.md"
 
 
 @runtime_checkable
@@ -60,11 +99,13 @@ class HermesSkillSource:
         skills_dir = self._skills_dir()
         if skills_dir is None:
             return None
-        for skill_md in skills_dir.rglob("SKILL.md"):
+        # Walk once; run both passes over the materialized list.
+        skill_files = list(_iter_skill_files(skills_dir))
+        for skill_md in skill_files:
             if skill_md.parent.name == skill_name:
                 return skill_md
         # Fall back to frontmatter `name:` for skills whose dir name differs.
-        for skill_md in skills_dir.rglob("SKILL.md"):
+        for skill_md in skill_files:
             try:
                 head = skill_md.read_text()[:500]
             except OSError:
@@ -77,7 +118,7 @@ class HermesSkillSource:
         skills_dir = self._skills_dir()
         if skills_dir is None:
             return []
-        return sorted({p.parent.name for p in skills_dir.rglob("SKILL.md")})
+        return sorted({p.parent.name for p in _iter_skill_files(skills_dir)})
 
 
 class ClaudeCodeSkillSource:
@@ -126,6 +167,8 @@ class ClaudeCodeSkillSource:
         return roots
 
     def find_skill(self, skill_name: str) -> Optional[Path]:
+        # Symlink-safe already: builds direct paths + is_file() (follows
+        # symlinks) and lists via iterdir(); no recursive rglob to trip over.
         for skills_dir in self._skill_dirs():
             candidate = skills_dir / skill_name / "SKILL.md"
             if candidate.is_file():
@@ -154,6 +197,8 @@ class LocalDirSkillSource:
         self.name = f"local-dir:{self.root}"
 
     def find_skill(self, skill_name: str) -> Optional[Path]:
+        # Symlink-safe already: direct path + is_file() follows symlinks
+        # (flat layout, no recursive rglob).
         if not self.root.is_dir():
             return None
         candidate = self.root / skill_name / "SKILL.md"
