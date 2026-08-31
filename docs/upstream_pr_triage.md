@@ -13,19 +13,28 @@ record dispositions so we don't re-litigate the same clusters every cycle.
 
 ## How to run a review
 
+**Cadence: quarterly**, or event-driven when we touch a subsystem with a parked item.
+Yield falls as the fork diverges — the first cycle mined ~7 actionable items from 70 PRs,
+a later one 1 defect plus 2 liftable ideas from 26 new PRs — while upstream is unmaintained
+and we are 0 commits behind it, so waiting accrues no merge risk.
+
 1. **Pull the open PRs** with metadata:
    `gh pr list --repo NousResearch/hermes-agent-self-evolution --state open --limit 200 --json number,title,author,changedFiles,additions,deletions`
 2. **Group by theme** from titles. Expect heavy duplication — the same early bug is
    often re-fixed by dozens of contributors.
-3. **Deep-dive each group with the right lens.** For every PR: read it
+3. **Pre-filter on titles before reading any diff.** Match each new title against the
+   "Already covered" clusters below. A match is dispositioned `SKIP` on the title plus one
+   confirming glance; only non-matching titles earn a deep-dive pass. Most of the backlog
+   clears here, which is what keeps the expensive step affordable.
+4. **Deep-dive each group with the right lens.** For every PR: read it
    (`gh pr view N --repo … --json title,body` + `gh pr diff N --repo …`), understand the
    root problem, then **grep/read our actual code** to decide our current state. Our fork
    may have fixed the bug differently, replaced the code path entirely, or never had it.
    Many upstream diffs won't even apply (they patch call sites we refactored away).
-4. **Classify**: `ADOPT` / `CHERRY-PICK <what>` / `INVESTIGATE` / `SKIP (<why>)`.
-5. **Don't re-review settled clusters** — see "Already covered" below; only reconsider if
+5. **Classify**: `ADOPT` / `REBUILD <what>` / `INVESTIGATE` / `SKIP (<why>)`.
+6. **Don't re-review settled clusters** — see "Already covered" below; only reconsider if
    our code in that area changes materially.
-6. **Flag sensitive PRs as do-not-merge** — several upstream PRs commit client identifiers,
+7. **Flag sensitive PRs as do-not-merge** — several upstream PRs commit client identifiers,
    API keys, or local paths. Never import these; note them so a future cycle skips them.
 
 ## Review log
@@ -151,7 +160,7 @@ record dispositions so we don't re-litigate the same clusters every cycle.
     are the GEPA-compat cluster; `validate_all(body)` → `raw` is the constraint-validator cluster; one is
     provider-specific. **The 6th is real and new here:** `find_skill` traversal via `Path.rglob("SKILL.md")`
     does not descend into **symlinked** skill dirs on Python <3.13 — our `skill_sources.py:63/67/80` use exactly
-    that. Promoted to an action item (CHERRY-PICK, recommended).
+    that. Promoted to an action item (REBUILD, recommended).
   - **#143** (diegokolling, "read Hermes session history from state.db, not dead JSON") — **our #102**, already
     done; `iter_hermes_sessions`/`_iter_state_db_sessions` read `state.db` **read-only** (`mode=ro`,
     `external_importers.py:414`) with JSON fallback. #143's only extras are cross-platform DB discovery
@@ -185,10 +194,60 @@ record dispositions so we don't re-litigate the same clusters every cycle.
   passed, +9), ruff clean. The other five #142 fixes are already-covered clusters (GEPA/DSPy compat,
   validate-full) — not adopted.
 
+- **2026-08-31** — Quarterly sweep. Backlog **72 → 92 open**: 31 opened, 11 closed (5 of them
+  opened *and* closed inside the window), leaving **26 new PRs** (#149–#183) and closing 6 of
+  the 72 previously tracked. Of the 26: **21** already covered or superseded, **1** a verified
+  defect in our tree, **3** not adoptable but worth rebuilding from, **1** hostile.
+  Structural finding worth recording: upstream has merged **3 PRs ever** (most recent
+  2026-06-17) against 52 closed-unmerged, and this fork is **156 commits ahead, 0 behind** —
+  there is no upstream code to catch up on, only a contributor backlog to mine. The 26 new PRs
+  come from 21 mostly one-shot authors. This is what moved the cadence to quarterly and added
+  the title pre-filter (step 3).
+  - **#149** (rank pre-filter candidates by relevance before the LLM-scoring cap) — the one
+    **verified defect**, and the long-deferred #26 recall follow-up. `RelevanceFilter` picks
+    candidates with a boolean predicate, then truncates at `max_examples * 3` in
+    source-then-import order, so the strongest matches past the cap are dropped before scoring.
+    Two aggravations found while confirming it: `build_dataset` concatenates per importer, so an
+    overflowing source can crowd out a later one entirely; and the scoring loop's early break
+    means candidate *order* decides the output set on every run, not only on overflow. Promoted
+    to an action item (REBUILD).
+  - **#179** (importer test isolation) — premise **falsified against our tree**: autouse fixtures
+    already neutralize `STATE_DB` for the importer suites, verified by running them on a machine
+    with a real populated `~/.hermes/state.db` (167 passed, no leakage). One narrow residual —
+    a non-UTF8 legacy session file escapes the `except (JSONDecodeError, OSError)` guard — folded
+    into the hardening item. SKIP.
+  - **#162** (Phases 2–5) — SKIP wholesale: a parallel reconstruction of ground we already hold,
+    with gates weaker than ours. Two narrow ideas **rebuilt natively** rather than adopted: OS-level
+    confinement for the code-evolution test runner, and a minimum-detectable-effect diagnostic. Its
+    per-tool pairwise interference gate is a real gap but costly; parked with the anchor recorded.
+  - **#150** (objective ground-truth verifier) — SKIP. The checker is genuinely deterministic and
+    LLM-free, but its oracle is 17 hardcoded bibliographic facts while the artifact GEPA mutates is
+    the skill text itself, so the answer key is memorizable into the skill body and a held-out split
+    cannot rescue a 17-item universe. Same circularity that got #126 hard-skipped, better disguised;
+    it also targets a knowledge/recall axis our own campaigns found saturated. About 65% of its diff
+    is machinery carried over from #162.
+  - **#182** (full self-evolution feature set) — SKIP. Its one genuinely absent mechanism is a
+    post-deploy canary with auto-rollback, but that is infrastructure ahead of demand here: our
+    deploy gate is a verified cold path with two deploys ever, both demos. Its code sidecar also
+    shells out to an undisclosed **AGPL** tool — do not mine this PR.
+  - **#154** (constraint validator + JSON repair) — the validator half is the settled cluster; the
+    JSON-robustness half is real and was rebuilt without taking the proposed dependency.
+  - **#166** (add an MIT LICENSE) — surfaced that this fork has no `LICENSE` file. Deliberately not
+    actioned here: upstream carries no license at all, which makes this a licensing decision rather
+    than repo hygiene.
+  - **#163, #165, #176** (growth-limit waiver, skipped-holdout reporting, rejected-variant
+    overwrites) — SKIP. Our gate architecture structurally avoids the first two bug classes, and all
+    four evolvers already timestamp their default output dirs. One trace initially read as a defect
+    in the rejection path turned out to be behavior the code deliberately documents.
+  - **#157** — hostile; see do-not-merge below.
+  - Remaining: #153, #155, #159, #161, #167, #168, #173, #174, #177, #178, #183 (GEPA/DSPy compat
+    and validate-full clusters), #143, #146, #158, #160, #180, #181 — all SKIP, dispositioned by
+    cluster.
+
 ## Action items (open)
 
-Disposition lens: against our diverged tree, these are "cherry-pick the idea/mechanism,"
-not "merge the PR." Our-code anchors point at where the change would land.
+Disposition lens: against our diverged tree, these are "rebuild the idea/mechanism
+ourselves," never "merge the PR" — we do not apply upstream diffs. Our-code anchors point at where the change would land.
 
 | # | What | Why we'd benefit | Our-code anchor | Disposition | Status |
 |---|---|---|---|---|---|
@@ -200,6 +259,9 @@ not "merge the PR." Our-code anchors point at where the change would land.
 | #127 | Broad-benchmark-regression-as-a-gate, applied to the **skill** path | We have the regression-floor/oracle analogue for **code** only. | `evolution/code/gate.py` (the code analogue); skill deploy gate in `evolution/skills/evolve_skill.py` | **Investigated → already covered** (the broad-benchmark gate is the `--benchmark-cmd` hook, symmetric with the code evolver's full-suite tier via the shared `run_benchmark_hook`; code's automatic `tests/tools` floor has no cheap analogue for scoped skill artifacts — see review log, 2026-06-28) | ✅ |
 | #85 | Claude Code **subscription** backend — FastAPI OpenAI-compatible shim over `claude-agent-sdk` | A new capability: our OAuth backends cover OpenAI-Codex + Nous, not Claude-subscription. Plugs in as `provider: custom` + `base_url`, no code-layer change → cheaper evolution. | `evolution/core/hermes_provider.py` (`resolve_default_lm`); standalone `scripts/` proxy | **Investigated → SKIP (ToS-prohibited)** — re-exposing Pro/Max subscription OAuth via an OpenAI shim / the Agent SDK violates Anthropic's Consumer Terms (clarified 2026-02-19/20) and is server-side-blocked since 2026-01-09; the sanctioned `claude -p` + `CLAUDE_CODE_OAUTH_TOKEN` backend is already present, but it doesn't give cheap subscription inference for the GEPA roles (see review log, 2026-06-28) | ✅ |
 | #142 (partial) | **Symlink-aware skill resolver** — `find_skill` traversal follows symlinked skill directories | `Path.rglob("SKILL.md")` doesn't descend into symlinked dirs on Python <3.13; a Hermes layout that symlinks user-installed skills into the framework tree would silently resolve "not found." Real latent bug in a path we own. | `evolution/core/skill_sources.py` (`HermesSkillSource`, was 3 `rglob("SKILL.md")` sites) | **DONE** — replaced the three `rglob` sites with one cycle-safe `_iter_skill_files` helper (`os.walk(followlinks=True)` + `(st_dev, st_ino)` visited-set + sorted deterministic order); only `HermesSkillSource` touched (flat ClaudeCode/LocalDir sources already follow symlinks via `is_file()`). 9 new symlink tests, full non-slow suite green (1763) — see review log, 2026-07-06 | ✅ |
+| #149 (+ #26) | **Rank importer pre-filter candidates by relevance** before the LLM-scoring cap — graded score replacing the boolean predicate, strongest-first ordering | `RelevanceFilter` qualifies candidates with a boolean predicate and then truncates at `max_examples * 3` in source-then-import order, so the strongest matches past the cap never reach the LLM scorer. The scoring loop's early break means order decides the output set on every run, not only on overflow. Closes the #26 recall follow-up. | `evolution/core/external_importers.py` (`_is_relevant_to_skill`, `RelevanceFilter.filter_and_score`) | **REBUILD** — graded tiered score, set-preserving (the qualifying set must not widen), stable strongest-first sort ahead of the cap | ⬜ |
+| #162 (partial) | **Confine code-evolution test execution** and record the containment posture | `WorktreeEnv.run_test` executes pytest against an LLM-modified worktree through a bare subprocess, while the agent runner refuses to run unconfined at all — an asymmetry in our own doctrine. The adversarial gaming harness runs through the same path. | `evolution/code/worktree.py` (`run_test`), `evolution/validation/claude_runner.py` (the existing profile), `evolution/code/gate.py` (failure parsing) | **REBUILD** — shared sandbox module, confine where the OS supports it, record the posture honestly elsewhere, opt-in strict mode; a containment failure must never present as a test outcome | ⬜ |
+| #162 (partial), #136 | **Minimum detectable effect** as a gate-adjacent diagnostic | A gate can certify a win, or enforce a regression floor, without ever stating that its sample size could not detect the effect it claims to police. Absorbs the parked exact-test item. | `evolution/core/stats.py` (currently `paired_bootstrap` only) | **REBUILD** — MDE for the continuous and paired-binary regimes, diagnostic only, deploy decisions provably unchanged; exact paired tests deferred rather than shipped with unpinned conventions | ⬜ |
 
 ## Optional / low-value (parked)
 
@@ -217,7 +279,7 @@ not "merge the PR." Our-code anchors point at where the change would land.
 ## Already covered — do not re-review (unless our code in that area changes)
 
 - **Constraint-validator "validate `evolved_full` not `evolved_body`" cluster**
-  (#7, #23, #50, #53, #95, #97, #104, #113, #114, #140): we validate the reassembled full skill
+  (#7, #23, #50, #53, #95, #97, #104, #113, #114, #140, #154, #161, #173, #174, #177): we validate the reassembled full skill
   at every gate; upstream's patched call site (`validate_all(evolved_body, …)`) doesn't
   exist in our tree. #140 (fixes #119) also re-fixes #104 (frontmatter strip) + #41/#105 (optuna
   dep), both already done here — see review log, 2026-06-30.
@@ -225,11 +287,12 @@ not "merge the PR." Our-code anchors point at where the change would land.
   (`create_pr`) wired into all four evolvers behind `--create-pr`, with the orchestrator's
   propose-only `--allow-pr` boundary on top. #139 adds a skill-only subset of this — see review
   log, 2026-06-30.
-- **GEPA / DSPy 3.x compat** (#13, #14, #35, #46, #48, #73, #91, #109, #137-core): moot —
+- **GEPA / DSPy 3.x compat** (#13, #14, #35, #46, #48, #73, #91, #109, #137-core, #142-core,
+  #153, #155, #159, #167, #168, #173, #177, #178, #183): moot —
   we pin `dspy>=3.2.0,<3.3` + a gepa git override and call the modern API
   (`max_full_evals`, `reflection_lm`, 5-arg metric); the SkillModule "GEPA mutates
   `signature.instructions`" fix is already in (`skill_module.py`).
-- **Skill-text extraction** (#5, #24, #49): done — `skill_text` is a property over
+- **Skill-text extraction** (#5, #24, #49, #146, #174): done — `skill_text` is a property over
   `signature.instructions`.
 - **Fitness / judge** (#25, #28): superseded by our `LLMJudge` + closed-loop behavioral
   scoring; #28's deterministic text-similarity proxy is a step backward.
@@ -237,6 +300,19 @@ not "merge the PR." Our-code anchors point at where the change would land.
   (~20 providers, OpenAI-wire/local, two OAuth backends with token refresh the PRs lack).
   #85 (Claude subscription) looked genuinely new but is **SKIP** — re-exposing subscription
   OAuth is ToS-prohibited and server-side-blocked (see review log, 2026-06-28).
+- **Session-importer reconstructions** (#40, #143, #178, #179): the canonical fix is ours —
+  `iter_hermes_sessions` reads `state.db` read-only with a JSON fallback, mines all sessions
+  regardless of `sessions.source`, and strips the model-switch note. Later PRs re-propose it;
+  their only extras are cross-platform DB discovery. #179's test-isolation premise does not hold
+  here (autouse fixtures already neutralize `STATE_DB`) — see review log, 2026-08-31.
+- **Prompt-section / MIPROv2 variant reconstructions** (#158, #180): #180 never writes the evolved
+  text back into the agent's prompt builder at all — it is offline-only, strictly behind our
+  shipped prompt path with its splice-and-restore integration. #158 commits generated artifacts
+  plus an ungated auto-deploy on any positive improvement, which is a rigor regression against our
+  deploy gate, not an improvement.
+- **Launchers / entrypoints** (#181): moot — `uv run python -m evolution.<module>` already resolves
+  the venv interpreter uniformly across every phase, which is what the proposed shell wrapper
+  solves for one phase only.
 - **#126 local-first code evolver** — *hard skip*. Its fitness is
   `0.25·AST-complexity + 0.25·keyword-coverage + 0.5·self-LLM-judge` with no held-out
   split, no oracle, no regression floor, no surface freeze, and it writes to disk ungated —
@@ -257,19 +333,23 @@ These commit material that violates our non-exposure posture; never import them:
 
 - **#94** — embeds real client Telegram group IDs and chat names plus ~50 log/state files.
 - **#17** — local repo paths and expired API-key dumps in the PR body/scripts.
+- **#157** — hostile submission: deletes `evolution/core/constraints.py` outright, strips 26
+  lines from `.gitignore` (removing the guardrail that keeps run output out of git), and adds
+  ~1.6k lines of off-topic generated content. No credentials found, but reject on content and
+  intent; do not mine it for salvage.
 - **#69** — a fork-of-a-fork dump (parallel `*_v2` architecture + an unrelated kanban
   side-project + run-output bloat + local plan docs); ~85% noise around one small idea.
 
 ## Snapshot — 70 open PRs by group (2026-06-28)
 
-For traceability of this cycle. Disposition key: A=adopt, C=cherry-pick, I=investigate,
+For traceability of this cycle. Disposition key: A=adopt, R=rebuild, I=investigate,
 S=skip (already covered / superseded), X=do-not-merge.
 
-- **Constraint-validator / skill-assembly**: #7 S, #23 S, #50 S, #51 (C, dir guard), #53 S, #95 S, #97 S, #104 S, #113 S, #114 S, #134 **n/a (investigated)**
+- **Constraint-validator / skill-assembly**: #7 S, #23 S, #50 S, #51 (R, dir guard), #53 S, #95 S, #97 S, #104 S, #113 S, #114 S, #134 **n/a (investigated)**
 - **GEPA / DSPy 3.x compat**: #13 S, #14 S, #35 S, #46 S, #48 S, #73 S, #91 S, #109 S, #137 S (parked: secret-scan constraint)
 - **Fitness / judge / significance + skill extraction**: #5 S, #24 S, #49 S, #25 S, #28 S, #136 (parked: BCa diagnostic)
 - **Model providers / backends**: #8 S, #15 S, #19 S, #22 S, #85 **SKIP (ToS, investigated)**, #92 S, #112 S
-- **Session importers / discovery / guardrails**: #26 **C** (deferred follow-up), #40 S (subset of #102), #102 **done**, #94 X
+- **Session importers / discovery / guardrails**: #26 **R** (deferred follow-up), #40 S (subset of #102), #102 **done**, #94 X
 - **Reliability / real-mutation / gating + code evolver**: #16 S, #17 X, #75 S, #89 S, #126 S, #127 **covered (investigated)**
 - **Phase / HSE mega-PRs**: #30 S, #42 S, #86 S, #98 S, #108 S, #117 S, #120 S
 - **eksays Phase 1–5**: #129 S, #130 S, #131 S, #132 **null (investigated)**, #133 **done (built native)**
@@ -290,3 +370,23 @@ Six new (#142–#147); 5 S, 1 new action item. No backlog regroup:
 - **Session importers**: #143 S (our #102 — state.db read-only already shipped; only cross-platform discovery extras)
 - **Phase / HSE mega-PRs**: #144 S, #145 S (Sunwo0u sanitized evidence packets, report-only, no mechanism)
 - **Fitness / judge / skill extraction**: #146 S (extraction cluster — our `skill_text` is a property over instructions), #147 S (compat + `material_diff` reporting subsumed by our behavioral gate)
+
+### Delta — 92 open PRs (2026-08-31)
+
+Twenty-six new (#149–#183). Ledger: 31 opened, 11 closed (5 opened and closed inside the
+window), 6 of the previously-tracked 72 closed. Disposition split: 21 S, 1 action item,
+3 rebuilt-from, 1 X.
+
+- **GEPA/DSPy compat + validate-full** (11): #153 S, #155 S, #159 S, #161 S, #167 S, #168 S,
+  #173 S, #174 S, #177 S, #178 S, #183 S
+- **Session importers** (2): #149 **R (action item — relevance ranking)**, #179 S (premise
+  falsified against our tree)
+- **Fitness / judge / verifier** (1): #150 S (memorizable fact-table oracle)
+- **Reliability / gating** (3): #163 S, #165 S, #176 S
+- **Phase / HSE mega-PRs** (4): #162 S wholesale — **two ideas rebuilt natively** (test
+  containment, minimum detectable effect); #182 S (canary premature, AGPL sidecar); #180 S;
+  #158 S
+- **Misc / infra** (4): #154 S (JSON-robustness half rebuilt without the proposed dependency),
+  #160 S (stray committed run artifact), #166 S (surfaced a licensing question, not repo
+  hygiene), #181 S
+- **Do not merge** (1): #157 X — see below
