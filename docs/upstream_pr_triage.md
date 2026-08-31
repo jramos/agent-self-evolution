@@ -467,7 +467,11 @@ and we are 0 commits behind it, so waiting accrues no merge risk.
   `ValueError`, not `OSError`, so it escaped the legacy session read's guard; and the Claude Code
   history log decodes during line *iteration*, outside the per-line JSON guard, so a single bad
   byte sequence aborted the whole read. That log is long-lived and the likelier of the two sources
-  to be mixed-encoding, so fixing only the rarer site would have over-claimed.
+  to be mixed-encoding, so fixing only the rarer site would have over-claimed. The first attempt
+  used replacement-character decoding and review caught why that is worse: bad bytes *inside* a
+  JSON string still parse under it, so the line is admitted with corrupted text rather than
+  dropped — trading a loud failure for a quiet one. Decoding now happens per line inside the
+  existing guard, so an undecodable line is skipped and the rest of the read continues.
   The MIPROv2 fallback now receives the held-out split, which GEPA passes and it silently did not.
   Ours is a genuine named split rather than a slice of the trainset, so passing it replaces the
   optimizer's internal trainset-derived split rather than feeding training data back. Guarded with

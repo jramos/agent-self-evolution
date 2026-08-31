@@ -152,3 +152,28 @@ class TestMiproFallbackValset:
         )
 
         assert seen.get("valset") is None
+
+
+    def test_bad_bytes_inside_a_json_string_are_dropped_not_admitted(self, tmp_path, monkeypatch):
+        """The case errors="replace" would have silently let through.
+
+        When invalid bytes sit inside a string value rather than breaking the
+        syntax, replacement-character decoding still yields valid JSON — so the
+        line parses and corrupted text enters the eval dataset. Skipping the line
+        is the honest outcome: quiet corruption is worse than the crash this
+        guard replaced.
+        """
+        from evolution.core.external_importers import ClaudeCodeImporter
+
+        path = tmp_path / "history.jsonl"
+        good = "categorise these messages by topic"
+        path.write_bytes(
+            b'{"display": "summarise this \xff\xfe transcript for me"}\n'
+            + json.dumps({"display": good}).encode()
+            + b"\n"
+        )
+        monkeypatch.setattr(ClaudeCodeImporter, "HISTORY_PATH", path)
+
+        texts = [m.get("task_input") for m in ClaudeCodeImporter.extract_messages()]
+
+        assert texts == [good], f"a corrupted line must be dropped, got {texts}"
