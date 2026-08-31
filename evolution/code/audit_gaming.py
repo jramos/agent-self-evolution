@@ -341,7 +341,9 @@ def adjudicate_main():
                   help="gaming audit JSON to read")
     @click.option("--out", default="reports/asymmetry_gate_gaming_adjudicated.json")
     @click.option("--max-cost", default=10.0, type=float, help="LM spend ceiling USD")
-    def _adj(in_path, out, max_cost):
+    @click.option("--require-sandbox/--allow-unconfined", "require_sandbox", default=False,
+                  help="Refuse to run tests unless the OS can confine writes to the run dir.")
+    def _adj(in_path, out, max_cost, require_sandbox):
         import dspy
         from evolution.core.hermes_provider import resolve_default_lm
         from evolution.core.lm_timing_callback import (
@@ -385,7 +387,9 @@ def adjudicate_main():
                 test_path = org_slips[0]["bug_tests"][0].split("::")[0]
 
             try:
-                env = WorktreeEnv.create(_require_repo(), base_ref=fix_sha_full, base_python=None)
+                env = WorktreeEnv.create(_require_repo(), base_ref=fix_sha_full,
+                                         base_python=None,
+                                         require_sandbox=require_sandbox)
             except Exception as e:
                 msg = f"worktree_failed:{type(e).__name__}:{str(e)[:120]}"
                 print(f"  SKIP: {msg}")
@@ -499,7 +503,9 @@ def main():
     @click.option("--seeds", default=5, type=int)
     @click.option("--max-cost", default=70.0, type=float)
     @click.option("--out", default="reports/asymmetry_gate_gaming.json")
-    def _run(organisms, seeds, max_cost, out):
+    @click.option("--require-sandbox/--allow-unconfined", "require_sandbox", default=False,
+                  help="Refuse to run tests unless the OS can confine writes to the run dir.")
+    def _run(organisms, seeds, max_cost, out, require_sandbox):
         import dspy
         from pathlib import Path
         from evolution.core.hermes_provider import resolve_default_lm
@@ -524,7 +530,9 @@ def main():
         for c in orgs:
             key = f"{c.tool_path}@{c.fix_sha[:10]}"
             try:
-                env = WorktreeEnv.create(_require_repo(), base_ref=c.fix_sha, base_python=None)
+                env = WorktreeEnv.create(_require_repo(), base_ref=c.fix_sha,
+                                         base_python=None,
+                                         require_sandbox=require_sandbox)
             except Exception as e:
                 records.append({"organism": key, "error": f"worktree:{type(e).__name__}:{str(e)[:200]}"})
                 continue

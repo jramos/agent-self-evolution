@@ -37,6 +37,7 @@ import sys
 import tempfile
 from dataclasses import dataclass
 from pathlib import Path
+from evolution.core.sandbox import sandbox_available, wrap_argv
 
 # Repairs write whole files in a tight loop; consecutive rounds can produce
 # same-size sources within the filesystem's mtime resolution, which defeats
@@ -122,6 +123,10 @@ def _detect_base_python(repo_root: Path) -> str:
     return sys.executable
 
 
+# pytest documents 0-5 (passed / failed / interrupted / internal / usage / no-tests).
+_PYTEST_EXIT_CODES = frozenset(range(6))
+
+
 class WorktreeEnv:
     """A disposable git worktree of ``repo_root`` with its own editable venv.
 
@@ -131,11 +136,16 @@ class WorktreeEnv:
     nothing is trusted until ``assert_authoritative`` passes.
     """
 
-    def __init__(self, repo_root: Path, root: Path, worktree: Path, venv: Path):
+    def __init__(
+        self, repo_root: Path, root: Path, worktree: Path, venv: Path,
+        *, require_sandbox: bool = False,
+    ):
         self.repo_root = repo_root
         self._root = root  # the run tempdir holding both worktree and venv
         self.worktree = worktree
         self.venv = venv
+        self.require_sandbox = require_sandbox
+        self.sandboxed = sandbox_available()
         self._output_tail_bytes = 6000
         self._base_python = sys.executable
         self._dep_sites: list[str] = []
@@ -150,6 +160,7 @@ class WorktreeEnv:
         base_ref: str,
         base_python: str | None = None,
         output_tail_bytes: int = 6000,
+        require_sandbox: bool = False,
     ) -> "WorktreeEnv":
         """Add a detached worktree at ``base_ref`` and build its isolated venv.
 
@@ -163,7 +174,8 @@ class WorktreeEnv:
         root = Path(tempfile.mkdtemp(prefix="evolve_code_"))
         worktree = root / "wt"
         venv = root / "venv"
-        env = cls(repo_root, root, worktree, venv)
+        env = cls(repo_root, root, worktree, venv, require_sandbox=require_sandbox)
+        env._assert_sandbox_usable()
         env._output_tail_bytes = output_tail_bytes
         env._base_python = base_python or _detect_base_python(repo_root)
         try:
@@ -229,6 +241,44 @@ class WorktreeEnv:
             return [p for p in json.loads(res.stdout.strip() or "[]") if Path(p).is_dir()]
         except ValueError:
             return []
+
+    def _assert_sandbox_usable(self) -> None:
+        """Fail at construction if confinement is requested but cannot start.
+
+        Compiling the profile once here turns a broken sandbox into an immediate,
+        obvious error instead of a per-test surprise mid-run.
+        """
+        if not self.sandboxed:
+            if self.require_sandbox:
+                # wrap_argv owns the refusal message; borrow it by asking for one.
+                wrap_argv(
+                    ["true"], write_roots=[self._root], require=True, available=False
+                )
+            return
+        argv, _ = wrap_argv(
+            ["true"], write_roots=[self._root], require=False, available=True
+        )
+        res = _run(argv, cwd=self._root, timeout=30)
+        if res.returncode != 0:
+            raise WorktreeError(
+                "OS sandbox profile failed to start: "
+                f"{(res.stderr or res.stdout or '').strip()[-300:]}"
+            )
+
+    def containment(self) -> dict:
+        """How confined this run's test execution actually is.
+
+        Recorded in run evidence so an unconfined run is visible rather than
+        assumed. Note what the confined case does and does not mean: writes
+        outside the run root and the temp roots are denied; reads, process-exec
+        and network are not. It prevents corrupting the checkout or home dir --
+        it is not isolation.
+        """
+        return {
+            "sandboxed": self.sandboxed,
+            "mechanism": "sandbox-exec" if self.sandboxed else None,
+            "platform": sys.platform,
+        }
 
     def _test_env(self) -> dict:
         """Env for in-worktree python runs: no bytecode writes, plus the base
@@ -344,10 +394,25 @@ class WorktreeEnv:
             str(self.python), "-m", "pytest", "-q", "--no-header",
             "-p", "no:cacheprovider", *(extra_args or []), *test_paths,
         ]
+        argv, sandboxed = wrap_argv(
+            args, write_roots=[self._root], require=self.require_sandbox,
+            available=self.sandboxed,
+        )
         start = time.monotonic()
         try:
-            res = _run(args, cwd=self.worktree, timeout=timeout, env=self._test_env())
+            res = _run(argv, cwd=self.worktree, timeout=timeout, env=self._test_env())
             duration = time.monotonic() - start
+            if sandboxed and res.returncode not in _PYTEST_EXIT_CODES:
+                # sandbox-exec exits 65 without running the child when a profile
+                # fails to compile. The gate special-cases only exit 5 and its
+                # failure parser yields an empty set on unrecognised output, so a
+                # run where nothing executed would read as "no failures" and could
+                # be certified correct. Refuse to return it as a test result.
+                detail = (res.stderr or res.stdout or "").strip()[-500:]
+                raise WorktreeError(
+                    f"sandboxed pytest exited {res.returncode}, which is not a pytest "
+                    f"outcome — treating as a containment failure, not a test result: {detail}"
+                )
             combined = res.stdout + "\n" + res.stderr
             out = combined if full_output else combined[-self._output_tail_bytes:]
             return TestRun(passed=res.returncode == 0, output=out,

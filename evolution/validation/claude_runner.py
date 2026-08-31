@@ -42,17 +42,17 @@ from evolution.core.lm_timing_callback import (
     CostCeilingExceeded,
     CostLedger,
 )
+from evolution.core.sandbox import (  # noqa: F401 — re-exported at its historical import site
+    SandboxUnavailableError,
+    macos_write_sandbox_profile as _macos_write_sandbox_profile,
+    sandbox_available,
+)
 from evolution.validation.agent_runner import AgentRunResult, TaskRunContext
 
 DEFAULT_CLAUDE_TIMEOUT_SECONDS = 300
 _DEFAULT_ALLOWED_TOOLS = ["Read", "Edit", "Write", "Bash", "Glob", "Grep"]
 # Temp roots the agent (and claude itself) legitimately writes to, beyond the
 # fixture dir + per-run HOME. macOS canonicalizes /tmp and /var/folders under /private.
-_SANDBOX_TEMP_ROOTS = ("/private/tmp", "/private/var/folders", "/dev")
-
-
-class SandboxUnavailableError(RuntimeError):
-    """OS-level filesystem sandboxing is not available and was not waived."""
 
 
 class ClaudeCodeAgentRunner:
@@ -188,7 +188,7 @@ class ClaudeCodeAgentRunner:
         Returns the argv to exec. Raises SandboxUnavailableError when no OS sandbox
         is available and ``require_sandbox`` is set — refusing to run an unconfined
         agent rather than silently escaping (the prior failure mode)."""
-        if sys.platform == "darwin" and shutil.which("sandbox-exec"):
+        if sandbox_available():
             return ["sandbox-exec", "-p", _macos_write_sandbox_profile(write_roots), *claude_argv]
         if self.require_sandbox:
             raise SandboxUnavailableError(
@@ -199,17 +199,6 @@ class ClaudeCodeAgentRunner:
         return claude_argv
 
 
-def _macos_write_sandbox_profile(write_roots: list[Path]) -> str:
-    """SBPL profile: allow everything, then deny all writes, then re-allow writes
-    only under the given roots + temp dirs. Confines Write/Edit/Bash alike."""
-    roots = list(write_roots) + [Path(p) for p in _SANDBOX_TEMP_ROOTS]
-    allows = "\n".join(f'    (subpath "{r}")' for r in roots)
-    return (
-        "(version 1)\n"
-        "(allow default)\n"
-        "(deny file-write*)\n"
-        f"(allow file-write*\n{allows})\n"
-    )
 
 
 def _price_from_tokens(model: Optional[str], tokens: dict) -> Optional[float]:

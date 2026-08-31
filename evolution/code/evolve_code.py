@@ -23,7 +23,7 @@ from rich.console import Console
 
 from evolution.code.gate import DEFAULT_FLOOR_PATHS, run_code_gate
 from evolution.code.repair import RepairEngine, build_dspy_proposer
-from evolution.code.trace import build_repair_trace, write_repair_trace
+from evolution.code.trace import build_repair_trace, containment_of, write_repair_trace
 from evolution.code.worktree import WorktreeEnv, WorktreeError
 from evolution.core.hermes_provider import resolve_default_lm
 from evolution.core.pr_automation import create_pr
@@ -124,6 +124,10 @@ def _resolve_proposer(proposer_model: str | None):
 @click.option("--pr-branch-prefix", default="evolve-code/", help="Branch name prefix.")
 @click.option("--pr-draft/--no-pr-draft", "pr_draft", default=True,
               help="Open the PR as a draft (default: draft — human review required).")
+@click.option("--require-sandbox/--allow-unconfined", "require_sandbox", default=False,
+              help="Refuse to run tests unless the OS can confine writes to the run "
+                   "dir. Off by default because confinement is macOS-only; the posture "
+                   "is recorded in repair_trace.json either way.")
 @click.option("--pr-label", default="human-review",
               help="Label applied to the PR (default 'human-review'). Empty to skip.")
 def main(
@@ -140,6 +144,7 @@ def main(
     output_dir: Path | None,
     benchmark_cmd: str | None,
     benchmark_timeout_seconds: int,
+    require_sandbox: bool,
     create_pr_flag: bool,
     pr_base_branch: str,
     pr_branch_prefix: str,
@@ -181,7 +186,8 @@ def main(
     console.print(f"[bold]evolve_code[/bold] — repairing [cyan]{tool_relpath}[/cyan] "
                   f"from [dim]{base_ref}[/dim]")
     try:
-        env = WorktreeEnv.create(repo_root, base_ref=base_ref, base_python=base_python)
+        env = WorktreeEnv.create(repo_root, base_ref=base_ref, base_python=base_python,
+                                 require_sandbox=require_sandbox)
     except WorktreeError as exc:
         console.print(f"[red]✗ worktree setup failed:[/red] {exc}")
         raise SystemExit(2)
@@ -257,7 +263,7 @@ def main(
         write_gate_decision(output_dir, gate.decision)
         write_repair_trace(output_dir, build_repair_trace(
             tool=tool_relpath, visible_test=visible_test, holdout_test=holdout_test,
-            result=result, final_diff=final_diff,
+            result=result, final_diff=final_diff, containment=containment_of(env),
         ))
         console.print(f"  decision: [bold]{gate.decision['decision']}[/bold] — {gate.reason}")
         console.print(f"  artifacts: [dim]{output_dir}[/dim]")
