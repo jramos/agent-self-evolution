@@ -372,13 +372,32 @@ and we are 0 commits behind it, so waiting accrues no merge risk.
   newly introduced failure hide behind an unrelated pre-existing one — it now splits at bracket
   depth zero.
   19 tests, full non-slow suite green (1813 passed, +19), ruff clean.
-  **Caveat on earlier numbers:** campaign runs produced before this fix could contain false
-  `correct` verdicts from non-authoritative pytest runs, so historical deploy-reachable figures
-  carry an unquantified upward bias — and one biased toward harder bugs, since hangs and kills
-  correlate with the repairs most likely to be wrong. Not re-run; recorded so the figures are read
-  with that caveat. Note the residual runs the other way too: an organism that hangs partway
-  through its seeds previously lost the seeds already measured, and hangs correlate with harder
-  bugs, so both directions of that bias point at the same subpopulation.
+  **Effect on earlier numbers — measured, not assumed.** The three Hermes code campaigns (156
+  scored organisms, 468 seeds, 344 seeds true, 113/156 deploy-reachable, across 90 unique fix
+  commits) were checked against every route by which this defect could have inflated them.
+  *Two routes are structurally excluded.* The regression floor never ran: `run_code_oracle_gate`
+  defaults `floor_paths=None`, the campaign passes none, and the floor body is gated on
+  `if floor_paths:` — that hazard only ever applied to the held-out gate in the single-tool
+  evolver. And a repair that hangs its **own** bug tests cannot reach the gate as fixed, since
+  `fixed=True` requires `run.passed` — so it scores as a failed seed, not a false success.
+  *The replayable route measured zero.* Collection outcomes at a fixed commit do not depend on
+  what the repair wrote, so they replay exactly. All **90/90** fix commits collect cleanly
+  (exit 0) and execute authoritatively (86 exit-0, 4 exit-1), so the exit-2/4/5 class fired on
+  **0 of 156 organisms and 0 of 468 seeds**.
+  *One residual is unquantifiable from retained data.* A repair that passed its bug tests and then
+  hung only the sibling tests in the same file would have been scored `correct`. The repaired
+  sources were never retained — the campaigns kept only the ledger and the report, with no exit
+  codes, durations, or per-seed gate decisions — so this cannot be replayed. It is narrow: baseline
+  runtimes for those files are a median of 1.79s and a maximum of 10.98s, so reaching the 600s
+  timeout needs a **55x to 334x** slowdown, i.e. a non-terminating loop rather than incidental
+  slowness. Wall clock bounds it loosely from above: the campaigns ran 3.24h, 2.24h and 1.73h, and
+  a single timeout consumes 7-11x the average per-seed budget, so at most **43 of 468 seeds (9.2%)**
+  could have timed out even had the campaigns done nothing else.
+  Net: the published deploy-reachable figures are better supported than the original caveat
+  implied — two routes excluded by construction, the replayable one measured at zero, and the
+  remainder capped at 9.2% of seeds by an argument that assumes the campaigns did nothing but hang.
+  **Retention lesson:** per-seed exit codes are a few bytes and would have made this a grep instead
+  of an inference; the repaired sources are gone for good.
 
 ## Action items (open)
 
