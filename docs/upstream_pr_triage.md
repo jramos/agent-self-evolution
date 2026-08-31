@@ -262,7 +262,12 @@ and we are 0 commits behind it, so waiting accrues no merge risk.
   order and the seeded backfill is untouched. 6 new tests, including a 2000-case oracle
   comparison against a verbatim copy of the old predicate proving the qualifying set is
   unchanged; the pre-existing relevance tests were deliberately left unmodified as the
-  equivalence proof. Full non-slow suite green (1769 passed, +6), ruff clean. Note for future
+  equivalence proof. Review of the first pass found that every ordering test used a
+  single-word skill name, which makes the middle tier indistinguishable from the top one —
+  so a weighted-sum implementation would have passed all of them. Added a multi-word-name
+  case where the tiers genuinely disagree, and confirmed by mutation (swapping the tuple for
+  a weighted sum) that the new tests fail and the others do not. 10 tests total. Full
+  non-slow suite green (1773 passed, +10), ruff clean. Note for future
   cycles: eval sets drawn after this change differ from earlier ones in both composition and
   train/val/holdout assignment, so don't compare them naively across the boundary.
 

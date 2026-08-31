@@ -128,9 +128,10 @@ def _relevance_score(text: str, skill_name: str, skill_text: str) -> tuple[int, 
     full-name match.
 
     An all-zero tuple means "not relevant". The tiers reproduce the conditions
-    of the original boolean pre-filter exactly — including requiring at least two
-    overlapping keywords — so scoring changes only the *order* of candidates,
-    never which ones qualify.
+    of the original boolean pre-filter exactly, so scoring changes only the
+    *order* of candidates, never which ones qualify. Note that
+    ``keyword_overlap`` is thresholded rather than raw: it is 0 unless at least
+    two keywords overlap, matching the pre-filter's requirement.
     """
     text_lower = text.lower()
     skill_lower = skill_name.lower().replace("-", " ").replace("_", " ")
@@ -567,10 +568,11 @@ class RelevanceFilter:
 
         messages = [m for m in messages if m.get("task_input") and m.get("source")]
 
-        # Strongest first. Both caps below — the max_examples * 3 truncation and
-        # the scoring loop's early break — consume this list in order, so its
-        # ordering decides which messages ever reach the LLM scorer. sorted() is
-        # stable, so equally-scored messages keep their import order.
+        # Strongest first. The candidate-count cap (max_examples * 3) and the
+        # examples-count cap (the scoring loop's early break) both consume this
+        # list in order, so its ordering decides which messages ever reach the
+        # LLM scorer. sorted() is stable, so equally-scored messages keep their
+        # import order and source priority survives the caps.
         scored = [
             (_relevance_score(m["task_input"], skill_name, skill_text), m)
             for m in messages
