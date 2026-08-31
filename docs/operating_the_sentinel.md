@@ -86,6 +86,7 @@ Verdicts in the annotated `triage_queue.json`:
 | `attempted` (+ `correct_seeds`/`seeds`, `deploy_reachable`) | the loop ran; `deploy_reachable: true` means a majority of seeds produced an oracle-matching fix |
 | `not_valid` | the parent doesn't cleanly fail what the fix passes — not a clean single-tool bug |
 | `source_missing` / `too_large` / `worktree_failed` | skipped before repair (source gone, too big for a whole-file rewrite, or isolation setup failed) |
+| `run_inconclusive` | a pytest run established nothing (hang, kill, nothing collected), so the candidate could not be measured — deliberately distinct from `not_valid`, which is a real verdict |
 | `cost_ceiling` | the `--max-cost-usd` cap was hit; remaining candidates were not attempted |
 
 `--max-cost-usd` is **required** whenever `--attempt-top > 0` (the CLI refuses to run

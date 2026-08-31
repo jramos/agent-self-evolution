@@ -348,12 +348,37 @@ and we are 0 commits behind it, so waiting accrues no merge risk.
   refusal has its own type so the campaign ledger records `run_inconclusive` instead of blaming
   worktree setup for a candidate that simply could not be measured. Mirrors what the SWE-bench env
   already did: an id it cannot account for is treated as failing so it cannot certify as fixed.
-  9 tests, full non-slow suite green (1803 passed, +9), ruff clean.
+  Review of that first pass corrected the rule and widened it. The rule was a proxy for the wrong
+  invariant: exit 2 is *already conclusive* — an import failure exits 2 while naming the file it
+  could not import — so refusing every code outside 0/1/5 would have dropped every candidate whose
+  buggy parent fails at import, an unremarked change to the instrument's population in the
+  direction that flatters the rate. The invariant is now **no failure evidence and no authoritative
+  exit**: named failures count whatever the exit code, a clean exit 0 is a complete answer, and
+  everything else refuses. That also closed a path where exit 5 could still certify, since the gate
+  records `bug_tests_passed` as the negation of an empty set.
+  The same defect turned out to live in the **regression floor**, on the product deploy path, where
+  it is more reachable than anywhere else: the floor runs the whole `tests/tools` subset under a
+  600s timeout on every deploy decision, and a floor that hung returned `deploy=True` with reason
+  "regression floor green" while the guard recorded `repaired_failure_count: 0` next to
+  `duration_seconds: 600.0`. The baseline half had it in the opposite direction — a hung baseline
+  makes every pre-existing failure look introduced, rejecting a correct repair and naming it as the
+  cause. Both are guarded, as is the held-out check, which was filing a hang as
+  "teaching-to-the-test": an accusation of gaming recorded against a run that produced no verdict.
+  Two further corrections. An inconclusive run *while scoring a repair* now counts as a failed seed
+  rather than skipping the organism — by that point the repair has already passed its bug tests, so
+  a hang over the wider oracle scope is the repair's own doing, and dropping it would inflate the
+  rate exactly as the historical bias does. And the failure parser split node ids on the first
+  `" - "`, so two parametrized ids containing that separator collapsed into one key, letting a
+  newly introduced failure hide behind an unrelated pre-existing one — it now splits at bracket
+  depth zero.
+  19 tests, full non-slow suite green (1813 passed, +19), ruff clean.
   **Caveat on earlier numbers:** campaign runs produced before this fix could contain false
   `correct` verdicts from non-authoritative pytest runs, so historical deploy-reachable figures
   carry an unquantified upward bias — and one biased toward harder bugs, since hangs and kills
   correlate with the repairs most likely to be wrong. Not re-run; recorded so the figures are read
-  with that caveat.
+  with that caveat. Note the residual runs the other way too: an organism that hangs partway
+  through its seeds previously lost the seeds already measured, and hangs correlate with harder
+  bugs, so both directions of that bias point at the same subpopulation.
 
 ## Action items (open)
 
@@ -374,7 +399,7 @@ ourselves," never "merge the PR" — we do not apply upstream diffs. Our-code an
 | #162 (partial) | **Confine code-evolution test execution** and record the containment posture | `WorktreeEnv.run_test` executes pytest against an LLM-modified worktree through a bare subprocess, while the agent runner refuses to run unconfined at all — an asymmetry in our own doctrine. The adversarial gaming harness runs through the same path. | `evolution/code/worktree.py` (`run_test`), `evolution/validation/claude_runner.py` (the existing profile), `evolution/code/gate.py` (failure parsing) | **DONE** — shared `evolution/core/sandbox.py` (profile + availability + `wrap_argv`); `run_test` confines writes to the run root, records the posture in `repair_trace.json`, and raises rather than returning a non-pytest exit code from a confined run; `--require-sandbox` on all three LLM-loop entry points — see review log, 2026-08-31 | ✅ |
 | #162 (partial), #136 | **Minimum detectable effect** as a gate-adjacent diagnostic | A gate can certify a win, or enforce a regression floor, without ever stating that its sample size could not detect the effect it claims to police. Absorbs the parked exact-test item. | `evolution/core/stats.py` (currently `paired_bootstrap` only) | **REBUILD** — MDE for the continuous and paired-binary regimes, diagnostic only, deploy decisions provably unchanged; exact paired tests deferred rather than shipped with unpinned conventions | ⬜ |
 | #154, #179 | **Importer and dataset-builder hardening** — malformed JSON raises our own error; non-UTF8 session files are skipped instead of crashing the importer | Two sites extract a JSON substring and then parse it unguarded, so a bracketed-but-malformed payload escapes as a raw decode error. Separately, `UnicodeDecodeError` is uncaught where legacy session files and the Claude Code history log are decoded — and the history log is the likelier of the two to be mixed-encoding. | `evolution/core/dataset_builder.py`, `evolution/core/external_importers.py` | **REBUILD** — guard both parse sites (including a shape check, since valid JSON of the wrong type escapes just as badly) and widen both decode guards; no new dependency, declining the proposed JSON-repair library | ⬜ |
-| — (found in review) | **Authoritative failure sets** — a pytest run that could not answer must not be scored as "nothing failed" | `failing_tests` discarded the exit code, and the failure parser returns an empty set on unrecognised output, so a timed-out, killed or uncollectable run certified a wrong repair as `correct` through the oracle gate. Demonstrated against the real gate. | `evolution/code/worktree.py` (`failing_tests`), `evolution/code/harvest.py` (`_failures`), `evolution/code/gate.py` (the parser) | **DONE** — the seam refuses non-authoritative runs (only exit 0/1/5 answer); `harvest._failures` delegates instead of re-parsing; a distinct error type keeps the campaign ledger honest — see review log, 2026-08-31 | ✅ |
+| — (found in review) | **Authoritative failure sets** — a pytest run that could not answer must not be scored as "nothing failed" | `failing_tests` discarded the exit code, and the failure parser returns an empty set on unrecognised output, so a timed-out, killed or uncollectable run certified a wrong repair as `correct` through the oracle gate. Demonstrated against the real gate. | `evolution/code/worktree.py` (`failing_tests`), `evolution/code/harvest.py` (`_failures`), `evolution/code/gate.py` (the parser) | **DONE** — the seam refuses a run that produced **no failure evidence and no authoritative exit**; the same guard added to both regression floors and the held-out check; `harvest._failures` delegates instead of re-parsing; a distinct error type keeps the ledger honest, and an inconclusive run while scoring counts as a failed seed rather than a dropped organism — see review log, 2026-08-31 | ✅ |
 | #174 (partial) | **MIPROv2 fallback receives the held-out valset** | The fallback optimizer compiles without `valset` while the primary path passes it, so a fallback run loses its held-out set for internal candidate selection. Narrow: deploy integrity is unaffected, since the deploy gate runs its own held-out behavioral validation downstream. | `evolution/skills/evolve_skill.py` (`_default_mipro_runner`) | **REBUILD** — pass the existing named val split through, guarding the empty case (the optimizer rejects a non-None empty valset). Threading `num_trials` stays excluded: the optimizer treats it as mutually exclusive with the `auto` preset. | ⬜ |
 
 ## Optional / low-value (parked)

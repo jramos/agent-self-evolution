@@ -58,9 +58,14 @@ class StagedRepo:
                        exit_code=res.returncode)
 
     def failing_tests(self, *node_ids: str) -> set[str]:
-        from evolution.code.gate import _parse_pytest_failures
-        run = self.run_test(*node_ids, extra_args=["--tb=no"], full_output=True)
-        return _parse_pytest_failures(run.output)
+        """Borrow the real implementation so the double inherits its refusal.
+
+        Re-implementing it here would let every gate test run against pre-fix
+        behavior, making the invariant unenforceable exactly where the gate is
+        exercised end to end.
+        """
+        from evolution.code.worktree import WorktreeEnv
+        return WorktreeEnv.failing_tests(self, *node_ids)
 
     # -- git support (for gate tests that need HEAD + status) -------------
     def _git(self, *args: str) -> subprocess.CompletedProcess:

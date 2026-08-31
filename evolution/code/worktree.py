@@ -470,10 +470,18 @@ class WorktreeEnv:
             out = combined if full_output else combined[-self._output_tail_bytes:]
             return TestRun(passed=res.returncode == 0, output=out,
                            duration_seconds=duration, exit_code=res.returncode)
-        except subprocess.TimeoutExpired:
+        except subprocess.TimeoutExpired as exc:
+            # Keep what pytest managed to print. The last test it named before
+            # hanging is the diagnostic someone chasing an introduced infinite
+            # loop actually needs, and it is otherwise discarded.
+            partial = "".join(
+                part.decode(errors="replace") if isinstance(part, bytes) else (part or "")
+                for part in (exc.stdout, exc.stderr)
+            ).strip()
+            note = f"pytest timed out after {timeout}s"
             return TestRun(
                 passed=False,
-                output=f"pytest timed out after {timeout}s",
+                output=f"{note}\n{partial[-self._output_tail_bytes:]}" if partial else note,
                 duration_seconds=float(timeout),
                 exit_code=None,
             )
@@ -482,28 +490,37 @@ class WorktreeEnv:
         """Failing/erroring pytest node-ids for ``test_paths`` — the seam the oracle
         gate uses so it never re-implements parsing (SWEbenchEnv overrides it).
 
-        Raises when the run did not produce an authoritative answer. This matters
-        because the parser returns an empty set for any output it does not
-        recognise, and an empty set reads as "nothing failed": a timed-out, killed,
-        or uncollectable run would otherwise certify a repair it never exercised.
-        Only exit 0 (all passed), 1 (ran, some failed) and 5 (nothing collected)
-        make a complete statement about what failed. 5 stays authoritative because
-        callers already reason about "no tests collected" explicitly; excluding it
-        here would change how the harvester classifies candidates rather than how
-        the gate scores them.
+        Raises when the run produced **no failure evidence and no authoritative
+        exit**. That is the real invariant, and it is narrower than "the exit code
+        looks normal": an import error exits 2 while still naming the file it could
+        not import, which is a complete statement about what failed, and refusing it
+        would drop a whole class of genuine bugs from the campaign's population.
+        Conversely a zero-test run (exit 5) or a timeout names nothing, and the
+        parser returns an empty set for output it cannot read — so scoring either
+        would record "nothing failed" for a run that established nothing.
 
-        Mirrors the SWE-bench env, which treats an id it cannot account for as
-        failing so it cannot certify as fixed.
+        Only a clean exit 0 may return an empty set, because there it means what it
+        says.
+
+        Note this is *not* the SWE-bench env's approach, which returns an
+        unaccountable id inside the failing set so the gate rejects and the
+        instance stays in the denominator scored incorrect. Raising here removes
+        the item instead, so callers scoring a repair convert the refusal into a
+        failed seed rather than a skip — same intent, and the caller decides which
+        effect on the estimand is honest for its situation.
         """
         from evolution.code.gate import _parse_pytest_failures  # noqa: PLC0415
         run = self.run_test(*test_paths, extra_args=["--tb=no"], full_output=True, timeout=timeout)
-        if run.exit_code not in (0, 1, 5):
-            raise NonAuthoritativeRunError(
-                f"pytest on {list(test_paths)} exited {run.exit_code}, so its failing-test "
-                f"set is not authoritative and must not be scored — an empty set here "
-                f"would read as 'nothing failed': {run.output[-500:]}"
-            )
-        return _parse_pytest_failures(run.output)
+        if run.exit_code == 0:
+            return set()
+        failures = _parse_pytest_failures(run.output)
+        if failures:
+            return failures
+        raise NonAuthoritativeRunError(
+            f"pytest on {list(test_paths)} exited {run.exit_code} and named no failing "
+            f"test, so it established nothing — an empty set here would read as "
+            f"'nothing failed': {run.output[-500:]}"
+        )
 
     # -- teardown ----------------------------------------------------------
 

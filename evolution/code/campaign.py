@@ -107,12 +107,22 @@ def run_organism(
         for _ in range(seeds):
             env.write_tool(c.tool_path, parent_src)  # reset to buggy
             repair = engine.repair(env, c.tool_path, bug_tests)
-            gate = run_code_oracle_gate(
-                env, tool_relpath=c.tool_path, test_relpath=c.test_path,
-                bug_tests=bug_tests, oracle_failures=oracle_failures,
-                base_src=parent_src, repair_result=repair,
-            )
-            seed_results.append(bool(gate.deploy))
+            try:
+                gate = run_code_oracle_gate(
+                    env, tool_relpath=c.tool_path, test_relpath=c.test_path,
+                    bug_tests=bug_tests, oracle_failures=oracle_failures,
+                    base_src=parent_src, repair_result=repair,
+                )
+                seed_results.append(bool(gate.deploy))
+            except NonAuthoritativeRunError:
+                # By this point the repair has already passed its bug tests, so a
+                # run that hangs or dies over the wider oracle scope is the repair's
+                # own doing on a sibling test — a wrong repair, not an unmeasurable
+                # candidate. Skipping it here would drop it from the denominator and
+                # inflate deploy-reachable, the same direction as the historical bias
+                # this work exists to remove.
+                seed_results.append(False)
+
         return OrganismResult(tool=c.tool_path, fix_sha=c.fix_sha, seeds=seed_results)
     except ContainmentError:
         raise  # systemic; see the create-time handler above

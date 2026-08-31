@@ -17,9 +17,15 @@ from __future__ import annotations
 
 import subprocess
 from dataclasses import dataclass
+import logging
 from pathlib import Path
 
-from evolution.code.worktree import WorktreeEnv, WorktreeError
+from evolution.code.worktree import (
+    ContainmentError,
+    NonAuthoritativeRunError,
+    WorktreeEnv,
+    WorktreeError,
+)
 
 _GIT_TIMEOUT = 120
 
@@ -191,6 +197,15 @@ def validate_candidate(
             parent_sha=c.parent_sha, bug_tests=bug_tests,
             fail_excerpt="; ".join(bug_tests[:5]),
         )
+    except ContainmentError:
+        raise  # systemic: a broken sandbox is not this candidate's problem
+    except NonAuthoritativeRunError:
+        # Distinct from "not a clean bug": the candidate could not be measured at
+        # all. Collapsing the two would deflate the validity rate this recon
+        # reports, and indistinguishably so.
+        logging.warning("candidate %s@%s: inconclusive test run, not classified",
+                        c.tool_path, c.fix_sha[:10])
+        return None
     except WorktreeError:
         return None
     finally:
