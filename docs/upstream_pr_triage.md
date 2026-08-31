@@ -196,53 +196,55 @@ and we are 0 commits behind it, so waiting accrues no merge risk.
 
 - **2026-08-31** — Quarterly sweep. Backlog **72 → 92 open**: 31 opened, 11 closed (5 of them
   opened *and* closed inside the window), leaving **26 new PRs** (#149–#183) and closing 6 of
-  the 72 previously tracked. Of the 26: **21** already covered or superseded, **1** a verified
-  defect in our tree, **3** not adoptable but worth rebuilding from, **1** hostile.
+  the 72 previously tracked. Of the 26: **24** SKIP (already covered, superseded, or otherwise
+  not actionable), **1** a verified defect in our tree promoted to an action item, **1** hostile.
+  Three of those skips nonetheless prompted native work here — #162, #154 and #179.
   Structural finding worth recording: upstream has merged **3 PRs ever** (most recent
   2026-06-17) against 52 closed-unmerged, and this fork is **156 commits ahead, 0 behind** —
   there is no upstream code to catch up on, only a contributor backlog to mine. The 26 new PRs
   come from 21 mostly one-shot authors. This is what moved the cadence to quarterly and added
   the title pre-filter (step 3).
-  - **#149** (rank pre-filter candidates by relevance before the LLM-scoring cap) — the one
+  - **#149** (diegokolling, rank pre-filter candidates by relevance before the LLM-scoring cap) — the one
     **verified defect**, and the long-deferred #26 recall follow-up. `RelevanceFilter` picks
     candidates with a boolean predicate, then truncates at `max_examples * 3` in
     source-then-import order, so the strongest matches past the cap are dropped before scoring.
-    Two aggravations found while confirming it: `build_dataset` concatenates per importer, so an
+    Two aggravations found while confirming it: `build_dataset_from_external` concatenates per importer, so an
     overflowing source can crowd out a later one entirely; and the scoring loop's early break
     means candidate *order* decides the output set on every run, not only on overflow. Promoted
     to an action item (REBUILD).
-  - **#179** (importer test isolation) — premise **falsified against our tree**: autouse fixtures
+  - **#179** (ideas24h, importer test isolation) — premise **falsified against our tree**: autouse fixtures
     already neutralize `STATE_DB` for the importer suites, verified by running them on a machine
-    with a real populated `~/.hermes/state.db` (167 passed, no leakage). One narrow residual —
-    a non-UTF8 legacy session file escapes the `except (JSONDecodeError, OSError)` guard — folded
-    into the hardening item. SKIP.
-  - **#162** (Phases 2–5) — SKIP wholesale: a parallel reconstruction of ground we already hold,
+    with a real populated `~/.hermes/state.db`: the importer suites pass with no leakage. One
+    narrow residual — a non-UTF8 legacy session file escapes the
+    `except (JSONDecodeError, OSError)` guard — is tracked as the hardening action item below. SKIP.
+  - **#162** (MaxFreedomPollard, Phases 2–5) — SKIP wholesale: a parallel reconstruction of ground we already hold,
     with gates weaker than ours. Two narrow ideas **rebuilt natively** rather than adopted: OS-level
     confinement for the code-evolution test runner, and a minimum-detectable-effect diagnostic. Its
     per-tool pairwise interference gate is a real gap but costly; parked with the anchor recorded.
-  - **#150** (objective ground-truth verifier) — SKIP. The checker is genuinely deterministic and
-    LLM-free, but its oracle is 17 hardcoded bibliographic facts while the artifact GEPA mutates is
+  - **#150** (MaxFreedomPollard, objective ground-truth verifier) — SKIP. The checker is genuinely deterministic and
+    LLM-free, but its oracle is a 17-paper table of hardcoded bibliographic facts while the artifact GEPA mutates is
     the skill text itself, so the answer key is memorizable into the skill body and a held-out split
     cannot rescue a 17-item universe. Same circularity that got #126 hard-skipped, better disguised;
     it also targets a knowledge/recall axis our own campaigns found saturated. About 65% of its diff
     is machinery carried over from #162.
-  - **#182** (full self-evolution feature set) — SKIP. Its one genuinely absent mechanism is a
+  - **#182** (numandev1, full self-evolution feature set) — SKIP. Its one genuinely absent mechanism is a
     post-deploy canary with auto-rollback, but that is infrastructure ahead of demand here: our
     deploy gate is a verified cold path with two deploys ever, both demos. Its code sidecar also
-    shells out to an undisclosed **AGPL** tool — do not mine this PR.
-  - **#154** (constraint validator + JSON repair) — the validator half is the settled cluster; the
+    shells out to a separately-packaged **AGPL** tool; the PR discloses and isolates that boundary
+    carefully — a README section, module docstrings, and a test asserting nothing under
+    `evolution/` imports it — but it remains a licensing entanglement we don't want.
+  - **#154** (smfworks, constraint validator + JSON repair) — the validator half is the settled cluster; the
     JSON-robustness half is real and was rebuilt without taking the proposed dependency.
-  - **#166** (add an MIT LICENSE) — surfaced that this fork has no `LICENSE` file. Deliberately not
+  - **#166** (trippyogi, add an MIT LICENSE) — surfaced that this fork has no `LICENSE` file. Deliberately not
     actioned here: upstream carries no license at all, which makes this a licensing decision rather
     than repo hygiene.
-  - **#163, #165, #176** (growth-limit waiver, skipped-holdout reporting, rejected-variant
+  - **#163, #165, #176** (RomanXSad, RomanXSad, enzo-adami — growth-limit waiver, skipped-holdout reporting, rejected-variant
     overwrites) — SKIP. Our gate architecture structurally avoids the first two bug classes, and all
     four evolvers already timestamp their default output dirs. One trace initially read as a defect
     in the rejection path turned out to be behavior the code deliberately documents.
-  - **#157** — hostile; see do-not-merge below.
+  - **#157** (Baal-TehDriverman) — hostile; see do-not-merge below.
   - Remaining: #153, #155, #159, #161, #167, #168, #173, #174, #177, #178, #183 (GEPA/DSPy compat
-    and validate-full clusters), #143, #146, #158, #160, #180, #181 — all SKIP, dispositioned by
-    cluster.
+    and validate-full clusters), #158, #160, #180, #181 — all SKIP, dispositioned by cluster.
 
 ## Action items (open)
 
@@ -262,10 +264,13 @@ ourselves," never "merge the PR" — we do not apply upstream diffs. Our-code an
 | #149 (+ #26) | **Rank importer pre-filter candidates by relevance** before the LLM-scoring cap — graded score replacing the boolean predicate, strongest-first ordering | `RelevanceFilter` qualifies candidates with a boolean predicate and then truncates at `max_examples * 3` in source-then-import order, so the strongest matches past the cap never reach the LLM scorer. The scoring loop's early break means order decides the output set on every run, not only on overflow. Closes the #26 recall follow-up. | `evolution/core/external_importers.py` (`_is_relevant_to_skill`, `RelevanceFilter.filter_and_score`) | **REBUILD** — graded tiered score, set-preserving (the qualifying set must not widen), stable strongest-first sort ahead of the cap | ⬜ |
 | #162 (partial) | **Confine code-evolution test execution** and record the containment posture | `WorktreeEnv.run_test` executes pytest against an LLM-modified worktree through a bare subprocess, while the agent runner refuses to run unconfined at all — an asymmetry in our own doctrine. The adversarial gaming harness runs through the same path. | `evolution/code/worktree.py` (`run_test`), `evolution/validation/claude_runner.py` (the existing profile), `evolution/code/gate.py` (failure parsing) | **REBUILD** — shared sandbox module, confine where the OS supports it, record the posture honestly elsewhere, opt-in strict mode; a containment failure must never present as a test outcome | ⬜ |
 | #162 (partial), #136 | **Minimum detectable effect** as a gate-adjacent diagnostic | A gate can certify a win, or enforce a regression floor, without ever stating that its sample size could not detect the effect it claims to police. Absorbs the parked exact-test item. | `evolution/core/stats.py` (currently `paired_bootstrap` only) | **REBUILD** — MDE for the continuous and paired-binary regimes, diagnostic only, deploy decisions provably unchanged; exact paired tests deferred rather than shipped with unpinned conventions | ⬜ |
+| #154, #179 | **Importer and dataset-builder hardening** — malformed JSON raises our own error; non-UTF8 session files are skipped instead of crashing the importer | Two sites extract a JSON substring and then parse it unguarded, so a bracketed-but-malformed payload escapes as a raw decode error. Separately, `UnicodeDecodeError` is uncaught where legacy session files and the Claude Code history log are decoded — and the history log is the likelier of the two to be mixed-encoding. | `evolution/core/dataset_builder.py`, `evolution/core/external_importers.py` | **REBUILD** — guard both parse sites (including a shape check, since valid JSON of the wrong type escapes just as badly) and widen both decode guards; no new dependency, declining the proposed JSON-repair library | ⬜ |
+| #174 (partial) | **MIPROv2 fallback receives the held-out valset** | The fallback optimizer compiles without `valset` while the primary path passes it, so a fallback run loses its held-out set for internal candidate selection. Narrow: deploy integrity is unaffected, since the deploy gate runs its own held-out behavioral validation downstream. | `evolution/skills/evolve_skill.py` (`_default_mipro_runner`) | **REBUILD** — pass the existing named val split through, guarding the empty case (the optimizer rejects a non-None empty valset). Threading `num_trials` stays excluded: the optimizer treats it as mutually exclusive with the `auto` preset. | ⬜ |
 
 ## Optional / low-value (parked)
 
-- **#136** — lift the **BCa interval + exact paired sign-flip test** as an optional
+- **#136** — its exact-paired-test half is now tracked as the minimum-detectable-effect action
+  item above; what remains parked here is the **BCa interval** as an optional
   *diagnostic* into `evolution/core/stats.py` (our code even notes "BCa is the upgrade
   path once N≥20"). **Not** as the deploy gate — our CI-lower-bound non-inferiority gate
   is deliberately tuned for the small-N holdout regime and stays.
@@ -383,10 +388,13 @@ window), 6 of the previously-tracked 72 closed. Disposition split: 21 S, 1 actio
   falsified against our tree)
 - **Fitness / judge / verifier** (1): #150 S (memorizable fact-table oracle)
 - **Reliability / gating** (3): #163 S, #165 S, #176 S
-- **Phase / HSE mega-PRs** (4): #162 S wholesale — **two ideas rebuilt natively** (test
-  containment, minimum detectable effect); #182 S (canary premature, AGPL sidecar); #180 S;
-  #158 S
+- **Phase / HSE mega-PRs** (2): #162 S wholesale — **two ideas rebuilt natively** (test
+  containment, minimum detectable effect); #182 S (canary premature; AGPL entanglement)
+- **Prompt-section / MIPROv2 reconstructions** (2): #180 S (offline-only, no write-back), #158 S
+  (artifacts plus an ungated auto-deploy)
 - **Misc / infra** (4): #154 S (JSON-robustness half rebuilt without the proposed dependency),
   #160 S (stray committed run artifact), #166 S (surfaced a licensing question, not repo
   hygiene), #181 S
 - **Do not merge** (1): #157 X — see below
+
+Group counts: 11 + 2 + 1 + 3 + 2 + 2 + 4 + 1 = **26**, matching the ledger above.
