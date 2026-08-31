@@ -75,7 +75,8 @@ def _one_sided_alpha(confidence: float) -> float:
     sits beside: :func:`paired_bootstrap` returns a two-sided interval at
     ``confidence``, and the gate consumes only its *lower* bound — a one-sided
     decision at (1 - confidence) / 2. Hardcoding a two-sided 0.05 against a 0.90
-    interval would inflate the reported effect by roughly a fifth.
+    interval would inflate the reported effect by about 13% — the z-terms
+    differ by 19%, but the power term is common to both.
     """
     if not 0.0 < confidence < 1.0:
         raise ValueError(f"confidence must be in (0, 1); got {confidence}")
@@ -83,8 +84,7 @@ def _one_sided_alpha(confidence: float) -> float:
 
 
 def min_detectable_effect_paired(
-    n: int,
-    sd_diff: float,
+    diffs: list[float],
     *,
     confidence: float = 0.90,
     power: float = 0.80,
@@ -103,13 +103,24 @@ def min_detectable_effect_paired(
     Understating is the unsafe direction for a diagnostic whose entire purpose is
     admitting what the sample cannot see, so the caveat travels with the number.
 
-    ``ddof`` is recorded because it is not incidental: at n=8 the choice moves
-    ``sd_diff`` by about 7%, which is the same order as the effects being judged.
+    Takes the raw per-example differences rather than a precomputed spread, so
+    ``ddof`` genuinely applies: at n=8 the choice moves the spread by about 7%,
+    the same order as the effects being judged, and a recorded-but-unused knob
+    would let the payload misreport its own provenance.
+
+    Deliberately covers the continuous regime only. A paired-binary companion was
+    written and withdrawn: |p01 - p10| <= p01 + p10 is a hard algebraic bound, and
+    the normal approximation violates it whenever n * discordance < 6.18 — which
+    is this project's whole operating range. Doing it properly needs the Connor
+    form and real pass/fail counts rather than thresholded score differences.
     """
+    n = len(diffs)
     if n <= 1:
         raise ValueError(f"minimum detectable effect needs n > 1; got {n}")
-    if sd_diff < 0:
-        raise ValueError(f"sd_diff must be non-negative; got {sd_diff}")
+    if ddof >= n:
+        raise ValueError(f"ddof must be less than n; got ddof={ddof}, n={n}")
+    mean = sum(diffs) / n
+    sd_diff = math.sqrt(sum((d - mean) ** 2 for d in diffs) / (n - ddof))
     alpha = _one_sided_alpha(confidence)
     mde = (_z(1.0 - alpha) + _z(power)) * sd_diff / math.sqrt(n)
     return {
@@ -119,47 +130,6 @@ def min_detectable_effect_paired(
         "alpha_one_sided": alpha,
         "power": power,
         "ddof": ddof,
-        "method": "normal-approximation",
-        "is_lower_bound": True,
-    }
-
-
-def min_detectable_shift_paired_binary(
-    n: int,
-    *,
-    discordance_rate: float,
-    confidence: float = 0.90,
-    power: float = 0.80,
-) -> dict:
-    """Smallest shift in a paired pass-rate that ``n`` paired trials could detect.
-
-    Parameterised by the **discordance rate** — the share of pairs where the two
-    arms disagree — and not by the marginal pass rate. That is a correctness
-    point rather than a stylistic one: paired-binary power depends on how often
-    the arms differ, so two designs with identical ``n`` and identical marginal
-    rates have arbitrarily different power. Closed-loop pass counts are strongly
-    correlated by construction (same tasks, near-identical candidates), which is
-    exactly the regime where a marginal-rate model reads optimistic.
-
-    Like its continuous sibling this is a normal approximation and therefore a
-    lower bound on the true detectable shift.
-    """
-    if n <= 1:
-        raise ValueError(f"minimum detectable shift needs n > 1; got {n}")
-    if not 0.0 < discordance_rate <= 1.0:
-        raise ValueError(
-            f"discordance_rate must be in (0, 1]; got {discordance_rate}. It is the "
-            "fraction of pairs whose two arms disagree, not the pass rate."
-        )
-    alpha = _one_sided_alpha(confidence)
-    shift = (_z(1.0 - alpha) + _z(power)) * math.sqrt(discordance_rate / n)
-    return {
-        "mde": float(shift),
-        "n": n,
-        "discordance_rate": discordance_rate,
-        "expected_discordant_pairs": discordance_rate * n,
-        "alpha_one_sided": alpha,
-        "power": power,
         "method": "normal-approximation",
         "is_lower_bound": True,
     }
