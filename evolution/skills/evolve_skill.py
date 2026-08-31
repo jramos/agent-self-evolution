@@ -72,6 +72,10 @@ from evolution.core.saturation_telemetry import record_saturation_telemetry
 from evolution.core.skill_sources import discover_skill_sources
 from evolution.core.dataset_builder import SyntheticDatasetBuilder, EvalDataset, GoldenDatasetLoader
 from evolution.core.external_importers import build_dataset_from_external
+from evolution.core.power_report import (
+    format_power_line,
+    write_power_diagnostics,
+)
 from evolution.core.stats import paired_bootstrap
 from evolution.core.fitness import LLMJudge, make_skill_fitness_metric
 from evolution.core.constraints import (
@@ -1539,6 +1543,14 @@ def evolve(
                 n_resamples=config.bootstrap_n_resamples,
                 seed=config.seed,
             )
+            # Reported beside the decision, never fed into it: what this sample
+            # size could not have detected is context for reading the verdict.
+            _power = write_power_diagnostics(
+                output_dir, baseline_per_example, evolved_per_example,
+                confidence=config.bootstrap_confidence,
+            )
+            if _power is not None:
+                console.print(format_power_line(json.loads(_power.read_text())))
             if use_cl_primary:
                 # CL-primary path: skip the synthetic growth_quality_gate
                 # (it would always reject when synth is saturated and growth > 0).
