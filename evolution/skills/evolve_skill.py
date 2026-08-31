@@ -1548,7 +1548,14 @@ def evolve(
             power_path, power_payload = write_power_diagnostics(
                 output_dir, baseline_per_example, evolved_per_example,
                 confidence=config.bootstrap_confidence,
-                decision_rule="cl_constraint" if use_cl_primary else None,
+                # The resolved rule, not an assumption: the default
+                # no_regression_only rule passes on the mean alone and never
+                # consults the interval, so reporting its alpha would describe a
+                # rule that did not run.
+                decision_rule=(
+                    "cl_constraint" if use_cl_primary
+                    else resolve_decision_rule(config, growth_pct)
+                ),
             )
             if power_payload is not None:
                 console.print(format_power_line(power_payload))

@@ -38,6 +38,8 @@ def build_power_diagnostics(
     and reporting an alpha as though it governed those would describe a rule that
     never ran.
     """
+    # Checked before the emptiness short-circuit below, or a mismatched pair with
+    # an empty baseline would slip through while its mirror raises.
     if len(baseline_scores) != len(evolved_scores):
         raise ValueError(
             f"power diagnostics need paired arrays of equal length; got "
@@ -97,7 +99,14 @@ def format_power_line(payload: dict) -> str:
     if not cont:
         return "  power: too few examples to state a detectable effect"
     observed = payload.get("observed_mean_difference", 0.0)
-    if abs(observed) < cont["mde"]:
+    if cont["mde"] == 0.0 and observed == 0.0:
+        # Identical arms: no variation to power a test on, and no effect to detect.
+        # Strict "<" would render this as an effect *above* the detection floor.
+        return (
+            f"  power: n={cont['n']}, arms are identical — no variation between them, "
+            "so there is nothing to detect and nothing detected"
+        )
+    if abs(observed) <= cont["mde"]:
         verdict = "below it — this sample could not have shown an effect that small"
     elif observed < 0:
         verdict = "above it, but negative — a detectable regression"

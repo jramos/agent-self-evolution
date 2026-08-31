@@ -408,17 +408,17 @@ and we are 0 commits behind it, so waiting accrues no merge risk.
 - **2026-08-31** — **Minimum detectable effect** (from #162's statistics, rebuilt) **added**. A gate
   could certify a win, or enforce a regression floor, while its sample size was never capable of
   detecting the effect it claimed to police — the verdict said nothing about that, and neither did
-  the run's evidence. Two pure functions in `stats.py` now state the bound: one for the continuous
-  regime (judge scores) and one for the paired-binary regime (closed-loop pass counts), surfaced as
-  a `power_diagnostics.json` beside the decision plus a console line.
+  the run's evidence. One pure function in `stats.py` now states it, for the continuous regime
+  (judge scores), surfaced as a `power_diagnostics.json` beside the decision plus a console line.
+  A paired-binary companion was written and withdrawn before release (below).
   Three choices worth recording. α and sidedness are **derived from the bootstrap's own
   `confidence`** rather than hardcoded, because the gate consumes only the interval's lower bound —
   a one-sided decision; hardcoding a two-sided 0.05 against the default 0.90 interval would inflate
   the figure by about 13% (the z-terms differ by 19%, but the power term is common to both). The
-  binary version is parameterised by **discordance rate, not marginal pass rate** — paired power
+  withdrawn binary version had been parameterised by **discordance rate, not marginal pass rate** —
+  paired power
   depends on how often the arms disagree, and closed-loop pass counts are strongly correlated by
-  construction, exactly where a marginal model reads optimistic. And every figure is labelled a
-  **lower bound**: these use the normal approximation while the correct quantile at n of 8-20 comes
+  construction, exactly where a marginal model reads optimistic. And the figure claims **no bound**: these use the normal approximation while the correct quantile at n of 8-20 comes
   from a noncentral t and is larger, and understating is the unsafe direction for a diagnostic whose
   purpose is admitting what a sample cannot see.
   Diagnostics only — nothing reads them, and that is checked rather than asserted: a structural test
@@ -429,13 +429,24 @@ and we are 0 commits behind it, so waiting accrues no merge risk.
   approximation violates that bound whenever `n * discordance < 6.18` — this project's entire
   operating range. Both the worked example in the docs and a test described as hand-verified pinned
   an impossible number, because the hand check recomputed the same wrong formula instead of checking
-  the bound. Its lower-bound flag was wrong-signed as well (overstating by up to 60% at n=8 rather
+  the bound. Its lower-bound flag was wrong-signed as well (overstating by ~14% at n=8 rather
   than understating), and the discordance feeding it came from continuous judge differences, which
   are almost never exactly equal — so the rate drifted to 1.0 and the figure was `2.4865/√n`
   restated, carrying nothing about the run. Deferred with those reasons; doing it properly needs the
   Connor form and real pass/fail counts. The continuous half was verified against an exact
   noncentral-t computation, including the direction of its lower-bound claim (low by ~11% at n=8,
   ~5% at n=16).
+  A second review round caught the sharper version of the same mistake in the half that shipped.
+  The lower-bound direction had been verified against an exact paired **t-test** — but the gate does
+  not run one. `paired_bootstrap` returns a *percentile* interval whose spread is the divisor-n
+  resample sd with no t-correction, so rejecting on its lower bound is equivalent to requiring
+  `t > z * sqrt((n-1)/n)`: 1.5386 at n=8, against a nominal 1.6449. That rule is **anti-conservative**
+  (real one-sided error ≈0.08 where 0.05 is claimed), so its true detectable effect is *below* the
+  reported figure and `is_lower_bound: True` was wrong-signed for the decision it sat beside — the
+  very defect that got the binary regime withdrawn, surviving in the continuous half. The arithmetic
+  had been right and the conclusion wrong, because the number was checked against a test this
+  codebase never runs. The diagnostic now models the gate's own rule (reporting the effective
+  critical multiplier) and claims no bound in either direction.
   Two further corrections from the same review: `ddof` was recorded but never used while the caller
   hardcoded the spread — a knob that looked like a parameter and changed nothing, letting the
   payload misreport its own provenance — so the function now takes the raw differences; and the

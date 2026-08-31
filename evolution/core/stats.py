@@ -97,11 +97,20 @@ def min_detectable_effect_paired(
     claims to police; this states that bound explicitly instead of leaving it
     implicit in a passing verdict.
 
-    The figure is a **lower bound** on the true MDE, and says so in its result.
-    It uses the normal approximation, whereas the correct quantile at our
-    operating sizes (n of roughly 8-20) comes from a noncentral t and is larger.
-    Understating is the unsafe direction for a diagnostic whose entire purpose is
-    admitting what the sample cannot see, so the caveat travels with the number.
+    It models **the rule this gate actually runs**, which is not a textbook
+    t-test. ``paired_bootstrap`` returns a *percentile* interval whose spread is
+    the divisor-n resample sd with no t-correction, and the gate rejects on its
+    lower bound alone — equivalent to requiring ``t > z_{1-alpha} * sqrt((n-1)/n)``.
+    That threshold is below the nominal one, so the rule is anti-conservative at
+    small n (its real one-sided error rate is about 0.08 at n=8, against a nominal
+    0.05). Computing against the nominal quantile instead would describe a test
+    that is not being run, and would report a detectable effect larger than the
+    rule's own.
+
+    Still a normal approximation, so it is approximate in both directions and
+    claims no bound: against an exact paired t-test it understates by roughly 11%
+    at n=8, while the gate's own rule sits on the other side. ``method`` records
+    that rather than asserting a direction the number cannot support.
 
     Takes the raw per-example differences rather than a precomputed spread, so
     ``ddof`` genuinely applies: at n=8 the choice moves the spread by about 7%,
@@ -110,9 +119,13 @@ def min_detectable_effect_paired(
 
     Deliberately covers the continuous regime only. A paired-binary companion was
     written and withdrawn: |p01 - p10| <= p01 + p10 is a hard algebraic bound, and
-    the normal approximation violates it whenever n * discordance < 6.18 — which
-    is this project's whole operating range. Doing it properly needs the Connor
-    form and real pass/fail counts rather than thresholded score differences.
+    the normal approximation violates it whenever n * discordance < 6.18 — this
+    project's whole operating range. Note the obvious remedy does not work either:
+    Connor's sample-size form is itself a normal approximation and breaks the same
+    bound whenever the discordance falls below the squared effect, which covers
+    most of that range again. Doing it properly needs an exact conditional
+    binomial (exact McNemar) over real pass/fail counts, not thresholded score
+    differences.
     """
     n = len(diffs)
     if n <= 1:
@@ -122,14 +135,19 @@ def min_detectable_effect_paired(
     mean = sum(diffs) / n
     sd_diff = math.sqrt(sum((d - mean) ** 2 for d in diffs) / (n - ddof))
     alpha = _one_sided_alpha(confidence)
-    mde = (_z(1.0 - alpha) + _z(power)) * sd_diff / math.sqrt(n)
+    # The percentile interval's spread uses the divisor-n resample sd, so the
+    # gate's effective threshold is below the nominal quantile. Model that, not
+    # the textbook test.
+    critical = _z(1.0 - alpha) * math.sqrt((n - 1) / n)
+    mde = (critical + _z(power)) * sd_diff / math.sqrt(n)
     return {
         "mde": float(mde),
         "n": n,
         "sd_diff": float(sd_diff),
         "alpha_one_sided": alpha,
+        "critical_multiplier": float(critical),
         "power": power,
         "ddof": ddof,
         "method": "normal-approximation",
-        "is_lower_bound": True,
+        "models_rule": "paired-bootstrap percentile lower bound (the gate's own rule)",
     }
