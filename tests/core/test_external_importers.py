@@ -1614,15 +1614,36 @@ class TestRelevanceRanking:
             ("CATEGORIZE THIS", "categorize", self.SKILL_TEXT),            # case
             ("sort content by theme", "categorize", ""),                   # empty skill text
         ]
+        # Vocabulary deliberately spans the character classes the scorer's
+        # normalisation touches: case folding, the two punctuation strippers, and
+        # non-ASCII. A fuzz over lowercase ASCII alone leaves .lower() and both
+        # re.sub calls as no-ops on every case, so it cannot exercise them.
         vocab = [
-            "categorize", "content", "theme", "topics", "sort", "deploy",
-            "email", "test", "suite", "messages", "tim", "tdd", "the", "a",
+            "categorize", "Categorize", "CATEGORIZE", "content", "content,",
+            "theme.", "topics!", "sort", "deploy", "email", "test", "suite",
+            "messages", "tim", "tdd", "the", "a", "topic5", "42", "co-ntent",
+            "th_eme", "réview", "naïve", "日本語", "  ", "\ttabbed", "categorize's",
+        ]
+        # Varying skill_text matters: it drives the keyword set, the 500-char
+        # truncation boundary, and the len(word) > 4 filter.
+        long_text = ("alpha bravo charlie delta echo foxtrot golf hotel india " * 12)
+        skill_texts = [
+            self.SKILL_TEXT,
+            "",
+            "Sort.",
+            "TOPICS CONTENT THEME",
+            "content théme tópics naïve",
+            long_text,                      # straddles the 500-char slice
+            long_text[:498] + " zulu",      # keyword split across the boundary
         ]
         rng = _random.Random(1234)
         for _ in range(2000):
             text = " ".join(rng.choices(vocab, k=rng.randint(0, 8)))
-            name = rng.choice(["categorize", "tim-categorize", "tim_tdd", "sort", "x"])
-            cases.append((text, name, self.SKILL_TEXT))
+            name = rng.choice([
+                "categorize", "tim-categorize", "tim_tdd", "sort", "x",
+                "Fix-Python-Bugs", "", "   ", "sort content by theme", "日本語-skill",
+            ])
+            cases.append((text, name, rng.choice(skill_texts)))
 
         for text, name, skill_text in cases:
             assert bool(any(_relevance_score(text, name, skill_text))) == oracle(

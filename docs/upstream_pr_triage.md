@@ -262,12 +262,28 @@ and we are 0 commits behind it, so waiting accrues no merge risk.
   order and the seeded backfill is untouched. 6 new tests, including a 2000-case oracle
   comparison against a verbatim copy of the old predicate proving the qualifying set is
   unchanged; the pre-existing relevance tests were deliberately left unmodified as the
-  equivalence proof. Review of the first pass found that every ordering test used a
-  single-word skill name, which makes the middle tier indistinguishable from the top one —
-  so a weighted-sum implementation would have passed all of them. Added a multi-word-name
-  case where the tiers genuinely disagree, and confirmed by mutation (swapping the tuple for
-  a weighted sum) that the new tests fail and the others do not. 10 tests total. Full
-  non-slow suite green (1773 passed, +10), ruff clean. Note for future
+  equivalence surface (the boolean predicate now has no production callers and survives only
+  to keep that guarantee tested — noted in its docstring so it isn't mistaken for live code
+  or deleted). Review of the first pass found two things worth recording. First, every
+  ordering test used a single-word skill name, which makes the middle tier indistinguishable
+  from the top one, so a weighted-sum implementation would have passed all of them; added a
+  multi-word-name case where the tiers genuinely disagree and confirmed by mutation (swapping
+  the tuple for a weighted sum) that the new tests fail and the others do not. Second, the
+  equivalence fuzz was weaker evidence than claimed — its charset left case folding and both
+  punctuation strippers as no-ops on every case and never varied `skill_text`; widened to
+  span case, punctuation, non-ASCII and the 500-char truncation boundary, though score-tuple
+  diversity stays low, so it is an equivalence check over the normalisation paths rather than
+  a broad exploration of the score space. 10 tests total. Full non-slow suite green
+  (1773 passed, +10), ruff clean.
+  Two consequences to carry forward. Scoring every tier removed the old short-circuit, so the
+  keyword set is now built on the name-match path too; it is cached on `skill_text`, which
+  cuts that cost from ~90x the old predicate to ~3x (0.024s per 20k messages), negligible
+  ahead of a pipeline that then makes hundreds of LLM calls. And for the common single-word
+  skill name the top two tiers coincide, leaving keyword overlap as the only intra-tier
+  discriminator — a count that grows with message length, so eval-set composition now skews
+  toward more verbose messages. That replaces one arbitrary intra-tier order (import order)
+  with another, and is not obviously worse; normalising overlap by message length or capping
+  the tier would remove the skew, and is parked rather than tuned on intuition. Note for future
   cycles: eval sets drawn after this change differ from earlier ones in both composition and
   train/val/holdout assignment, so don't compare them naively across the boundary.
 

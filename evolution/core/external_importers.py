@@ -24,6 +24,7 @@ Usage from evolve_skill.py:
 
 import json
 import re
+from functools import lru_cache
 import random
 import sqlite3
 from pathlib import Path
@@ -118,6 +119,24 @@ def _validate_eval_example(
     }
 
 
+@lru_cache(maxsize=8)
+def _skill_keywords(skill_text: str) -> frozenset[str]:
+    """Vocabulary a message can overlap with, drawn from the skill's opening.
+
+    Cached because it depends only on ``skill_text`` while its caller runs once
+    per message. The previous boolean pre-filter short-circuited before building
+    this set whenever the skill name matched; scoring every tier removes that
+    escape, so without the cache a large corpus would rebuild an identical set
+    tens of thousands of times.
+    """
+    keywords = set()
+    for word in skill_text[:500].lower().split():
+        word = re.sub(r'[^a-z]', '', word)
+        if len(word) > 4:
+            keywords.add(word)
+    return frozenset(keywords)
+
+
 def _relevance_score(text: str, skill_name: str, skill_text: str) -> tuple[int, int, int]:
     """Graded relevance of a message to a skill, strongest signal first.
 
@@ -144,13 +163,8 @@ def _relevance_score(text: str, skill_name: str, skill_text: str) -> tuple[int, 
         if len(word) > 3 and word in text_lower
     )
 
-    skill_keywords = set()
-    for word in skill_text[:500].lower().split():
-        word = re.sub(r'[^a-z]', '', word)
-        if len(word) > 4:
-            skill_keywords.add(word)
-
     message_words = set(re.sub(r'[^a-z\s]', '', text_lower).split())
+    skill_keywords = _skill_keywords(skill_text)
     overlap = len(message_words & skill_keywords)
     # One overlapping keyword was never a match; awarding partial credit for it
     # would widen the qualifying set rather than reorder it.
@@ -160,11 +174,13 @@ def _relevance_score(text: str, skill_name: str, skill_text: str) -> tuple[int, 
 
 
 def _is_relevant_to_skill(text: str, skill_name: str, skill_text: str) -> bool:
-    """Quick heuristic check if a message might be relevant to a skill.
+    """Boolean view of :func:`_relevance_score`: does this message qualify at all?
 
-    Uses keyword overlap between the message and skill description/name.
-    This is a cheap pre-filter before the LLM does proper relevance scoring.
-    Returns True if the message shares enough vocabulary with the skill.
+    Has no production callers — :meth:`RelevanceFilter.filter_and_score` needs the
+    graded score for ordering. It is kept as the equivalence surface for the
+    pre-filter's original tests, which are what pin the guarantee that adding the
+    score changed only candidate *order* and never which messages qualify. Delete
+    it and that guarantee stops being tested.
     """
     return any(_relevance_score(text, skill_name, skill_text))
 
@@ -518,7 +534,7 @@ class RelevanceFilter:
     """Use LLM-as-judge to determine which messages are relevant to a skill.
 
     Two-stage pipeline:
-      1. Cheap heuristic pre-filter (_is_relevant_to_skill)
+      1. Cheap heuristic pre-filter, graded for ordering (_relevance_score)
       2. LLM scoring for final relevance + eval metadata generation
     """
 
