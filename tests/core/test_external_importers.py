@@ -1464,3 +1464,173 @@ class TestEvalExampleFormat:
             data = json.loads(f.readline())
 
         assert set(data.keys()) == {"task_input", "expected_behavior", "difficulty", "category", "source"}
+
+
+class TestRelevanceRanking:
+    """Candidate ordering must put the strongest matches ahead of the caps.
+
+    Two caps exist between the heuristic pre-filter and the produced eval set:
+    the ``max_examples * 3`` candidate truncation and the scoring loop's
+    ``len(examples) >= max_examples`` break. Both consume candidates in list
+    order, so ordering decides which messages ever reach the LLM scorer.
+    """
+
+    SKILL_NAME = "categorize"
+    SKILL_TEXT = "Sort text into topics. Categorize content by theme."
+
+    # Qualifies only via keyword overlap (>= 2 of topics/categorize/content/theme),
+    # and deliberately avoids the skill name so it cannot reach a higher tier.
+    WEAK = "arrange the content by theme please"
+    # Qualifies via the strongest signal: the full skill name as a substring.
+    STRONG = "categorize these messages for me"
+
+    @pytest.fixture
+    def mock_dspy(self):
+        with patch("evolution.core.external_importers.dspy") as mock:
+            mock.context.return_value.__enter__ = MagicMock(return_value=None)
+            mock.context.return_value.__exit__ = MagicMock(return_value=False)
+            yield mock
+
+    def _filter(self):
+        rf = RelevanceFilter.__new__(RelevanceFilter)
+        rf.model = "test-model"
+        rf.scorer = MagicMock()
+        rf.scorer.return_value = SimpleNamespace(
+            scoring='{"relevant": true, "expected_behavior": "b", "difficulty": "easy", "category": "c"}'
+        )
+        return rf
+
+    @staticmethod
+    def _msg(text):
+        return {"task_input": text, "source": "claude-code"}
+
+    def test_strongest_survives_the_candidate_cap(self, mock_dspy):
+        """A tier-A match past ``max_examples * 3`` must not be truncated away."""
+        rf = self._filter()
+        # 12 weak qualifiers overflow the cap of 9; the strong match is last.
+        messages = [self._msg(f"{self.WEAK} {i}") for i in range(12)]
+        messages.append(self._msg(self.STRONG))
+
+        examples = rf.filter_and_score(
+            messages, self.SKILL_NAME, self.SKILL_TEXT, max_examples=3
+        )
+
+        assert self.STRONG in {ex.task_input for ex in examples}
+
+    def test_strongest_survives_the_scoring_break(self, mock_dspy):
+        """Ordering also decides the output when the cap never engages.
+
+        Six qualifiers sit under the cap of 9, so truncation is not involved --
+        the scoring loop's early break alone excludes everything after the
+        first ``max_examples`` candidates.
+        """
+        rf = self._filter()
+        messages = [self._msg(f"{self.WEAK} {i}") for i in range(5)]
+        messages.append(self._msg(self.STRONG))
+
+        examples = rf.filter_and_score(
+            messages, self.SKILL_NAME, self.SKILL_TEXT, max_examples=3
+        )
+
+        assert self.STRONG in {ex.task_input for ex in examples}
+
+    def test_scoring_order_is_strongest_first(self, mock_dspy):
+        """The scorer sees candidates strongest-first, backfill last."""
+        rf = self._filter()
+        messages = [
+            self._msg(self.WEAK),
+            self._msg("deploy the app to production"),  # non-matching -> backfill
+            self._msg(self.STRONG),
+        ]
+
+        rf.filter_and_score(messages, self.SKILL_NAME, self.SKILL_TEXT, max_examples=10)
+
+        scored = [c.kwargs["user_message"] for c in rf.scorer.call_args_list]
+        assert scored.index(self.STRONG) < scored.index(self.WEAK), (
+            "tier-A match must be scored before a keyword-overlap-only match"
+        )
+        assert scored.index(self.WEAK) < scored.index("deploy the app to production"), (
+            "every qualifier must be scored before any backfilled message"
+        )
+
+    def test_scoring_order_is_deterministic(self, mock_dspy):
+        """Same input, same order -- ties must not introduce nondeterminism."""
+        messages = [self._msg(f"{self.WEAK} {i}") for i in range(6)]
+        messages.append(self._msg(self.STRONG))
+
+        orders = []
+        for _ in range(2):
+            rf = self._filter()
+            rf.filter_and_score(
+                messages, self.SKILL_NAME, self.SKILL_TEXT, max_examples=10
+            )
+            orders.append([c.kwargs["user_message"] for c in rf.scorer.call_args_list])
+
+        assert orders[0] == orders[1]
+
+    def test_score_preserves_the_qualifying_set(self):
+        """``_relevance_score`` must qualify exactly what the predicate did.
+
+        The score exists to *order* candidates, never to widen or narrow which
+        ones qualify. This oracle is a verbatim copy of the boolean predicate;
+        any disagreement means the change altered eval-set membership.
+        """
+        import random as _random
+        import re as _re
+
+        from evolution.core.external_importers import _relevance_score
+
+        def oracle(text, skill_name, skill_text):
+            text_lower = text.lower()
+            skill_lower = skill_name.lower().replace("-", " ").replace("_", " ")
+            if skill_lower in text_lower:
+                return True
+            for word in skill_lower.split():
+                if len(word) > 3 and word in text_lower:
+                    return True
+            skill_keywords = set()
+            for word in skill_text[:500].lower().split():
+                word = _re.sub(r"[^a-z]", "", word)
+                if len(word) > 4:
+                    skill_keywords.add(word)
+            message_words = set(_re.sub(r"[^a-z\s]", "", text_lower).split())
+            return len(message_words & skill_keywords) >= 2
+
+        cases = [
+            # Edges that have bitten this predicate before.
+            ("", "categorize", self.SKILL_TEXT),
+            ("anything at all", "", self.SKILL_TEXT),          # "" is in every string
+            ("anything at all", "   ", self.SKILL_TEXT),
+            ("run the test suite", "tim-tdd", "Test driven development"),  # <=3-char words
+            ("send an email to the team", "categorize", self.SKILL_TEXT),  # overlap == 1
+            ("CATEGORIZE THIS", "categorize", self.SKILL_TEXT),            # case
+            ("sort content by theme", "categorize", ""),                   # empty skill text
+        ]
+        vocab = [
+            "categorize", "content", "theme", "topics", "sort", "deploy",
+            "email", "test", "suite", "messages", "tim", "tdd", "the", "a",
+        ]
+        rng = _random.Random(1234)
+        for _ in range(2000):
+            text = " ".join(rng.choices(vocab, k=rng.randint(0, 8)))
+            name = rng.choice(["categorize", "tim-categorize", "tim_tdd", "sort", "x"])
+            cases.append((text, name, self.SKILL_TEXT))
+
+        for text, name, skill_text in cases:
+            assert bool(any(_relevance_score(text, name, skill_text))) == oracle(
+                text, name, skill_text
+            ), f"qualifying set changed for {text!r} / {name!r}"
+
+    def test_single_keyword_overlap_scores_zero(self):
+        """Overlap of exactly 1 must contribute nothing.
+
+        The predicate requires >= 2 overlapping keywords. Awarding partial
+        credit for a single overlap would silently widen the qualifying set,
+        which is the one way this change could alter behavior.
+        """
+        from evolution.core.external_importers import _relevance_score
+
+        score = _relevance_score(
+            "send an email to the team", self.SKILL_NAME, self.SKILL_TEXT
+        )
+        assert not any(score), f"expected an all-zero score, got {score}"

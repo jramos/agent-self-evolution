@@ -118,23 +118,30 @@ def _validate_eval_example(
     }
 
 
-def _is_relevant_to_skill(text: str, skill_name: str, skill_text: str) -> bool:
-    """Quick heuristic check if a message might be relevant to a skill.
+def _relevance_score(text: str, skill_name: str, skill_text: str) -> tuple[int, int, int]:
+    """Graded relevance of a message to a skill, strongest signal first.
 
-    Uses keyword overlap between the message and skill description/name.
-    This is a cheap pre-filter before the LLM does proper relevance scoring.
-    Returns True if the message shares enough vocabulary with the skill.
+    Returns ``(name_match, name_words, keyword_overlap)`` so candidates sort
+    lexicographically by signal tier. A tuple rather than a weighted sum,
+    because ``skill_name`` is caller-supplied and unbounded in length: no fixed
+    set of weights can stop a long name's word count from outranking a
+    full-name match.
+
+    An all-zero tuple means "not relevant". The tiers reproduce the conditions
+    of the original boolean pre-filter exactly — including requiring at least two
+    overlapping keywords — so scoring changes only the *order* of candidates,
+    never which ones qualify.
     """
     text_lower = text.lower()
     skill_lower = skill_name.lower().replace("-", " ").replace("_", " ")
 
-    if skill_lower in text_lower:
-        return True
+    name_match = 1 if skill_lower in text_lower else 0
 
     # Words ≤ 3 chars are skipped to avoid matching "run", "use", etc.
-    for word in skill_lower.split():
-        if len(word) > 3 and word in text_lower:
-            return True
+    name_words = sum(
+        1 for word in skill_lower.split()
+        if len(word) > 3 and word in text_lower
+    )
 
     skill_keywords = set()
     for word in skill_text[:500].lower().split():
@@ -143,8 +150,22 @@ def _is_relevant_to_skill(text: str, skill_name: str, skill_text: str) -> bool:
             skill_keywords.add(word)
 
     message_words = set(re.sub(r'[^a-z\s]', '', text_lower).split())
-    overlap = message_words & skill_keywords
-    return len(overlap) >= 2
+    overlap = len(message_words & skill_keywords)
+    # One overlapping keyword was never a match; awarding partial credit for it
+    # would widen the qualifying set rather than reorder it.
+    keyword_overlap = overlap if overlap >= 2 else 0
+
+    return (name_match, name_words, keyword_overlap)
+
+
+def _is_relevant_to_skill(text: str, skill_name: str, skill_text: str) -> bool:
+    """Quick heuristic check if a message might be relevant to a skill.
+
+    Uses keyword overlap between the message and skill description/name.
+    This is a cheap pre-filter before the LLM does proper relevance scoring.
+    Returns True if the message shares enough vocabulary with the skill.
+    """
+    return any(_relevance_score(text, skill_name, skill_text))
 
 
 class ClaudeCodeImporter:
@@ -546,9 +567,20 @@ class RelevanceFilter:
 
         messages = [m for m in messages if m.get("task_input") and m.get("source")]
 
+        # Strongest first. Both caps below — the max_examples * 3 truncation and
+        # the scoring loop's early break — consume this list in order, so its
+        # ordering decides which messages ever reach the LLM scorer. sorted() is
+        # stable, so equally-scored messages keep their import order.
+        scored = [
+            (_relevance_score(m["task_input"], skill_name, skill_text), m)
+            for m in messages
+        ]
         candidates = [
-            m for m in messages
-            if _is_relevant_to_skill(m["task_input"], skill_name, skill_text)
+            m for _, m in sorted(
+                (pair for pair in scored if any(pair[0])),
+                key=lambda pair: pair[0],
+                reverse=True,
+            )
         ]
 
         # Backfill from random non-matching messages so the LLM sees a useful
