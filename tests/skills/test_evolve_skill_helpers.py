@@ -227,7 +227,8 @@ class TestBuildOptimizerAndCompile:
             def __init__(self, *, metric, **kwargs):
                 captured_metric["fn"] = metric
 
-            def compile(self, baseline_module, *, trainset):
+            def compile(self, baseline_module, *, trainset, **kwargs):
+                # **kwargs: the runner now forwards the held-out valset too.
                 # MIPROv2 calls the metric with a (gold, pred, ...) tuple
                 # and expects a float; verify the wrapper produces one.
                 fake_pred = type("P", (), {"output": "x"})()

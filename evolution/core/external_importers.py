@@ -209,7 +209,11 @@ class ClaudeCodeImporter:
             return []
 
         messages = []
-        with open(ClaudeCodeImporter.HISTORY_PATH) as f:
+        # errors="replace": decoding happens as lines are iterated, outside the
+        # per-line json guard below, so one bad byte sequence would otherwise
+        # abort the whole history read. This log is long-lived and the likelier
+        # of the two session sources to be mixed-encoding.
+        with open(ClaudeCodeImporter.HISTORY_PATH, errors="replace") as f:
             for line in f:
                 if not line.strip():
                     continue
@@ -519,7 +523,9 @@ def iter_hermes_sessions():
     for session_file in session_files:
         try:
             data = json.loads(session_file.read_text())
-        except (json.JSONDecodeError, OSError):
+        except (UnicodeDecodeError, json.JSONDecodeError, OSError):
+            # UnicodeDecodeError derives from ValueError, not OSError, so a stray
+            # non-UTF8 file used to crash the importer rather than being skipped.
             continue
 
         msg_list = data.get("messages", [])

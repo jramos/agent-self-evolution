@@ -362,6 +362,7 @@ def _default_mipro_runner(
     trainset: list,
     metric,
     seed: int,
+    valset: list | None = None,
 ):
     # MIPROv2 expects float-returning metrics; the GEPA-shaped one returns
     # dspy.Prediction(score, feedback).
@@ -375,7 +376,10 @@ def _default_mipro_runner(
         init_temperature=0.5,
         seed=seed,
     )
-    return optimizer.compile(baseline_module, trainset=trainset)
+    # `or None` on purpose: MIPROv2 raises on a non-None empty valset, and this
+    # is the path that exists to survive a GEPA failure — turning it into a crash
+    # would remove the rescue. An empty split falls back to the optimizer's own.
+    return optimizer.compile(baseline_module, trainset=trainset, valset=valset or None)
 
 
 def _print_fallback_banner(exc: Exception, failure_log_path: Optional[Path]) -> None:
@@ -456,6 +460,7 @@ def _build_optimizer_and_compile(
                 trainset=trainset,
                 metric=metric,
                 seed=seed,
+                valset=valset,
             )
             return optimized, "MIPROv2"
         except ImportError as ie:
