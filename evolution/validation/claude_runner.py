@@ -46,6 +46,7 @@ from evolution.core.sandbox import (  # noqa: F401 — re-exported at its histor
     SandboxUnavailableError,
     macos_write_sandbox_profile as _macos_write_sandbox_profile,
     sandbox_available,
+    wrap_argv,
 )
 from evolution.validation.agent_runner import AgentRunResult, TaskRunContext
 
@@ -188,8 +189,14 @@ class ClaudeCodeAgentRunner:
         Returns the argv to exec. Raises SandboxUnavailableError when no OS sandbox
         is available and ``require_sandbox`` is set — refusing to run an unconfined
         agent rather than silently escaping (the prior failure mode)."""
-        if sandbox_available():
-            return ["sandbox-exec", "-p", _macos_write_sandbox_profile(write_roots), *claude_argv]
+        # Through the shared wrapper rather than a second copy of the same
+        # three-way branch: two implementations of "is confinement available"
+        # would be free to drift apart, which is the failure this module's own
+        # posture threading exists to prevent. The policy and the message stay
+        # here, because refusing is this caller's choice, not the wrapper's.
+        argv, sandboxed = wrap_argv(claude_argv, write_roots=write_roots, require=False)
+        if sandboxed:
+            return argv
         if self.require_sandbox:
             raise SandboxUnavailableError(
                 "No OS filesystem sandbox available on this platform "

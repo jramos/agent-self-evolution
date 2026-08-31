@@ -310,8 +310,24 @@ and we are 0 commits behind it, so waiting accrues no merge risk.
   design flaw the tests caught: the wrapper re-derived availability per call, so the posture we
   *recorded* and the posture we *applied* were independent judgements; the resolved value is now
   threaded through. 18 tests, including a real denied-write proof on macOS and a negative control
-  that genuine pytest exit codes still return results. Full non-slow suite green (1781 passed,
-  +18), ruff clean.
+  that genuine pytest exit codes still return results.
+  A second pass hardened the result further. The fuzz driver in the gaming audit executed the
+  candidate through its own subprocess, so the flag promised confinement the harness's primary
+  execution did not give — every in-worktree execution now goes through one `confine()` seam.
+  Signal deaths (negative exit codes) were being misdiagnosed as containment failures, which on
+  macOS alone would have dropped OOM-killed organisms from the campaign denominator; only
+  positive non-pytest codes escalate now. Write roots are resolved before interpolation, since
+  the kernel matches canonical paths and `mkdtemp` returns the uncanonical form — the named root
+  was granting nothing. Paths containing quote, paren or backslash are rejected outright rather
+  than interpolated, because SBPL cannot escape them and a crafted path could otherwise append
+  allow rules of its own. Containment failures now raise a distinct `ContainmentError` so the
+  campaign's skip handler cannot absorb a systemic failure as a fleet of skipped organisms, and
+  each entry point checks the policy once at startup rather than discovering it per candidate
+  (which also closed a tempdir leak per refusal). The posture is recorded for the campaign as
+  well as the single-tool evolver, and surfaced in the human-review PR body, where it had been
+  computed and then dropped. Also corrected there: the regression-floor line read a key that does
+  not exist, so every PR body claimed the floor FAILED — including runs that deployed because it
+  was green. 31 tests, full non-slow suite green (1794 passed, +31), ruff clean.
 
 ## Action items (open)
 

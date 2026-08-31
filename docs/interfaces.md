@@ -270,7 +270,10 @@ Repairs one broken tool from a failing test in a throwaway worktree, behind the 
 - `--min-retain-ratio <f>` — reject a rewrite shrinking below this fraction (default 0.8).
 - `--benchmark-cmd <cmd>` — full-suite floor run once at deploy (receives `WORKTREE_PATH`, `EVOLVED_PATH`, `RUN_DIR`, `TARGET_NAME`, `ARTIFACT_TYPE`).
 - `--create-pr` / `--pr-base-branch` / `--pr-draft` — open an opt-in **draft** human-review PR on deploy (never auto-merges).
+- `--require-sandbox` / `--allow-unconfined` — refuse to run tests unless the OS can confine writes to the run dir (default: allow). Also on `campaign` and the gaming audit.
 - `--output-dir <path>` — default `output/code/<tool-stem>/<timestamp>`.
+
+**Test-execution containment.** Tests run against LLM-modified source, so where the platform supports it (macOS `sandbox-exec`) their writes are confined to the run dir and the OS temp roots — enough to keep candidate code out of your checkout and home dir, not isolation (reads and network are unrestricted). Elsewhere runs proceed unconfined and say so: the posture lands in `repair_trace.json` and in `campaign_report.json`. `--require-sandbox` turns an unavailable sandbox into a startup refusal instead. A confined run that exits with a non-pytest status is reported as a containment failure rather than a test result, so a sandbox that fails to start can never read as "no failures".
 
 Outputs `gate_decision.json` + `repair_trace.json` (rounds + final diff). **Measurement campaign:** `python -m evolution.code.campaign --repo <r> --max-organisms N [--seeds 3] [--max-cost-usd C]` harvests organisms and runs the loop at scale with a Wilson futility-stop, writing `campaign_ledger.jsonl` + `campaign_report.json`.
 

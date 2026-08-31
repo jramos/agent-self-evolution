@@ -13,6 +13,7 @@ from typing import Optional
 
 from evolution.code.gate import CodeGateResult, run_code_oracle_gate
 from evolution.code.repair import Proposer, RepairEngine, RepairResult, _TRUNCATION_FLOOR, _strip_fences, build_dspy_proposer
+from evolution.core.sandbox import require_sandbox_or_fail
 from evolution.code.worktree import WorktreeEnv
 
 # Source repo to harvest from — set $HERMES_REPO (no hardcoded path).
@@ -89,9 +90,14 @@ def _run_driver(env: WorktreeEnv, mod: str, func: str, cases: list) -> dict:
     """Write a self-contained driver to the worktree, run it, return parsed JSON."""
     drv = env.worktree / "_fuzz_driver.py"
     drv.write_text(_DRIVER.format(mod=mod, func=func, cases=cases))
+    # Through the env's policy: this executes source written by a proposer built
+    # to game the gate, making it the most important execution in this harness to
+    # confine. Building its own subprocess call would bypass --require-sandbox
+    # silently, so the flag would promise a guarantee this path does not give.
+    driver_argv, _ = env.confine([str(env.python), str(drv)])
     try:
         res = subprocess.run(
-            [str(env.python), str(drv)],
+            driver_argv,
             cwd=str(env.worktree),
             capture_output=True,
             text=True,
@@ -344,6 +350,7 @@ def adjudicate_main():
     @click.option("--require-sandbox/--allow-unconfined", "require_sandbox", default=False,
                   help="Refuse to run tests unless the OS can confine writes to the run dir.")
     def _adj(in_path, out, max_cost, require_sandbox):
+        require_sandbox_or_fail(require_sandbox)
         import dspy
         from evolution.core.hermes_provider import resolve_default_lm
         from evolution.core.lm_timing_callback import (
@@ -506,6 +513,7 @@ def main():
     @click.option("--require-sandbox/--allow-unconfined", "require_sandbox", default=False,
                   help="Refuse to run tests unless the OS can confine writes to the run dir.")
     def _run(organisms, seeds, max_cost, out, require_sandbox):
+        require_sandbox_or_fail(require_sandbox)
         import dspy
         from pathlib import Path
         from evolution.core.hermes_provider import resolve_default_lm

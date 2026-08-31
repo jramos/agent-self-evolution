@@ -31,7 +31,8 @@ from evolution.code.harvest import (
     stratify,
 )
 from evolution.code.repair import RepairEngine, build_dspy_proposer
-from evolution.code.worktree import WorktreeEnv, WorktreeError, prune_orphan_worktrees
+from evolution.core.sandbox import require_sandbox_or_fail, sandbox_available
+from evolution.code.worktree import ContainmentError, WorktreeEnv, WorktreeError, prune_orphan_worktrees
 from evolution.core.hermes_provider import resolve_default_lm
 
 console = Console()
@@ -81,6 +82,11 @@ def run_organism(
     try:
         env = WorktreeEnv.create(repo, base_ref=c.fix_sha, base_python=base_python,
                                  require_sandbox=require_sandbox)
+    except ContainmentError:
+        # Systemic, not this organism's: a broken profile fails every run, and
+        # absorbing it as a skip would grind through the whole candidate list
+        # reporting "worktree_failed" for a cause unrelated to worktrees.
+        raise
     except WorktreeError:
         return Skip("worktree_failed")
     try:
@@ -102,6 +108,8 @@ def run_organism(
             )
             seed_results.append(bool(gate.deploy))
         return OrganismResult(tool=c.tool_path, fix_sha=c.fix_sha, seeds=seed_results)
+    except ContainmentError:
+        raise  # systemic; see the create-time handler above
     except WorktreeError:
         return Skip("worktree_failed")
     finally:
@@ -133,6 +141,7 @@ def run_campaign(
     orchestration (ledger, resume, futility, stratification) without LM spend or
     worktrees; in production both default to the real harvest + repair+gate path.
     """
+    require_sandbox_or_fail(require_sandbox)
     from evolution.core.lm_timing_callback import (  # noqa: PLC0415
         COST_LEDGER,
         CostCeilingExceeded,
@@ -227,6 +236,14 @@ def run_campaign(
                 break
 
     report = build_report(organisms)
+    # Recorded per run, not per organism: confinement is a property of the machine.
+    # Without it the campaign that produces the published number leaves no trace of
+    # whether it ran confined.
+    report["containment"] = {
+        "sandboxed": sandbox_available(),
+        "mechanism": "sandbox-exec" if sandbox_available() else None,
+        "required": require_sandbox,
+    }
     report["aborted_on_cost"] = aborted
     report["cost_summary"] = cost_summary()
     (output_dir / "campaign_report.json").write_text(json.dumps(report, indent=2))

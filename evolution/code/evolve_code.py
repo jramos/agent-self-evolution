@@ -24,6 +24,7 @@ from rich.console import Console
 from evolution.code.gate import DEFAULT_FLOOR_PATHS, run_code_gate
 from evolution.code.repair import RepairEngine, build_dspy_proposer
 from evolution.code.trace import build_repair_trace, containment_of, write_repair_trace
+from evolution.core.sandbox import require_sandbox_or_fail
 from evolution.code.worktree import WorktreeEnv, WorktreeError
 from evolution.core.hermes_provider import resolve_default_lm
 from evolution.core.pr_automation import create_pr
@@ -53,9 +54,26 @@ def _format_pr_body(decision: dict, trace: dict) -> str:
         f"- Surface freeze: **{'clean' if g.get('freeze_ok') else 'VIOLATED'}** "
         f"(no public signature/name/schema drift)",
         f"- File scope: only `{decision.get('target_tool')}` changed, no test files touched",
-        f"- Regression floor `{g.get('floor', {}).get('ran')}`: "
-        f"**{'green' if g.get('floor', {}).get('passed') else 'FAILED'}**",
     ]
+    # guards["floor"] has no "passed" key (see gate.py) and is None outright for an
+    # oracle decision, so reading .get("passed") rendered FAILED on every run and
+    # raised on oracle runs. Judge it by whether new failures appeared.
+    floor = g.get("floor") or {}
+    if floor:
+        lines.append(
+            f"- Regression floor `{floor.get('ran')}`: "
+            f"**{'green' if not floor.get('new_failures') else 'FAILED'}**"
+        )
+    containment = trace.get("containment")
+    if containment is not None:
+        confined = containment.get("sandboxed")
+        lines.append(
+            f"- Test execution: **{'OS-confined' if confined else 'UNCONFINED'}** "
+            f"({containment.get('mechanism') or containment.get('platform')}) — "
+            "confinement denies writes outside the run dir and temp; it does not "
+            "restrict reads or network"
+        )
+
     full = decision.get("full_suite")
     if isinstance(full, dict):
         lines.append(
@@ -151,6 +169,7 @@ def main(
     pr_draft: bool,
     pr_label: str,
 ) -> None:
+    require_sandbox_or_fail(require_sandbox)
     logging.basicConfig(level=logging.INFO,
                         format="%(asctime)s %(levelname)s %(name)s: %(message)s",
                         datefmt="%Y/%m/%d %H:%M:%S")
