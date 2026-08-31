@@ -138,6 +138,15 @@ _PYTEST_EXIT_CODES = frozenset(range(6))
 console = Console()
 
 
+class NonAuthoritativeRunError(WorktreeError):
+    """A pytest run that cannot answer "what failed?".
+
+    Distinct so callers can classify it honestly: an inconclusive run is not a
+    worktree setup problem, and recording it as one would put the wrong cause in
+    the campaign ledger for a candidate that simply could not be measured.
+    """
+
+
 class ContainmentError(WorktreeError):
     """The OS sandbox, not the test run, determined the outcome.
 
@@ -471,9 +480,29 @@ class WorktreeEnv:
 
     def failing_tests(self, *test_paths: str, timeout: int = _DEFAULT_TEST_TIMEOUT) -> set[str]:
         """Failing/erroring pytest node-ids for ``test_paths`` — the seam the oracle
-        gate uses so it never re-implements parsing (SWEbenchEnv overrides it)."""
+        gate uses so it never re-implements parsing (SWEbenchEnv overrides it).
+
+        Raises when the run did not produce an authoritative answer. This matters
+        because the parser returns an empty set for any output it does not
+        recognise, and an empty set reads as "nothing failed": a timed-out, killed,
+        or uncollectable run would otherwise certify a repair it never exercised.
+        Only exit 0 (all passed), 1 (ran, some failed) and 5 (nothing collected)
+        make a complete statement about what failed. 5 stays authoritative because
+        callers already reason about "no tests collected" explicitly; excluding it
+        here would change how the harvester classifies candidates rather than how
+        the gate scores them.
+
+        Mirrors the SWE-bench env, which treats an id it cannot account for as
+        failing so it cannot certify as fixed.
+        """
         from evolution.code.gate import _parse_pytest_failures  # noqa: PLC0415
         run = self.run_test(*test_paths, extra_args=["--tb=no"], full_output=True, timeout=timeout)
+        if run.exit_code not in (0, 1, 5):
+            raise NonAuthoritativeRunError(
+                f"pytest on {list(test_paths)} exited {run.exit_code}, so its failing-test "
+                f"set is not authoritative and must not be scored — an empty set here "
+                f"would read as 'nothing failed': {run.output[-500:]}"
+            )
         return _parse_pytest_failures(run.output)
 
     # -- teardown ----------------------------------------------------------

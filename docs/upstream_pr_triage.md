@@ -329,6 +329,32 @@ and we are 0 commits behind it, so waiting accrues no merge risk.
   not exist, so every PR body claimed the floor FAILED — including runs that deployed because it
   was green. 31 tests, full non-slow suite green (1794 passed, +31), ruff clean.
 
+- **2026-08-31** — **Gate integrity: a pytest run that could not answer was scored as "nothing
+  failed"** (found while reviewing the containment change; not an upstream item). `failing_tests`
+  discarded the run's exit code and returned whatever the failure parser produced, and that parser
+  yields an **empty set** for any output it does not recognise. `run_code_oracle_gate` consumes
+  only that seam, so an empty set read as "nothing failed". Demonstrated against the real gate with
+  a deliberately wrong repair: a **timed-out** run, a **usage-error (exit 4)** run whose
+  `ERROR: not found:` line the parser does not match, and a **signal-killed** run each returned
+  `decision='correct', deploy=True`. The timeout path is the most reachable of the three — the
+  oracle scope runs the whole fix-commit test file while `fixed` was established on narrow bug
+  tests, so an LLM-introduced hang or complexity blowup in a sibling path lands exactly here, and
+  an introduced infinite loop is among the commonest repair defects.
+  Fixed by making the seam refuse: only exit 0, 1 and 5 make a complete statement about what
+  failed, and anything else raises rather than returning a set. Exit 5 stays authoritative because
+  callers already reason about "no tests collected" explicitly. `harvest._failures` turned out to
+  re-parse the output itself rather than use the seam, so the campaign's own bug-test computation
+  bypassed the check entirely — it now delegates, which removes the duplicate parse as well. The
+  refusal has its own type so the campaign ledger records `run_inconclusive` instead of blaming
+  worktree setup for a candidate that simply could not be measured. Mirrors what the SWE-bench env
+  already did: an id it cannot account for is treated as failing so it cannot certify as fixed.
+  9 tests, full non-slow suite green (1803 passed, +9), ruff clean.
+  **Caveat on earlier numbers:** campaign runs produced before this fix could contain false
+  `correct` verdicts from non-authoritative pytest runs, so historical deploy-reachable figures
+  carry an unquantified upward bias — and one biased toward harder bugs, since hangs and kills
+  correlate with the repairs most likely to be wrong. Not re-run; recorded so the figures are read
+  with that caveat.
+
 ## Action items (open)
 
 Disposition lens: against our diverged tree, these are "rebuild the idea/mechanism
@@ -348,6 +374,7 @@ ourselves," never "merge the PR" — we do not apply upstream diffs. Our-code an
 | #162 (partial) | **Confine code-evolution test execution** and record the containment posture | `WorktreeEnv.run_test` executes pytest against an LLM-modified worktree through a bare subprocess, while the agent runner refuses to run unconfined at all — an asymmetry in our own doctrine. The adversarial gaming harness runs through the same path. | `evolution/code/worktree.py` (`run_test`), `evolution/validation/claude_runner.py` (the existing profile), `evolution/code/gate.py` (failure parsing) | **DONE** — shared `evolution/core/sandbox.py` (profile + availability + `wrap_argv`); `run_test` confines writes to the run root, records the posture in `repair_trace.json`, and raises rather than returning a non-pytest exit code from a confined run; `--require-sandbox` on all three LLM-loop entry points — see review log, 2026-08-31 | ✅ |
 | #162 (partial), #136 | **Minimum detectable effect** as a gate-adjacent diagnostic | A gate can certify a win, or enforce a regression floor, without ever stating that its sample size could not detect the effect it claims to police. Absorbs the parked exact-test item. | `evolution/core/stats.py` (currently `paired_bootstrap` only) | **REBUILD** — MDE for the continuous and paired-binary regimes, diagnostic only, deploy decisions provably unchanged; exact paired tests deferred rather than shipped with unpinned conventions | ⬜ |
 | #154, #179 | **Importer and dataset-builder hardening** — malformed JSON raises our own error; non-UTF8 session files are skipped instead of crashing the importer | Two sites extract a JSON substring and then parse it unguarded, so a bracketed-but-malformed payload escapes as a raw decode error. Separately, `UnicodeDecodeError` is uncaught where legacy session files and the Claude Code history log are decoded — and the history log is the likelier of the two to be mixed-encoding. | `evolution/core/dataset_builder.py`, `evolution/core/external_importers.py` | **REBUILD** — guard both parse sites (including a shape check, since valid JSON of the wrong type escapes just as badly) and widen both decode guards; no new dependency, declining the proposed JSON-repair library | ⬜ |
+| — (found in review) | **Authoritative failure sets** — a pytest run that could not answer must not be scored as "nothing failed" | `failing_tests` discarded the exit code, and the failure parser returns an empty set on unrecognised output, so a timed-out, killed or uncollectable run certified a wrong repair as `correct` through the oracle gate. Demonstrated against the real gate. | `evolution/code/worktree.py` (`failing_tests`), `evolution/code/harvest.py` (`_failures`), `evolution/code/gate.py` (the parser) | **DONE** — the seam refuses non-authoritative runs (only exit 0/1/5 answer); `harvest._failures` delegates instead of re-parsing; a distinct error type keeps the campaign ledger honest — see review log, 2026-08-31 | ✅ |
 | #174 (partial) | **MIPROv2 fallback receives the held-out valset** | The fallback optimizer compiles without `valset` while the primary path passes it, so a fallback run loses its held-out set for internal candidate selection. Narrow: deploy integrity is unaffected, since the deploy gate runs its own held-out behavioral validation downstream. | `evolution/skills/evolve_skill.py` (`_default_mipro_runner`) | **REBUILD** — pass the existing named val split through, guarding the empty case (the optimizer rejects a non-None empty valset). Threading `num_trials` stays excluded: the optimizer treats it as mutually exclusive with the `auto` preset. | ⬜ |
 
 ## Optional / low-value (parked)

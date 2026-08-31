@@ -32,7 +32,13 @@ from evolution.code.harvest import (
 )
 from evolution.code.repair import RepairEngine, build_dspy_proposer
 from evolution.core.sandbox import require_sandbox_or_fail, sandbox_available
-from evolution.code.worktree import ContainmentError, WorktreeEnv, WorktreeError, prune_orphan_worktrees
+from evolution.code.worktree import (
+    ContainmentError,
+    NonAuthoritativeRunError,
+    WorktreeEnv,
+    WorktreeError,
+    prune_orphan_worktrees,
+)
 from evolution.core.hermes_provider import resolve_default_lm
 
 console = Console()
@@ -110,6 +116,10 @@ def run_organism(
         return OrganismResult(tool=c.tool_path, fix_sha=c.fix_sha, seeds=seed_results)
     except ContainmentError:
         raise  # systemic; see the create-time handler above
+    except NonAuthoritativeRunError:
+        # The candidate could not be measured (hang, kill, uncollectable tests).
+        # Its own reason, so the ledger does not blame worktree setup for it.
+        return Skip("run_inconclusive")
     except WorktreeError:
         return Skip("worktree_failed")
     finally:

@@ -19,7 +19,6 @@ import subprocess
 from dataclasses import dataclass
 from pathlib import Path
 
-from evolution.code.gate import _parse_pytest_failures
 from evolution.code.worktree import WorktreeEnv, WorktreeError
 
 _GIT_TIMEOUT = 120
@@ -149,9 +148,15 @@ def stratify(candidates: list[Candidate], *, max_per_tool: int | None = 3) -> li
 
 
 def _failures(env: WorktreeEnv, test_relpath: str) -> set[str]:
-    """Node-ids that fail when running the whole test file in the worktree."""
-    run = env.run_test(test_relpath, extra_args=["--tb=no"], full_output=True)
-    return _parse_pytest_failures(run.output)
+    """Node-ids that fail when running the whole test file in the worktree.
+
+    Delegates to the env's own seam rather than re-parsing here: that is where the
+    check lives that a run which could not answer (hang, kill, uncollectable) is
+    refused instead of returning an empty set. Parsing it separately meant this
+    path silently read an inconclusive run as "nothing failed", which drops the
+    candidate for a misattributed reason.
+    """
+    return env.failing_tests(test_relpath)
 
 
 def validate_candidate(
