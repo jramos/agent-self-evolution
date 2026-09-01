@@ -33,11 +33,46 @@ from typing import Optional
 
 from evolution.code.freeze_check import DEFAULT_MIN_RETAIN_RATIO, freeze_violations
 from evolution.code.repair import RepairResult
-from evolution.code.worktree import WorktreeEnv
+from evolution.code.worktree import NonAuthoritativeRunError, WorktreeEnv
 
 GATE_SCHEMA_VERSION = "1"
 DEFAULT_FLOOR_PATHS = ("tests/tools",)
-_PYTEST_NO_TESTS_COLLECTED = 5  # pytest exit code: zero tests ran
+_PYTEST_NO_TESTS_COLLECTED = 5
+# The only pytest exits that state completely what failed: all-passed, ran-and-some-
+# failed, nothing-collected. Any other code (timeout None, signal death, usage,
+# internal error) means the run answered nothing — and since the failure parser
+# returns an empty set for output it cannot read, scoring one of those would record
+# "no failures" for a run that never executed.
+#
+# Deliberately stricter than WorktreeEnv.failing_tests, which accepts any run that
+# named a failure whatever its exit code. Do not "fix" the inconsistency: a *diff*
+# needs a complete failure set, not merely some evidence. One uncollectable module
+# makes pytest exit 2 having run zero tests while still printing "ERROR <file>", so
+# under the evidence rule both floor halves would parse that same single name, the
+# diff would come out empty, and the gate would deploy on a floor that executed
+# nothing — the hole this guard exists to close.
+_AUTHORITATIVE_EXITS = (0, 1, _PYTEST_NO_TESTS_COLLECTED)
+
+
+def _incomplete_hint(output: str) -> str:
+    """Name what pytest could not collect, so the operator can act on the reason.
+
+    An uncollectable module in the floor path is the common trigger and is exactly
+    the "isolated venv missing optional deps" case this gate's own comment
+    anticipates; without the names it is an opaque hard block.
+    """
+    names = [
+        line.split()[1] for line in output.splitlines()
+        if line.startswith("ERROR ") and len(line.split()) > 1
+    ]
+    if not names:
+        return "No collection errors were named; check the output tail."
+    shown = ", ".join(sorted(set(names))[:5])
+    return f"Could not collect: {shown}."
+
+
+def _is_authoritative(run) -> bool:
+    return run.exit_code in _AUTHORITATIVE_EXITS
 
 
 class CodeGateError(RuntimeError):
@@ -71,10 +106,36 @@ def _parse_pytest_failures(output: str) -> set[str]:
         s = line.strip()
         for prefix in ("FAILED ", "ERROR "):
             if s.startswith(prefix):
-                nodeid = s[len(prefix):].split(" - ", 1)[0].strip()
+                nodeid = _nodeid_from_summary(s[len(prefix):])
                 if nodeid:
                     failures.add(nodeid)
     return failures
+
+
+def _nodeid_from_summary(rest: str) -> str:
+    """Take the node id from the remainder of a FAILED/ERROR summary line.
+
+    pytest appends ``" - <message>"``, but a parametrized id can contain that
+    same separator inside its brackets. Splitting on the first occurrence
+    truncates such an id, and two different parameters then collapse to one key
+    — which would let a failure the repair introduced hide behind an unrelated
+    pre-existing one, since the diff compares these sets by identity. So split
+    only at bracket depth zero.
+    """
+    depth = 0
+    for i, ch in enumerate(rest):
+        if ch == "[":
+            depth += 1
+        elif ch == "]":
+            depth = max(0, depth - 1)
+        elif depth == 0 and rest.startswith(" - ", i):
+            return rest[:i].strip()
+    # Depth never returned to zero: an escaped parameter (say "\x1b[") leaves an
+    # unmatched bracket. Falling through would fold the assertion message into the
+    # id — and that message is value-dependent and width-truncated, so the two
+    # runs being diffed could disagree on identity and manufacture phantom
+    # failures. The old first-separator split is correct for this shape.
+    return rest.split(" - ", 1)[0].strip() if depth else rest.strip()
 
 
 def _is_test_path(path: str) -> bool:
@@ -174,6 +235,15 @@ def run_code_gate(
         decision["holdout_output_tail"] = holdout.output[-2000:]
         return _reject("held-out test split collected no tests — no anti-gaming "
                        "signal (check the --holdout-test path)")
+    if not _is_authoritative(holdout):
+        # Of every guard, this is the worst one to mislabel: a hung or killed run
+        # would otherwise be recorded as evidence of the exact adversarial
+        # behaviour the held-out split exists to detect.
+        decision["holdout_output_tail"] = holdout.output[-2000:]
+        return _reject(
+            f"held-out test split exited {holdout.exit_code} — it produced no verdict, "
+            f"so it is not evidence either way"
+        )
     if not holdout.passed:
         decision["holdout_output_tail"] = holdout.output[-2000:]
         return _reject("held-out test split failed — the fix does not generalize "
@@ -191,6 +261,17 @@ def run_code_gate(
         decision["floor_output_tail"] = repaired_floor.output[-2000:]
         return _reject(f"regression floor {list(floor_paths)} collected no tests "
                        f"(check the --floor-path)")
+    if not _is_authoritative(repaired_floor):
+        # The floor is the longest-running step in the gate and the likeliest place
+        # to time out — which is exactly where an LLM-introduced hang lands. Scoring
+        # it would deploy on a "floor green" that never ran.
+        decision["floor_output_tail"] = repaired_floor.output[-2000:]
+        return _reject(
+            f"regression floor exited {repaired_floor.exit_code} after "
+            f"{round(repaired_floor.duration_seconds, 1)}s — it did not finish, so its "
+            f"failure set is incomplete and cannot be diffed. "
+            f"{_incomplete_hint(repaired_floor.output)}"
+        )
     repaired_failures = _parse_pytest_failures(repaired_floor.output)
 
     if base_src == "":
@@ -203,6 +284,17 @@ def run_code_gate(
             base_floor = env.run_test(*floor_paths, extra_args=["--tb=no"], full_output=True)
         finally:
             env.write_tool(tool_relpath, repaired)  # always restore the repair
+        if not _is_authoritative(base_floor):
+            # Worse than useless in the other direction: an empty baseline makes
+            # every pre-existing failure look introduced, rejecting a correct
+            # repair and naming it as the cause.
+            decision["floor_output_tail"] = base_floor.output[-2000:]
+            return _reject(
+                f"regression floor baseline exited {base_floor.exit_code} — it did not "
+                f"finish, and without a complete baseline the diff would attribute "
+                f"pre-existing failures to the repair. "
+                f"{_incomplete_hint(base_floor.output)}"
+            )
         base_failures = _parse_pytest_failures(base_floor.output)
         new_failures = sorted(repaired_failures - base_failures)
 
@@ -271,6 +363,14 @@ def _baseline_diff_floor(
     if repaired_floor.exit_code == _PYTEST_NO_TESTS_COLLECTED:
         return (["<no tests collected>"],
                 {"ran": list(floor_paths), "collected": 0}, repaired_floor.output[-2000:])
+    if not _is_authoritative(repaired_floor):
+        # Same refusal as the held-out gate's inline copy: a floor that answered
+        # nothing must not be scored as green.
+        raise NonAuthoritativeRunError(
+            f"regression floor exited {repaired_floor.exit_code} after "
+            f"{round(repaired_floor.duration_seconds, 1)}s; it made no statement about "
+            f"what failed: {repaired_floor.output[-500:]}"
+        )
     repaired_failures = _parse_pytest_failures(repaired_floor.output)
     if base_src == "":
         base_failures: set[str] = set()
@@ -280,6 +380,11 @@ def _baseline_diff_floor(
             base_floor = env.run_test(*floor_paths, extra_args=["--tb=no"], full_output=True)
         finally:
             env.write_tool(tool_relpath, repaired)
+        if not _is_authoritative(base_floor):
+            raise NonAuthoritativeRunError(
+                f"regression floor baseline exited {base_floor.exit_code}; without a "
+                f"baseline the diff would attribute pre-existing failures to the repair"
+            )
         base_failures = _parse_pytest_failures(base_floor.output)
     new_failures = sorted(repaired_failures - base_failures)
     guard = {

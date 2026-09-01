@@ -32,7 +32,13 @@ from evolution.code.harvest import (
 )
 from evolution.code.repair import RepairEngine, build_dspy_proposer
 from evolution.core.sandbox import require_sandbox_or_fail, sandbox_available
-from evolution.code.worktree import ContainmentError, WorktreeEnv, WorktreeError, prune_orphan_worktrees
+from evolution.code.worktree import (
+    ContainmentError,
+    NonAuthoritativeRunError,
+    WorktreeEnv,
+    WorktreeError,
+    prune_orphan_worktrees,
+)
 from evolution.core.hermes_provider import resolve_default_lm
 
 console = Console()
@@ -69,8 +75,9 @@ def run_organism(
     """Repair one harvested bug across ``seeds`` seeds in a single worktree and
     verify each against the oracle. Returns a :class:`Skip` (with reason) when the
     candidate yields no organism: source missing, too large for a whole-file
-    rewrite, worktree setup failed, or the parent doesn't fail anything the fix
-    passes (not a clean single-tool bug)."""
+    rewrite, worktree setup failed, a test run that established nothing
+    (``run_inconclusive``), or the parent doesn't fail anything the fix passes
+    (not a clean single-tool bug)."""
     parent_src = _git_show(repo, f"{c.parent_sha}:{c.tool_path}")
     if parent_src is None:
         return Skip("source_missing")
@@ -101,15 +108,31 @@ def run_organism(
         for _ in range(seeds):
             env.write_tool(c.tool_path, parent_src)  # reset to buggy
             repair = engine.repair(env, c.tool_path, bug_tests)
-            gate = run_code_oracle_gate(
-                env, tool_relpath=c.tool_path, test_relpath=c.test_path,
-                bug_tests=bug_tests, oracle_failures=oracle_failures,
-                base_src=parent_src, repair_result=repair,
-            )
-            seed_results.append(bool(gate.deploy))
+            try:
+                gate = run_code_oracle_gate(
+                    env, tool_relpath=c.tool_path, test_relpath=c.test_path,
+                    bug_tests=bug_tests, oracle_failures=oracle_failures,
+                    base_src=parent_src, repair_result=repair,
+                )
+                seed_results.append(bool(gate.deploy))
+            except NonAuthoritativeRunError:
+                # Scored as a failed seed, not a skipped organism. The dominant
+                # case is the wider oracle scope hanging after the repair already
+                # passed its bug tests — the repair's own doing, so a wrong repair
+                # rather than an unmeasurable candidate. Skipping would drop it
+                # from the denominator and inflate deploy-reachable, the same
+                # direction as the historical bias this work removes. Note the
+                # handler also covers the bug-test re-run, where the attribution is
+                # less clear-cut; scoring False stays the conservative choice.
+                seed_results.append(False)
+
         return OrganismResult(tool=c.tool_path, fix_sha=c.fix_sha, seeds=seed_results)
     except ContainmentError:
         raise  # systemic; see the create-time handler above
+    except NonAuthoritativeRunError:
+        # The candidate could not be measured (hang, kill, uncollectable tests).
+        # Its own reason, so the ledger does not blame worktree setup for it.
+        return Skip("run_inconclusive")
     except WorktreeError:
         return Skip("worktree_failed")
     finally:

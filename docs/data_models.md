@@ -768,7 +768,7 @@ The campaign ledger is append-only/resumable; one line per organism (or skip rea
 {"fix_sha": "934fbe3c…", "tool": "tools/ansi_strip.py", "status": "source_missing"}
 ```
 
-Skip `status` ∈ `source_missing` / `too_large` / `worktree_failed` / `not_valid`. `campaign_report.json` reduces the ledger to cluster-honest, **organism-level** estimands (`campaign_report.py`):
+Skip `status` ∈ `source_missing` / `too_large` / `worktree_failed` / `not_valid` / `run_inconclusive`. `campaign_report.json` reduces the ledger to cluster-honest, **organism-level** estimands (`campaign_report.py`):
 
 ```json
 {
@@ -802,7 +802,7 @@ Sentinel scan output (`evolution/monitor/queue.py`); `--attempt-top` annotates r
 }
 ```
 
-`attempt.status` ∈ `attempted` / `cost_ceiling` / `source_missing` / `too_large` / `worktree_failed` / `not_valid` (the `correct_seeds`/`seeds`/`deploy_reachable` fields appear only for `attempted`); `cost_summary` is present only when `--attempt-top` ran. `triage_report.md` renders a ranked markdown table (`#`, `kind`, `tool`, short `fix` sha, `committed` date) plus the propose-only disclaimer and the ready-to-run attempt command.
+`attempt.status` ∈ `attempted` / `cost_ceiling` / `source_missing` / `too_large` / `worktree_failed` / `not_valid` / `run_inconclusive` (the `correct_seeds`/`seeds`/`deploy_reachable` fields appear only for `attempted`); `cost_summary` is present only when `--attempt-top` ran. `triage_report.md` renders a ranked markdown table (`#`, `kind`, `tool`, short `fix` sha, `committed` date) plus the propose-only disclaimer and the ready-to-run attempt command.
 
 ### `lineage.json` + `dossier.md` (GEPA runs)
 
