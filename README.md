@@ -95,6 +95,8 @@ python -m evolution.validation.closed_loop --tool patch --hermes-repo ~/.hermes/
 
 # "Repair this broken tool from its failing test — and prove the fix isn't gamed."
 # Throwaway worktree + isolated venv; held-out split, surface freeze, file scope, regression floor.
+# Test execution is OS-confined where the platform supports it (macOS), and the posture is
+# recorded either way; --require-sandbox refuses to run unconfined.
 python -m evolution.code.evolve_code --repo ~/.hermes/hermes-agent \
     --tool tools/foo.py --visible-test tests/tools/test_foo_a.py --holdout-test tests/tools/test_foo_b.py
 

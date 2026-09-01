@@ -31,7 +31,8 @@ from evolution.code.harvest import (
     stratify,
 )
 from evolution.code.repair import RepairEngine, build_dspy_proposer
-from evolution.code.worktree import WorktreeEnv, WorktreeError, prune_orphan_worktrees
+from evolution.core.sandbox import require_sandbox_or_fail, sandbox_available
+from evolution.code.worktree import ContainmentError, WorktreeEnv, WorktreeError, prune_orphan_worktrees
 from evolution.core.hermes_provider import resolve_default_lm
 
 console = Console()
@@ -63,6 +64,7 @@ def _git_show(repo: Path, ref: str) -> Optional[str]:
 def run_organism(
     repo: Path, c: Candidate, engine: RepairEngine, *, seeds: int,
     base_python: str | None, max_tool_chars: int = MAX_TOOL_CHARS,
+    require_sandbox: bool = False,
 ) -> "OrganismResult | Skip":
     """Repair one harvested bug across ``seeds`` seeds in a single worktree and
     verify each against the oracle. Returns a :class:`Skip` (with reason) when the
@@ -78,7 +80,13 @@ def run_organism(
         # loop failure). Diff-based repair for huge files is a future extension.
         return Skip("too_large")
     try:
-        env = WorktreeEnv.create(repo, base_ref=c.fix_sha, base_python=base_python)
+        env = WorktreeEnv.create(repo, base_ref=c.fix_sha, base_python=base_python,
+                                 require_sandbox=require_sandbox)
+    except ContainmentError:
+        # Systemic, not this organism's: a broken profile fails every run, and
+        # absorbing it as a skip would grind through the whole candidate list
+        # reporting "worktree_failed" for a cause unrelated to worktrees.
+        raise
     except WorktreeError:
         return Skip("worktree_failed")
     try:
@@ -100,6 +108,8 @@ def run_organism(
             )
             seed_results.append(bool(gate.deploy))
         return OrganismResult(tool=c.tool_path, fix_sha=c.fix_sha, seeds=seed_results)
+    except ContainmentError:
+        raise  # systemic; see the create-time handler above
     except WorktreeError:
         return Skip("worktree_failed")
     finally:
@@ -119,6 +129,7 @@ def run_campaign(
     max_cost_usd: Optional[float] = None,
     proposer_model: Optional[str] = None,
     base_python: Optional[str] = None,
+    require_sandbox: bool = False,
     organism_runner=None,
     candidates: Optional[list[Candidate]] = None,
 ) -> dict:
@@ -130,6 +141,7 @@ def run_campaign(
     orchestration (ledger, resume, futility, stratification) without LM spend or
     worktrees; in production both default to the real harvest + repair+gate path.
     """
+    require_sandbox_or_fail(require_sandbox)
     from evolution.core.lm_timing_callback import (  # noqa: PLC0415
         COST_LEDGER,
         CostCeilingExceeded,
@@ -177,6 +189,7 @@ def run_campaign(
 
         def organism_runner(c: Candidate):  # noqa: F811
             return run_organism(repo, c, engine, seeds=seeds, base_python=base_python,
+                                require_sandbox=require_sandbox,
                                 max_tool_chars=max_tool_chars)
 
     if candidates is None:
@@ -223,6 +236,14 @@ def run_campaign(
                 break
 
     report = build_report(organisms)
+    # Recorded per run, not per organism: confinement is a property of the machine.
+    # Without it the campaign that produces the published number leaves no trace of
+    # whether it ran confined.
+    report["containment"] = {
+        "sandboxed": sandbox_available(),
+        "mechanism": "sandbox-exec" if sandbox_available() else None,
+        "required": require_sandbox,
+    }
     report["aborted_on_cost"] = aborted
     report["cost_summary"] = cost_summary()
     (output_dir / "campaign_report.json").write_text(json.dumps(report, indent=2))
@@ -251,9 +272,11 @@ def run_campaign(
 @click.option("--proposer-model", default=None)
 @click.option("--base-python", default=None,
               help="Interpreter for the isolated venv (default: the repo's venv/.venv).")
+@click.option("--require-sandbox/--allow-unconfined", "require_sandbox", default=False,
+              help="Refuse to run tests unless the OS can confine writes to the run dir.")
 @click.option("--output-dir", default=None, type=click.Path(file_okay=False, path_type=Path))
 def main(repo_root, max_organisms, seeds, repair_rounds, max_per_tool, max_tool_chars,
-         max_cost_usd, proposer_model, base_python, output_dir):
+         max_cost_usd, proposer_model, base_python, require_sandbox, output_dir):
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s: %(message)s",
                         datefmt="%H:%M:%S")
     if output_dir is None:
@@ -262,7 +285,8 @@ def main(repo_root, max_organisms, seeds, repair_rounds, max_per_tool, max_tool_
     run_campaign(repo_root, output_dir=Path(output_dir), max_organisms=max_organisms,
                  seeds=seeds, max_rounds=repair_rounds, max_per_tool=max_per_tool,
                  max_tool_chars=max_tool_chars, max_cost_usd=max_cost_usd,
-                 proposer_model=proposer_model, base_python=base_python)
+                 proposer_model=proposer_model, base_python=base_python,
+                 require_sandbox=require_sandbox)
 
 
 if __name__ == "__main__":

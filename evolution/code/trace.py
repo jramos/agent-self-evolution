@@ -24,6 +24,7 @@ def build_repair_trace(
     holdout_test: str,
     result: RepairResult,
     final_diff: str,
+    containment: dict | None = None,
 ) -> dict:
     """Assemble the repair trace payload (see :func:`write_repair_trace`)."""
     return {
@@ -44,7 +45,21 @@ def build_repair_trace(
             for r in result.rounds
         ],
         "final_diff": final_diff,
+        # How confined the test execution actually was. None means the env did
+        # not report a posture, which is deliberately distinct from False -- an
+        # unknown posture must never read as a known-unconfined one.
+        "containment": containment,
     }
+
+
+def containment_of(env) -> dict | None:
+    """Read a run environment's containment posture, if it reports one.
+
+    Not every env is a :class:`WorktreeEnv`: the SWE-bench env and the test
+    fakes duck-type ``run_test`` alone, so the attribute may be absent.
+    """
+    reporter = getattr(env, "containment", None)
+    return reporter() if callable(reporter) else None
 
 
 def write_repair_trace(output_dir: Path, payload: dict) -> Path:

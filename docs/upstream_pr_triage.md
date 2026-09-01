@@ -286,6 +286,48 @@ and we are 0 commits behind it, so waiting accrues no merge risk.
   the tier would remove the skew, and is parked rather than tuned on intuition. Note for future
   cycles: eval sets drawn after this change differ from earlier ones in both composition and
   train/val/holdout assignment, so don't compare them naively across the boundary.
+- **2026-08-31** — #162 (partial, confine code-evolution test execution) **fixed**. `run_test`
+  executed pytest against an LLM-modified worktree through a bare subprocess, while the agent
+  runner two directories away refuses to run unconfined at all — an asymmetry in our own
+  doctrine, and the code path where autonomously-generated source actually runs. Extracted the
+  macOS profile builder, availability check and error type into `evolution/core/sandbox.py`, and
+  gave `WorktreeEnv` a `require_sandbox` policy plus a `sandboxed` posture resolved once at
+  create time. Reach was wider than first scoped: eleven `run_test` call sites rather than six,
+  and three entry points drive the loop — the single-tool evolver, the campaign, and the gaming
+  audit, whose proposer is deliberately built to game the gate and therefore has the strongest
+  claim on confinement. All three take `--require-sandbox`; the bug harvester does not, since no
+  LLM-authored code executes there.
+  Two findings from review shaped the result. First, **a containment failure could have been
+  certified as a passing gate**: `sandbox-exec` exits 65 without running the child when a profile
+  fails to compile, the gate special-cases only pytest's exit 5, and its failure parser returns an
+  empty set on unrecognised output — so a run where zero tests executed would have read as "no
+  failures". A confined run whose exit code is not one of pytest's own now raises instead of
+  returning a result. Second, the write-root argument is **a no-op on macOS**: the profile
+  blanket-allows the temp roots and the run dir lives under one, so the real boundary is
+  "non-temp writes denied; reads, process-exec and network unrestricted". The recorded posture
+  says exactly that rather than implying isolation, and the containment test targets a path
+  outside the temp roots — inside them it would have passed while proving nothing. Also fixed a
+  design flaw the tests caught: the wrapper re-derived availability per call, so the posture we
+  *recorded* and the posture we *applied* were independent judgements; the resolved value is now
+  threaded through. 18 tests, including a real denied-write proof on macOS and a negative control
+  that genuine pytest exit codes still return results.
+  A second pass hardened the result further. The fuzz driver in the gaming audit executed the
+  candidate through its own subprocess, so the flag promised confinement the harness's primary
+  execution did not give — every in-worktree execution now goes through one `confine()` seam.
+  Signal deaths (negative exit codes) were being misdiagnosed as containment failures, which on
+  macOS alone would have dropped OOM-killed organisms from the campaign denominator; only
+  positive non-pytest codes escalate now. Write roots are resolved before interpolation, since
+  the kernel matches canonical paths and `mkdtemp` returns the uncanonical form — the named root
+  was granting nothing. Paths containing quote, paren or backslash are rejected outright rather
+  than interpolated, because SBPL cannot escape them and a crafted path could otherwise append
+  allow rules of its own. Containment failures now raise a distinct `ContainmentError` so the
+  campaign's skip handler cannot absorb a systemic failure as a fleet of skipped organisms, and
+  each entry point checks the policy once at startup rather than discovering it per candidate
+  (which also closed a tempdir leak per refusal). The posture is recorded for the campaign as
+  well as the single-tool evolver, and surfaced in the human-review PR body, where it had been
+  computed and then dropped. Also corrected there: the regression-floor line read a key that does
+  not exist, so every PR body claimed the floor FAILED — including runs that deployed because it
+  was green. 31 tests, full non-slow suite green (1794 passed, +31), ruff clean.
 
 ## Action items (open)
 
@@ -303,7 +345,7 @@ ourselves," never "merge the PR" — we do not apply upstream diffs. Our-code an
 | #85 | Claude Code **subscription** backend — FastAPI OpenAI-compatible shim over `claude-agent-sdk` | A new capability: our OAuth backends cover OpenAI-Codex + Nous, not Claude-subscription. Plugs in as `provider: custom` + `base_url`, no code-layer change → cheaper evolution. | `evolution/core/hermes_provider.py` (`resolve_default_lm`); standalone `scripts/` proxy | **Investigated → SKIP (ToS-prohibited)** — re-exposing Pro/Max subscription OAuth via an OpenAI shim / the Agent SDK violates Anthropic's Consumer Terms (clarified 2026-02-19/20) and is server-side-blocked since 2026-01-09; the sanctioned `claude -p` + `CLAUDE_CODE_OAUTH_TOKEN` backend is already present, but it doesn't give cheap subscription inference for the GEPA roles (see review log, 2026-06-28) | ✅ |
 | #142 (partial) | **Symlink-aware skill resolver** — `find_skill` traversal follows symlinked skill directories | `Path.rglob("SKILL.md")` doesn't descend into symlinked dirs on Python <3.13; a Hermes layout that symlinks user-installed skills into the framework tree would silently resolve "not found." Real latent bug in a path we own. | `evolution/core/skill_sources.py` (`HermesSkillSource`, was 3 `rglob("SKILL.md")` sites) | **DONE** — replaced the three `rglob` sites with one cycle-safe `_iter_skill_files` helper (`os.walk(followlinks=True)` + `(st_dev, st_ino)` visited-set + sorted deterministic order); only `HermesSkillSource` touched (flat ClaudeCode/LocalDir sources already follow symlinks via `is_file()`). 9 new symlink tests, full non-slow suite green (1763) — see review log, 2026-07-06 | ✅ |
 | #149 (+ #26) | **Rank importer pre-filter candidates by relevance** before the LLM-scoring cap — graded score replacing the boolean predicate, strongest-first ordering | `RelevanceFilter` qualifies candidates with a boolean predicate and then truncates at `max_examples * 3` in source-then-import order, so the strongest matches past the cap never reach the LLM scorer. The scoring loop's early break means order decides the output set on every run, not only on overflow. Closes the #26 recall follow-up. | `evolution/core/external_importers.py` (`_is_relevant_to_skill`, `RelevanceFilter.filter_and_score`) | **DONE** — `_relevance_score` returns a tiered tuple `(name_match, name_words, keyword_overlap)`; `_is_relevant_to_skill` is now `any(...)` over it, so the qualifying set is unchanged; candidates sort strongest-first (stable, ties keep import order) ahead of both caps — see review log, 2026-08-31 | ✅ |
-| #162 (partial) | **Confine code-evolution test execution** and record the containment posture | `WorktreeEnv.run_test` executes pytest against an LLM-modified worktree through a bare subprocess, while the agent runner refuses to run unconfined at all — an asymmetry in our own doctrine. The adversarial gaming harness runs through the same path. | `evolution/code/worktree.py` (`run_test`), `evolution/validation/claude_runner.py` (the existing profile), `evolution/code/gate.py` (failure parsing) | **REBUILD** — shared sandbox module, confine where the OS supports it, record the posture honestly elsewhere, opt-in strict mode; a containment failure must never present as a test outcome | ⬜ |
+| #162 (partial) | **Confine code-evolution test execution** and record the containment posture | `WorktreeEnv.run_test` executes pytest against an LLM-modified worktree through a bare subprocess, while the agent runner refuses to run unconfined at all — an asymmetry in our own doctrine. The adversarial gaming harness runs through the same path. | `evolution/code/worktree.py` (`run_test`), `evolution/validation/claude_runner.py` (the existing profile), `evolution/code/gate.py` (failure parsing) | **DONE** — shared `evolution/core/sandbox.py` (profile + availability + `wrap_argv`); `run_test` confines writes to the run root, records the posture in `repair_trace.json`, and raises rather than returning a non-pytest exit code from a confined run; `--require-sandbox` on all three LLM-loop entry points — see review log, 2026-08-31 | ✅ |
 | #162 (partial), #136 | **Minimum detectable effect** as a gate-adjacent diagnostic | A gate can certify a win, or enforce a regression floor, without ever stating that its sample size could not detect the effect it claims to police. Absorbs the parked exact-test item. | `evolution/core/stats.py` (currently `paired_bootstrap` only) | **REBUILD** — MDE for the continuous and paired-binary regimes, diagnostic only, deploy decisions provably unchanged; exact paired tests deferred rather than shipped with unpinned conventions | ⬜ |
 | #154, #179 | **Importer and dataset-builder hardening** — malformed JSON raises our own error; non-UTF8 session files are skipped instead of crashing the importer | Two sites extract a JSON substring and then parse it unguarded, so a bracketed-but-malformed payload escapes as a raw decode error. Separately, `UnicodeDecodeError` is uncaught where legacy session files and the Claude Code history log are decoded — and the history log is the likelier of the two to be mixed-encoding. | `evolution/core/dataset_builder.py`, `evolution/core/external_importers.py` | **REBUILD** — guard both parse sites (including a shape check, since valid JSON of the wrong type escapes just as badly) and widen both decode guards; no new dependency, declining the proposed JSON-repair library | ⬜ |
 | #174 (partial) | **MIPROv2 fallback receives the held-out valset** | The fallback optimizer compiles without `valset` while the primary path passes it, so a fallback run loses its held-out set for internal candidate selection. Narrow: deploy integrity is unaffected, since the deploy gate runs its own held-out behavioral validation downstream. | `evolution/skills/evolve_skill.py` (`_default_mipro_runner`) | **REBUILD** — pass the existing named val split through, guarding the empty case (the optimizer rejects a non-None empty valset). Threading `num_trials` stays excluded: the optimizer treats it as mutually exclusive with the `auto` preset. | ⬜ |

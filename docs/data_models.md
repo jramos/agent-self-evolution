@@ -747,9 +747,17 @@ Per-round repair record for human review (`evolution/code/trace.py`). No per-hun
   "rounds": [
     {"round": 1, "proposed": true, "freeze_violations": [], "test_passed": true, "output_tail": "PASSED"}
   ],
-  "final_diff": "--- live_baseline\n+++ deployed\n@@ ... @@\n-    return 0\n+    return a + b"
+  "final_diff": "--- live_baseline\n+++ deployed\n@@ ... @@\n-    return 0\n+    return a + b",
+  "containment": {"sandboxed": true, "mechanism": "sandbox-exec", "platform": "darwin"}
 }
 ```
+
+`containment` records how confined the test execution actually was. `sandboxed: true`
+means writes outside the run dir and the OS temp roots were denied by the kernel — reads,
+process-exec and network are not restricted, so it prevents corrupting the checkout or home
+directory rather than providing isolation. `null` means the run environment reported no
+posture (the SWE-bench env and test fakes duck-type the runner), which is deliberately
+distinct from `false`: unknown must never read as known-unconfined.
 
 ### `campaign_ledger.jsonl` + `campaign_report.json`
 
