@@ -43,7 +43,32 @@ _PYTEST_NO_TESTS_COLLECTED = 5
 # internal error) means the run answered nothing — and since the failure parser
 # returns an empty set for output it cannot read, scoring one of those would record
 # "no failures" for a run that never executed.
+#
+# Deliberately stricter than WorktreeEnv.failing_tests, which accepts any run that
+# named a failure whatever its exit code. Do not "fix" the inconsistency: a *diff*
+# needs a complete failure set, not merely some evidence. One uncollectable module
+# makes pytest exit 2 having run zero tests while still printing "ERROR <file>", so
+# under the evidence rule both floor halves would parse that same single name, the
+# diff would come out empty, and the gate would deploy on a floor that executed
+# nothing — the hole this guard exists to close.
 _AUTHORITATIVE_EXITS = (0, 1, _PYTEST_NO_TESTS_COLLECTED)
+
+
+def _incomplete_hint(output: str) -> str:
+    """Name what pytest could not collect, so the operator can act on the reason.
+
+    An uncollectable module in the floor path is the common trigger and is exactly
+    the "isolated venv missing optional deps" case this gate's own comment
+    anticipates; without the names it is an opaque hard block.
+    """
+    names = [
+        line.split()[1] for line in output.splitlines()
+        if line.startswith("ERROR ") and len(line.split()) > 1
+    ]
+    if not names:
+        return "No collection errors were named; check the output tail."
+    shown = ", ".join(sorted(set(names))[:5])
+    return f"Could not collect: {shown}."
 
 
 def _is_authoritative(run) -> bool:
@@ -105,7 +130,12 @@ def _nodeid_from_summary(rest: str) -> str:
             depth = max(0, depth - 1)
         elif depth == 0 and rest.startswith(" - ", i):
             return rest[:i].strip()
-    return rest.strip()
+    # Depth never returned to zero: an escaped parameter (say "\x1b[") leaves an
+    # unmatched bracket. Falling through would fold the assertion message into the
+    # id — and that message is value-dependent and width-truncated, so the two
+    # runs being diffed could disagree on identity and manufacture phantom
+    # failures. The old first-separator split is correct for this shape.
+    return rest.split(" - ", 1)[0].strip() if depth else rest.strip()
 
 
 def _is_test_path(path: str) -> bool:
@@ -238,8 +268,9 @@ def run_code_gate(
         decision["floor_output_tail"] = repaired_floor.output[-2000:]
         return _reject(
             f"regression floor exited {repaired_floor.exit_code} after "
-            f"{round(repaired_floor.duration_seconds, 1)}s — it made no statement about "
-            f"what failed, so it cannot be scored as green"
+            f"{round(repaired_floor.duration_seconds, 1)}s — it did not finish, so its "
+            f"failure set is incomplete and cannot be diffed. "
+            f"{_incomplete_hint(repaired_floor.output)}"
         )
     repaired_failures = _parse_pytest_failures(repaired_floor.output)
 
@@ -259,8 +290,10 @@ def run_code_gate(
             # repair and naming it as the cause.
             decision["floor_output_tail"] = base_floor.output[-2000:]
             return _reject(
-                f"regression floor baseline exited {base_floor.exit_code} — without a "
-                f"baseline the diff would attribute pre-existing failures to the repair"
+                f"regression floor baseline exited {base_floor.exit_code} — it did not "
+                f"finish, and without a complete baseline the diff would attribute "
+                f"pre-existing failures to the repair. "
+                f"{_incomplete_hint(base_floor.output)}"
             )
         base_failures = _parse_pytest_failures(base_floor.output)
         new_failures = sorted(repaired_failures - base_failures)

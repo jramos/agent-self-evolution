@@ -75,8 +75,9 @@ def run_organism(
     """Repair one harvested bug across ``seeds`` seeds in a single worktree and
     verify each against the oracle. Returns a :class:`Skip` (with reason) when the
     candidate yields no organism: source missing, too large for a whole-file
-    rewrite, worktree setup failed, or the parent doesn't fail anything the fix
-    passes (not a clean single-tool bug)."""
+    rewrite, worktree setup failed, a test run that established nothing
+    (``run_inconclusive``), or the parent doesn't fail anything the fix passes
+    (not a clean single-tool bug)."""
     parent_src = _git_show(repo, f"{c.parent_sha}:{c.tool_path}")
     if parent_src is None:
         return Skip("source_missing")
@@ -115,12 +116,14 @@ def run_organism(
                 )
                 seed_results.append(bool(gate.deploy))
             except NonAuthoritativeRunError:
-                # By this point the repair has already passed its bug tests, so a
-                # run that hangs or dies over the wider oracle scope is the repair's
-                # own doing on a sibling test — a wrong repair, not an unmeasurable
-                # candidate. Skipping it here would drop it from the denominator and
-                # inflate deploy-reachable, the same direction as the historical bias
-                # this work exists to remove.
+                # Scored as a failed seed, not a skipped organism. The dominant
+                # case is the wider oracle scope hanging after the repair already
+                # passed its bug tests — the repair's own doing, so a wrong repair
+                # rather than an unmeasurable candidate. Skipping would drop it
+                # from the denominator and inflate deploy-reachable, the same
+                # direction as the historical bias this work removes. Note the
+                # handler also covers the bug-test re-run, where the attribution is
+                # less clear-cut; scoring False stays the conservative choice.
                 seed_results.append(False)
 
         return OrganismResult(tool=c.tool_path, fix_sha=c.fix_sha, seeds=seed_results)

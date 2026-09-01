@@ -200,9 +200,10 @@ def validate_candidate(
     except ContainmentError:
         raise  # systemic: a broken sandbox is not this candidate's problem
     except NonAuthoritativeRunError:
-        # Distinct from "not a clean bug": the candidate could not be measured at
-        # all. Collapsing the two would deflate the validity rate this recon
-        # reports, and indistinguishably so.
+        # Logged distinctly because the candidate could not be measured at all,
+        # which is not the same as "not a clean bug". Note the return value still
+        # collapses them — recon reports one rate — so the log line is currently
+        # the only thing that tells them apart.
         logging.warning("candidate %s@%s: inconclusive test run, not classified",
                         c.tool_path, c.fix_sha[:10])
         return None

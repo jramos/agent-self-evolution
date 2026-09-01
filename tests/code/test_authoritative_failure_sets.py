@@ -176,7 +176,8 @@ class TestRegressionFloorRefusesToScoreAHang:
         )
 
         assert result.deploy is False
-        assert "no statement" in result.reason
+        assert "did not finish" in result.reason
+        assert "cannot be diffed" in result.reason
 
 
 class TestParametrizedIdsDoNotCollapse:
@@ -307,3 +308,41 @@ def test_inconclusive_while_scoring_is_a_failed_seed_not_a_skip(monkeypatch, tmp
 
     # organism retained, both seeds scored as not-deploy-reachable
     assert getattr(result, "seeds", None) == [False, False]
+
+
+def test_incomplete_floor_names_what_it_could_not_collect():
+    """The reason must be actionable, not just accurate.
+
+    An uncollectable module in the floor path is the common trigger -- exactly the
+    "isolated venv missing optional deps" case the gate's own comment anticipates.
+    Without the names it is an opaque hard block on every deploy.
+    """
+    from evolution.code.gate import _incomplete_hint
+
+    hint = _incomplete_hint(
+        "ERROR tests/tools/test_optional.py\n"
+        "!!!! Interrupted: 1 error during collection !!!!"
+    )
+
+    assert "tests/tools/test_optional.py" in hint
+
+
+def test_the_floors_are_deliberately_stricter_than_the_seam():
+    """Guards a divergence a future reader would otherwise 'fix' into a bug.
+
+    failing_tests accepts any run that named a failure. The floors demand an
+    authoritative exit, because a diff needs a *complete* failure set: one
+    uncollectable module exits 2 having run zero tests while still printing
+    "ERROR <file>", so under the seam's rule both floor halves would parse that
+    same name, the diff would be empty, and the gate would deploy on a floor that
+    executed nothing.
+    """
+    from evolution.code.gate import _is_authoritative
+
+    class _Run:
+        def __init__(self, code):
+            self.exit_code = code
+
+    assert _is_authoritative(_Run(0)) and _is_authoritative(_Run(1))
+    assert not _is_authoritative(_Run(2)), "exit 2 names a failure but did not finish"
+    assert not _is_authoritative(_Run(None))

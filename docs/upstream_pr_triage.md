@@ -371,19 +371,24 @@ and we are 0 commits behind it, so waiting accrues no merge risk.
   `" - "`, so two parametrized ids containing that separator collapsed into one key, letting a
   newly introduced failure hide behind an unrelated pre-existing one — it now splits at bracket
   depth zero.
-  19 tests, full non-slow suite green (1813 passed, +19), ruff clean.
+  19 tests, full non-slow suite green (1823 passed, +19), ruff clean.
   **Effect on earlier numbers — measured, not assumed.** The three Hermes code campaigns (156
   scored organisms, 468 seeds, 344 seeds true, 113/156 deploy-reachable, across 90 unique fix
-  commits) were checked against every route by which this defect could have inflated them.
+  commits) were checked against every route by which this defect could have inflated them, including the
+  node-id collapse fixed in the same change (none of the 1823 collected ids contain the separator,
+  so that route is empty here too).
   *Two routes are structurally excluded.* The regression floor never ran: `run_code_oracle_gate`
   defaults `floor_paths=None`, the campaign passes none, and the floor body is gated on
   `if floor_paths:` — that hazard only ever applied to the held-out gate in the single-tool
   evolver. And a repair that hangs its **own** bug tests cannot reach the gate as fixed, since
   `fixed=True` requires `run.passed` — so it scores as a failed seed, not a false success.
-  *The replayable route measured zero.* Collection outcomes at a fixed commit do not depend on
-  what the repair wrote, so they replay exactly. All **90/90** fix commits collect cleanly
-  (exit 0) and execute authoritatively (86 exit-0, 4 exit-1), so the exit-2/4/5 class fired on
-  **0 of 156 organisms and 0 of 468 seeds**.
+  *The replayable route measured zero.* All **90/90** fix commits collect cleanly (exit 0) and
+  execute authoritatively (86 exit-0, 4 exit-1) — that is a property of the repository, so it
+  replays exactly and rules the class out for every oracle-side run. The seed-time runs are not
+  covered by that replay, since a repair that breaks the tool's import changes collection; they are
+  ruled out separately, because an import failure exits 2 while still printing an `ERROR` line, so
+  the pre-fix parse returned a non-empty set and rejected rather than certified. The exit-2/4/5
+  class therefore fired on **0 of 156 organisms and 0 of 468 seeds**.
   *One residual is unquantifiable from retained data.* A repair that passed its bug tests and then
   hung only the sibling tests in the same file would have been scored `correct`. The repaired
   sources were never retained — the campaigns kept only the ledger and the report, with no exit
@@ -391,7 +396,8 @@ and we are 0 commits behind it, so waiting accrues no merge risk.
   runtimes for those files are a median of 1.79s and a maximum of 10.98s, so reaching the 600s
   timeout needs a **55x to 334x** slowdown, i.e. a non-terminating loop rather than incidental
   slowness. Wall clock bounds it loosely from above: the campaigns ran 3.24h, 2.24h and 1.73h, and
-  a single timeout consumes 7-11x the average per-seed budget, so at most **43 of 468 seeds (9.2%)**
+  a single timeout consumes several times the average per-seed budget (5.8x, 7.1x and 20.1x by
+  campaign), so at most **43 of 468 seeds (9.2%)**
   could have timed out even had the campaigns done nothing else.
   Net: the published deploy-reachable figures are better supported than the original caveat
   implied — two routes excluded by construction, the replayable one measured at zero, and the
@@ -418,7 +424,7 @@ ourselves," never "merge the PR" — we do not apply upstream diffs. Our-code an
 | #162 (partial) | **Confine code-evolution test execution** and record the containment posture | `WorktreeEnv.run_test` executes pytest against an LLM-modified worktree through a bare subprocess, while the agent runner refuses to run unconfined at all — an asymmetry in our own doctrine. The adversarial gaming harness runs through the same path. | `evolution/code/worktree.py` (`run_test`), `evolution/validation/claude_runner.py` (the existing profile), `evolution/code/gate.py` (failure parsing) | **DONE** — shared `evolution/core/sandbox.py` (profile + availability + `wrap_argv`); `run_test` confines writes to the run root, records the posture in `repair_trace.json`, and raises rather than returning a non-pytest exit code from a confined run; `--require-sandbox` on all three LLM-loop entry points — see review log, 2026-08-31 | ✅ |
 | #162 (partial), #136 | **Minimum detectable effect** as a gate-adjacent diagnostic | A gate can certify a win, or enforce a regression floor, without ever stating that its sample size could not detect the effect it claims to police. Absorbs the parked exact-test item. | `evolution/core/stats.py` (currently `paired_bootstrap` only) | **REBUILD** — MDE for the continuous and paired-binary regimes, diagnostic only, deploy decisions provably unchanged; exact paired tests deferred rather than shipped with unpinned conventions | ⬜ |
 | #154, #179 | **Importer and dataset-builder hardening** — malformed JSON raises our own error; non-UTF8 session files are skipped instead of crashing the importer | Two sites extract a JSON substring and then parse it unguarded, so a bracketed-but-malformed payload escapes as a raw decode error. Separately, `UnicodeDecodeError` is uncaught where legacy session files and the Claude Code history log are decoded — and the history log is the likelier of the two to be mixed-encoding. | `evolution/core/dataset_builder.py`, `evolution/core/external_importers.py` | **REBUILD** — guard both parse sites (including a shape check, since valid JSON of the wrong type escapes just as badly) and widen both decode guards; no new dependency, declining the proposed JSON-repair library | ⬜ |
-| — (found in review) | **Authoritative failure sets** — a pytest run that could not answer must not be scored as "nothing failed" | `failing_tests` discarded the exit code, and the failure parser returns an empty set on unrecognised output, so a timed-out, killed or uncollectable run certified a wrong repair as `correct` through the oracle gate. Demonstrated against the real gate. | `evolution/code/worktree.py` (`failing_tests`), `evolution/code/harvest.py` (`_failures`), `evolution/code/gate.py` (the parser) | **DONE** — the seam refuses a run that produced **no failure evidence and no authoritative exit**; the same guard added to both regression floors and the held-out check; `harvest._failures` delegates instead of re-parsing; a distinct error type keeps the ledger honest, and an inconclusive run while scoring counts as a failed seed rather than a dropped organism — see review log, 2026-08-31 | ✅ |
+| — (found in review) | **Authoritative failure sets** — a pytest run that could not answer must not be scored as "nothing failed" | `failing_tests` discarded the exit code, and the failure parser returns an empty set on unrecognised output, so a timed-out, killed or uncollectable run certified a wrong repair as `correct` through the oracle gate. Demonstrated against the real gate. | `evolution/code/worktree.py` (`failing_tests`), `evolution/code/harvest.py` (`_failures`), `evolution/code/gate.py` (the parser) | **DONE** — the seam refuses a run that produced **no failure evidence and no authoritative exit**; a *stricter* guard added to both regression floors and the held-out check — a diff needs a complete failure set, not merely some evidence, so those demand an authoritative exit where the seam accepts any run that named a failure; `harvest._failures` delegates instead of re-parsing; a distinct error type keeps the ledger honest, and an inconclusive run while scoring counts as a failed seed rather than a dropped organism — see review log, 2026-08-31 | ✅ |
 | #174 (partial) | **MIPROv2 fallback receives the held-out valset** | The fallback optimizer compiles without `valset` while the primary path passes it, so a fallback run loses its held-out set for internal candidate selection. Narrow: deploy integrity is unaffected, since the deploy gate runs its own held-out behavioral validation downstream. | `evolution/skills/evolve_skill.py` (`_default_mipro_runner`) | **REBUILD** — pass the existing named val split through, guarding the empty case (the optimizer rejects a non-None empty valset). Threading `num_trials` stays excluded: the optimizer treats it as mutually exclusive with the `auto` preset. | ⬜ |
 
 ## Optional / low-value (parked)

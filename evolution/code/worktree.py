@@ -479,9 +479,14 @@ class WorktreeEnv:
                 for part in (exc.stdout, exc.stderr)
             ).strip()
             note = f"pytest timed out after {timeout}s"
+            # Honour full_output here too. A caller that asked for the complete
+            # summary needs it even from a timeout: a run that hung *after*
+            # printing its failures would otherwise return a truncated subset,
+            # and a smaller failure set biases the diff toward "no new failures".
+            kept = partial if full_output else partial[-self._output_tail_bytes:]
             return TestRun(
                 passed=False,
-                output=f"{note}\n{partial[-self._output_tail_bytes:]}" if partial else note,
+                output=f"{note}\n{kept}" if partial else note,
                 duration_seconds=float(timeout),
                 exit_code=None,
             )
