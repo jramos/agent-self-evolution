@@ -24,6 +24,56 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 
+def _extract_json_list(text: str) -> list:
+    """Parse a JSON array from LLM output, tolerating prose around it.
+
+    Both failures it raises for used to escape differently: a bracketed but
+    malformed payload came out as a raw JSONDecodeError past the surrounding
+    ValueError, and a payload of the wrong shape parsed fine and then failed much
+    later with an AttributeError when something called .get on an int — far from
+    the cause.
+    """
+    parsed = _extract_json(text, r"\[.*\]", list, "list")
+    # Callers read each element as a mapping, so a list of scalars is just as
+    # unusable as unparseable text -- it simply fails later, at a .get() far from
+    # the cause.
+    if not all(isinstance(item, dict) for item in parsed):
+        raise ValueError(
+            f"LLM output is a JSON list but not of objects — wrong shape: {text[:200]}"
+        )
+    return parsed
+
+
+def _extract_json_object(text: str) -> dict:
+    """Parse a JSON object from LLM output, tolerating prose around it."""
+    return _extract_json(text, r"\{.*\}", dict, "object")
+
+
+def _extract_json(text: str, pattern: str, expected: type, label: str):
+    import re as _re
+
+    try:
+        parsed = json.loads(text)
+    except json.JSONDecodeError:
+        match = _re.search(pattern, text, _re.DOTALL)
+        if not match:
+            raise ValueError(
+                f"Could not parse a JSON {label} from LLM output: {text[:200]}"
+            ) from None
+        try:
+            parsed = json.loads(match.group())
+        except json.JSONDecodeError as exc:
+            raise ValueError(
+                f"Could not parse a JSON {label} from LLM output: {text[:200]}"
+            ) from exc
+    if not isinstance(parsed, expected):
+        raise ValueError(
+            f"LLM output parsed as {type(parsed).__name__}, not a JSON {label} — "
+            f"wrong shape: {text[:200]}"
+        )
+    return parsed
+
+
 @dataclass
 class EvalExample:
     """A single evaluation example."""
@@ -173,15 +223,7 @@ class SyntheticDatasetBuilder:
                 num_cases=n,
             )
 
-        try:
-            cases_raw = json.loads(result.test_cases)
-        except json.JSONDecodeError:
-            import re
-            match = re.search(r'\[.*\]', result.test_cases, re.DOTALL)
-            if match:
-                cases_raw = json.loads(match.group())
-            else:
-                raise ValueError(f"Could not parse test cases from LLM output: {result.test_cases[:200]}")
+        cases_raw = _extract_json_list(result.test_cases)
 
         examples = [
             EvalExample(
@@ -392,16 +434,7 @@ class SyntheticDatasetBuilder:
     @staticmethod
     def _parse_bucket_json(text: str) -> dict:
         """Parse a JSON object from a bucket LM response, tolerating prose around it."""
-        try:
-            return json.loads(text)
-        except json.JSONDecodeError:
-            import re
-            match = re.search(r"\{.*\}", text, re.DOTALL)
-            if match:
-                return json.loads(match.group())
-            raise ValueError(
-                f"Could not parse bucket JSON from LLM output: {text[:200]}"
-            )
+        return _extract_json_object(text)
 
     @staticmethod
     def _filter_trivial_tasks(
