@@ -1464,3 +1464,294 @@ class TestEvalExampleFormat:
             data = json.loads(f.readline())
 
         assert set(data.keys()) == {"task_input", "expected_behavior", "difficulty", "category", "source"}
+
+
+class TestRelevanceRanking:
+    """Candidate ordering must put the strongest matches ahead of the caps.
+
+    Two caps exist between the heuristic pre-filter and the produced eval set:
+    the ``max_examples * 3`` candidate truncation and the scoring loop's
+    ``len(examples) >= max_examples`` break. Both consume candidates in list
+    order, so ordering decides which messages ever reach the LLM scorer.
+    """
+
+    SKILL_NAME = "categorize"
+    SKILL_TEXT = "Sort text into topics. Categorize content by theme."
+
+    # Qualifies only via keyword overlap (>= 2 of topics/categorize/content/theme),
+    # and deliberately avoids the skill name so it cannot reach a higher tier.
+    WEAK = "arrange the content by theme please"
+    # Qualifies via the strongest signal: the full skill name as a substring.
+    STRONG = "categorize these messages for me"
+
+    @pytest.fixture
+    def mock_dspy(self):
+        with patch("evolution.core.external_importers.dspy") as mock:
+            mock.context.return_value.__enter__ = MagicMock(return_value=None)
+            mock.context.return_value.__exit__ = MagicMock(return_value=False)
+            yield mock
+
+    def _filter(self):
+        rf = RelevanceFilter.__new__(RelevanceFilter)
+        rf.model = "test-model"
+        rf.scorer = MagicMock()
+        rf.scorer.return_value = SimpleNamespace(
+            scoring='{"relevant": true, "expected_behavior": "b", "difficulty": "easy", "category": "c"}'
+        )
+        return rf
+
+    @staticmethod
+    def _msg(text):
+        return {"task_input": text, "source": "claude-code"}
+
+    def test_strongest_survives_the_candidate_cap(self, mock_dspy):
+        """A tier-A match past ``max_examples * 3`` must not be truncated away."""
+        rf = self._filter()
+        # 12 weak qualifiers overflow the cap of 9; the strong match is last.
+        messages = [self._msg(f"{self.WEAK} {i}") for i in range(12)]
+        messages.append(self._msg(self.STRONG))
+
+        examples = rf.filter_and_score(
+            messages, self.SKILL_NAME, self.SKILL_TEXT, max_examples=3
+        )
+
+        assert self.STRONG in {ex.task_input for ex in examples}
+
+    def test_strongest_survives_the_scoring_break(self, mock_dspy):
+        """Ordering also decides the output when the cap never engages.
+
+        Six qualifiers sit under the cap of 9, so truncation is not involved --
+        the scoring loop's early break alone excludes everything after the
+        first ``max_examples`` candidates.
+        """
+        rf = self._filter()
+        messages = [self._msg(f"{self.WEAK} {i}") for i in range(5)]
+        messages.append(self._msg(self.STRONG))
+
+        examples = rf.filter_and_score(
+            messages, self.SKILL_NAME, self.SKILL_TEXT, max_examples=3
+        )
+
+        assert self.STRONG in {ex.task_input for ex in examples}
+
+    def test_scoring_order_is_strongest_first(self, mock_dspy):
+        """The scorer sees candidates strongest-first, backfill last."""
+        rf = self._filter()
+        messages = [
+            self._msg(self.WEAK),
+            self._msg("deploy the app to production"),  # non-matching -> backfill
+            self._msg(self.STRONG),
+        ]
+
+        rf.filter_and_score(messages, self.SKILL_NAME, self.SKILL_TEXT, max_examples=10)
+
+        scored = [c.kwargs["user_message"] for c in rf.scorer.call_args_list]
+        assert scored.index(self.STRONG) < scored.index(self.WEAK), (
+            "tier-A match must be scored before a keyword-overlap-only match"
+        )
+        assert scored.index(self.WEAK) < scored.index("deploy the app to production"), (
+            "every qualifier must be scored before any backfilled message"
+        )
+
+    def test_equal_scores_keep_import_order(self, mock_dspy):
+        """Ties must resolve to import order, and do so reproducibly.
+
+        Every message here scores identically, so the sort is pure tie-breaking.
+        Comparing two runs only proves the implementation is *deterministic* --
+        an unstable-but-deterministic order would pass that. Pinning the
+        expected order is what actually verifies the stable sort the caller
+        relies on to keep source-priority ordering intact among equals.
+        """
+        texts = [f"categorize batch {i} of messages" for i in range(6)]
+        messages = [self._msg(text) for text in texts]
+
+        orders = []
+        for _ in range(2):
+            rf = self._filter()
+            rf.filter_and_score(
+                messages, self.SKILL_NAME, self.SKILL_TEXT, max_examples=10
+            )
+            orders.append([c.kwargs["user_message"] for c in rf.scorer.call_args_list])
+
+        assert orders[0] == texts, "tied messages must stay in import order"
+        assert orders[0] == orders[1]
+
+    def test_score_preserves_the_qualifying_set(self):
+        """``_relevance_score`` must qualify exactly what the predicate did.
+
+        The score exists to *order* candidates, never to widen or narrow which
+        ones qualify. This oracle is a verbatim copy of the boolean predicate;
+        any disagreement means the change altered eval-set membership.
+        """
+        import random as _random
+        import re as _re
+
+        from evolution.core.external_importers import _relevance_score
+
+        def oracle(text, skill_name, skill_text):
+            text_lower = text.lower()
+            skill_lower = skill_name.lower().replace("-", " ").replace("_", " ")
+            if skill_lower in text_lower:
+                return True
+            for word in skill_lower.split():
+                if len(word) > 3 and word in text_lower:
+                    return True
+            skill_keywords = set()
+            for word in skill_text[:500].lower().split():
+                word = _re.sub(r"[^a-z]", "", word)
+                if len(word) > 4:
+                    skill_keywords.add(word)
+            message_words = set(_re.sub(r"[^a-z\s]", "", text_lower).split())
+            return len(message_words & skill_keywords) >= 2
+
+        cases = [
+            # Edges that have bitten this predicate before.
+            ("", "categorize", self.SKILL_TEXT),
+            ("anything at all", "", self.SKILL_TEXT),          # "" is in every string
+            ("anything at all", "   ", self.SKILL_TEXT),
+            ("run the test suite", "tim-tdd", "Test driven development"),  # <=3-char words
+            ("send an email to the team", "categorize", self.SKILL_TEXT),  # overlap == 1
+            ("CATEGORIZE THIS", "categorize", self.SKILL_TEXT),            # case
+            ("sort content by theme", "categorize", ""),                   # empty skill text
+        ]
+        # Vocabulary deliberately spans the character classes the scorer's
+        # normalisation touches: case folding, the two punctuation strippers, and
+        # non-ASCII. A fuzz over lowercase ASCII alone leaves .lower() and both
+        # re.sub calls as no-ops on every case, so it cannot exercise them.
+        vocab = [
+            "categorize", "Categorize", "CATEGORIZE", "content", "content,",
+            "theme.", "topics!", "sort", "deploy", "email", "test", "suite",
+            "messages", "tim", "tdd", "the", "a", "topic5", "42", "co-ntent",
+            "th_eme", "réview", "naïve", "日本語", "  ", "\ttabbed", "categorize's",
+        ]
+        # Varying skill_text matters: it drives the keyword set, the 500-char
+        # truncation boundary, and the len(word) > 4 filter.
+        long_text = ("alpha bravo charlie delta echo foxtrot golf hotel india " * 12)
+        skill_texts = [
+            self.SKILL_TEXT,
+            "",
+            "Sort.",
+            "TOPICS CONTENT THEME",
+            "content théme tópics naïve",
+            long_text,                      # straddles the 500-char slice
+            long_text[:498] + " zulu",      # keyword split across the boundary
+        ]
+        rng = _random.Random(1234)
+        for _ in range(2000):
+            text = " ".join(rng.choices(vocab, k=rng.randint(0, 8)))
+            name = rng.choice([
+                "categorize", "tim-categorize", "tim_tdd", "sort", "x",
+                "Fix-Python-Bugs", "", "   ", "sort content by theme", "日本語-skill",
+            ])
+            cases.append((text, name, rng.choice(skill_texts)))
+
+        for text, name, skill_text in cases:
+            assert bool(any(_relevance_score(text, name, skill_text))) == oracle(
+                text, name, skill_text
+            ), f"qualifying set changed for {text!r} / {name!r}"
+
+    def test_single_keyword_overlap_scores_zero(self):
+        """Overlap of exactly 1 must contribute nothing.
+
+        The predicate requires >= 2 overlapping keywords. Awarding partial
+        credit for a single overlap would silently widen the qualifying set,
+        which is the one way this change could alter behavior.
+        """
+        from evolution.core.external_importers import _relevance_score
+
+        score = _relevance_score(
+            "send an email to the team", self.SKILL_NAME, self.SKILL_TEXT
+        )
+        assert not any(score), f"expected an all-zero score, got {score}"
+
+    # A multi-word skill name is required to separate the middle tier from the
+    # outer two: with a single-word name, "full name matched" and "one name word
+    # matched" fire on identical conditions and no ordering test can tell the
+    # tiers apart.
+    MULTI_NAME = "fix-python-bugs"
+    MULTI_TEXT = (
+        "Repair broken python modules, report failing behaviour, analyse stack "
+        "traces, inspect regression suites, summarise coverage metrics, and "
+        "validate exception handling."
+    )
+    MULTI_TIER_A = "please fix python bugs in this module"
+    MULTI_TIER_B = "rewrite it in python"
+    MULTI_TIER_C = (
+        "repair broken modules report failing behaviour analyse traces inspect "
+        "regression suites summarise coverage metrics"
+    )
+
+    def test_name_word_tier_outranks_a_larger_keyword_overlap(self, mock_dspy):
+        """The middle tier must beat the bottom tier regardless of magnitude.
+
+        This is the test that distinguishes a lexicographic tuple key from any
+        weighted sum. The bottom-tier message here overlaps on ~14 keywords
+        while the middle-tier message matches a single name word, so a scheme
+        like ``name_words * 10 + keyword_overlap`` ranks them backwards while a
+        tuple ranks by tier first. Without this case, dropping the middle tier
+        or swapping it with the keyword tier would pass every other test.
+        """
+        rf = self._filter()
+        messages = [
+            self._msg(self.MULTI_TIER_C),
+            self._msg(self.MULTI_TIER_B),
+            self._msg(self.MULTI_TIER_A),
+        ]
+
+        rf.filter_and_score(messages, self.MULTI_NAME, self.MULTI_TEXT, max_examples=10)
+
+        scored = [c.kwargs["user_message"] for c in rf.scorer.call_args_list]
+        assert scored.index(self.MULTI_TIER_A) < scored.index(self.MULTI_TIER_B), (
+            "a full-name match must outrank a single name-word match"
+        )
+        assert scored.index(self.MULTI_TIER_B) < scored.index(self.MULTI_TIER_C), (
+            "a name-word match must outrank keyword overlap, however large"
+        )
+
+    def test_tiers_are_distinguishable_for_a_multi_word_name(self):
+        """Guards the premise of the ordering test above.
+
+        If these three messages ever collapse to the same tier, the ordering
+        test would still pass while proving nothing.
+        """
+        from evolution.core.external_importers import _relevance_score
+
+        a = _relevance_score(self.MULTI_TIER_A, self.MULTI_NAME, self.MULTI_TEXT)
+        b = _relevance_score(self.MULTI_TIER_B, self.MULTI_NAME, self.MULTI_TEXT)
+        c = _relevance_score(self.MULTI_TIER_C, self.MULTI_NAME, self.MULTI_TEXT)
+
+        assert a[0] == 1 and b[0] == 0 and c[0] == 0, (a, b, c)
+        assert b[1] > 0 and c[1] == 0, (b, c)
+        assert c[2] > b[1], f"bottom tier must be numerically larger to be a real test: {c} vs {b}"
+
+    def test_ties_beyond_the_cap_keep_import_order(self, mock_dspy):
+        """When every candidate ties, truncation must take the earliest.
+
+        The stable sort is what preserves source-priority ordering among equal
+        scores; asserting it here means the claim is tested rather than only
+        stated in a comment.
+        """
+        rf = self._filter()
+        texts = [f"categorize group {i}" for i in range(12)]
+        messages = [self._msg(text) for text in texts]
+
+        rf.filter_and_score(messages, self.SKILL_NAME, self.SKILL_TEXT, max_examples=3)
+
+        scored = [c.kwargs["user_message"] for c in rf.scorer.call_args_list]
+        assert scored == texts[:len(scored)]
+
+    def test_backfill_only_corpus_still_produces_candidates(self, mock_dspy):
+        """Nothing qualifying is the one path where the sort sees an empty list.
+
+        The seeded backfill must still pad the candidate list so the LLM gets a
+        usable sample rather than the run silently yielding nothing.
+        """
+        rf = self._filter()
+        messages = [self._msg(f"deploy release {i} to production") for i in range(4)]
+
+        examples = rf.filter_and_score(
+            messages, self.SKILL_NAME, self.SKILL_TEXT, max_examples=2
+        )
+
+        assert rf.scorer.call_args_list, "backfill should still be scored"
+        assert examples

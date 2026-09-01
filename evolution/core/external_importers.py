@@ -24,6 +24,7 @@ Usage from evolve_skill.py:
 
 import json
 import re
+from functools import lru_cache
 import random
 import sqlite3
 from pathlib import Path
@@ -118,33 +119,70 @@ def _validate_eval_example(
     }
 
 
-def _is_relevant_to_skill(text: str, skill_name: str, skill_text: str) -> bool:
-    """Quick heuristic check if a message might be relevant to a skill.
+@lru_cache(maxsize=8)
+def _skill_keywords(skill_text: str) -> frozenset[str]:
+    """Vocabulary a message can overlap with, drawn from the skill's opening.
 
-    Uses keyword overlap between the message and skill description/name.
-    This is a cheap pre-filter before the LLM does proper relevance scoring.
-    Returns True if the message shares enough vocabulary with the skill.
+    Cached because it depends only on ``skill_text`` while its caller runs once
+    per message. The previous boolean pre-filter short-circuited before building
+    this set whenever the skill name matched; scoring every tier removes that
+    escape, so without the cache a large corpus would rebuild an identical set
+    tens of thousands of times.
+    """
+    keywords = set()
+    for word in skill_text[:500].lower().split():
+        word = re.sub(r'[^a-z]', '', word)
+        if len(word) > 4:
+            keywords.add(word)
+    return frozenset(keywords)
+
+
+def _relevance_score(text: str, skill_name: str, skill_text: str) -> tuple[int, int, int]:
+    """Graded relevance of a message to a skill, strongest signal first.
+
+    Returns ``(name_match, name_words, keyword_overlap)`` so candidates sort
+    lexicographically by signal tier. A tuple rather than a weighted sum,
+    because ``skill_name`` is caller-supplied and unbounded in length: no fixed
+    set of weights can stop a long name's word count from outranking a
+    full-name match.
+
+    An all-zero tuple means "not relevant". The tiers reproduce the conditions
+    of the original boolean pre-filter exactly, so scoring changes only the
+    *order* of candidates, never which ones qualify. Note that
+    ``keyword_overlap`` is thresholded rather than raw: it is 0 unless at least
+    two keywords overlap, matching the pre-filter's requirement.
     """
     text_lower = text.lower()
     skill_lower = skill_name.lower().replace("-", " ").replace("_", " ")
 
-    if skill_lower in text_lower:
-        return True
+    name_match = 1 if skill_lower in text_lower else 0
 
     # Words ≤ 3 chars are skipped to avoid matching "run", "use", etc.
-    for word in skill_lower.split():
-        if len(word) > 3 and word in text_lower:
-            return True
-
-    skill_keywords = set()
-    for word in skill_text[:500].lower().split():
-        word = re.sub(r'[^a-z]', '', word)
-        if len(word) > 4:
-            skill_keywords.add(word)
+    name_words = sum(
+        1 for word in skill_lower.split()
+        if len(word) > 3 and word in text_lower
+    )
 
     message_words = set(re.sub(r'[^a-z\s]', '', text_lower).split())
-    overlap = message_words & skill_keywords
-    return len(overlap) >= 2
+    skill_keywords = _skill_keywords(skill_text)
+    overlap = len(message_words & skill_keywords)
+    # One overlapping keyword was never a match; awarding partial credit for it
+    # would widen the qualifying set rather than reorder it.
+    keyword_overlap = overlap if overlap >= 2 else 0
+
+    return (name_match, name_words, keyword_overlap)
+
+
+def _is_relevant_to_skill(text: str, skill_name: str, skill_text: str) -> bool:
+    """Boolean view of :func:`_relevance_score`: does this message qualify at all?
+
+    Has no production callers — :meth:`RelevanceFilter.filter_and_score` needs the
+    graded score for ordering. It is kept as the equivalence surface for the
+    pre-filter's original tests, which are what pin the guarantee that adding the
+    score changed only candidate *order* and never which messages qualify. Delete
+    it and that guarantee stops being tested.
+    """
+    return any(_relevance_score(text, skill_name, skill_text))
 
 
 class ClaudeCodeImporter:
@@ -496,7 +534,7 @@ class RelevanceFilter:
     """Use LLM-as-judge to determine which messages are relevant to a skill.
 
     Two-stage pipeline:
-      1. Cheap heuristic pre-filter (_is_relevant_to_skill)
+      1. Cheap heuristic pre-filter, graded for ordering (_relevance_score)
       2. LLM scoring for final relevance + eval metadata generation
     """
 
@@ -546,9 +584,21 @@ class RelevanceFilter:
 
         messages = [m for m in messages if m.get("task_input") and m.get("source")]
 
+        # Strongest first. The candidate-count cap (max_examples * 3) and the
+        # examples-count cap (the scoring loop's early break) both consume this
+        # list in order, so its ordering decides which messages ever reach the
+        # LLM scorer. sorted() is stable, so equally-scored messages keep their
+        # import order and source priority survives the caps.
+        scored = [
+            (_relevance_score(m["task_input"], skill_name, skill_text), m)
+            for m in messages
+        ]
         candidates = [
-            m for m in messages
-            if _is_relevant_to_skill(m["task_input"], skill_name, skill_text)
+            m for _, m in sorted(
+                (pair for pair in scored if any(pair[0])),
+                key=lambda pair: pair[0],
+                reverse=True,
+            )
         ]
 
         # Backfill from random non-matching messages so the LLM sees a useful
