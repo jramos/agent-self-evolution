@@ -734,6 +734,43 @@ Written by `evolution/code/evolve_code.py`. Unlike the GEPA variants (bootstrap 
 
 `decision_signal` is `deterministic_test` (held-out-split model) or `oracle_match` (campaign/measurement model). `holdout` / `holdout_test` / `visible_test` belong to the held-out gate; the **oracle** variant instead carries `test` (the full fix-commit test file), `bug_tests` (list), `oracle_failure_count`, `guards.bug_tests_passed`, and a `guards.oracle_match` block (`new_vs_oracle`, `oracle_failure_count`) — there `guards.floor` is often `null` because oracle-match over the full file *is* the regression check. `full_suite` is the optional `--benchmark-cmd` block (and may add `downgraded_from: "deploy"` if it demoted a pass).
 
+### `power_diagnostics.json`
+
+Written beside `gate_decision.json` by the skill and tool evolvers
+(`evolution/core/power_report.py`). **Diagnostics only** — no gate reads them, and a
+structural test pins that the values are consumed by nothing but the console line.
+
+```json
+{
+  "n_examples": 10,
+  "observed_mean_difference": 0.08,
+  "decision_rule": null,
+  "alpha_describes": "the lower bound of the paired bootstrap interval",
+  "continuous": {"mde": 0.062, "n": 10, "sd_diff": 0.079, "alpha_one_sided": 0.05,
+                 "power": 0.8, "ddof": 1, "method": "normal-approximation",
+                 "is_lower_bound": true}
+}
+```
+
+`mde` is the smallest effect this sample size could reliably detect: when the observed
+difference falls below it, a passing gate is not evidence of a win. `alpha_one_sided` is
+derived from the same `confidence` the bootstrap uses, because the gate consumes only the
+interval's lower bound — and `decision_rule` records when the run actually decided by some
+other means (the closed-loop constraint discards the interval entirely), so the alpha is
+not read as governing a rule that never ran. `is_lower_bound` is always true: this uses the
+normal approximation, while the exact noncentral-t value is larger — by about 11% at n=8
+and 5% at n=16 — so the figure understates, which is the safe direction for a diagnostic
+about what a sample could not see.
+
+Continuous regime only. A paired-binary companion was written and withdrawn before release:
+`|p01 - p10| <= p01 + p10` is a hard algebraic bound, and the normal approximation violates
+it whenever `n * discordance < 6.18`, which covers this project's entire operating range.
+Doing it properly needs the Connor form and real pass/fail counts rather than differences in
+continuous judge scores.
+
+The file is **absent** on runs that abort before scoring, which means "not computed" rather
+than "nothing to detect".
+
 ### `repair_trace.json`
 
 Per-round repair record for human review (`evolution/code/trace.py`). No per-hunk attribution.
